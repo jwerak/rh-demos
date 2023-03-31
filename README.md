@@ -2,7 +2,7 @@
 
 ## Satellite intro
 
-### Setup 
+### Setup
 
 - Order demo [Ansible Automation Platform 2 Ansible & Smart Management Workshop](https://demo.redhat.com/catalog?item=babylon-catalog-prod/ansiblebu.aap2-workshop-smart-mgmt.prod&utm_source=webapp&utm_medium=share-link)
   - Official [documentation workshop guide](https://aap2.demoredhat.com/exercises/ansible_smart_mgmt/0-setup/)
@@ -12,14 +12,14 @@
     - Survey: `RHEL7`
   - *SERVER / RHEL7 - Register*
     - Survey: `node`, `Dev`
-  - *SERVER / CentOS7 - Register *
+  - *SERVER / CentOS7 - Register*
     - Survey: `node`, `Dev`
   - *EC2 / Set instance tag - AnsibleGroup*
   - *CONTROLLER / Update inventories via dynamic sources*
     - Survey: *RHEL7*, *Dev*
     - Survey: *CentOS7*, *Dev*
 
-#### Fix Remote execution on Hosts
+#### Enable Remote execution on Hosts
 
 - Add pub ssh key to authorized keys of given user
   - Get the key from host ansible inventory `remote_execution_ssh_keys[0]`
