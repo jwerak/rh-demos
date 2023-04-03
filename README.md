@@ -23,8 +23,12 @@
 
 - Add pub ssh key to authorized keys of given user
   - Get the key from host ansible inventory `remote_execution_ssh_keys[0]`
-  - Use the key and create AAP Temlate from repo: https://github.com/jwerak/demos/tree/master/satellite-setup
+  - Use the key and create AAP Temlate from repo: https://github.com/jwerak/demos.git
   - Create and execute the template to add the key
+    - Playbook: *satellite-setup/setup.yml*
+    - Credentials: *Workshop Credentials*
+    - Inventory: *Workshop Inventory*
+    - Limit: `node*`
 - Create Satellite Host Groups (RHEL and CentOS) and add correct remote user name:
   -  Satellite -> Configure -> Host Groups
      -  CentOS  -> Parameters -> `remote_execution_ssh_user = centos`
