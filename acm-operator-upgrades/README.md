@@ -1,8 +1,8 @@
-# 🚀 ACM Operator Upgrades Demo
+# ACM Operator Upgrades Demo
 
 This demo shows how to manage operator lifecycle using Red Hat Advanced Cluster Management (ACM) policies. We'll demonstrate version pinning, controlled upgrades, and rollout management using the Web Terminal operator as an example.
 
-## 📋 Prerequisites
+## Prerequisites
 
 - **OpenShift Container Platform** with ACM installed
   - Tested on OCP 4.16.45 and ACM 2.11
@@ -10,30 +10,30 @@ This demo shows how to manage operator lifecycle using Red Hat Advanced Cluster 
   - Policies will be stored in namespace `development-policies`
 - **CLI Access**: `oc` command-line tool configured for your hub cluster
 
-## 🎯 Overview
+## Overview
 
 This demonstration covers:
 
-### 🔒 Version Management
+### Version Management
 
 - Create policies to install operators at specific versions
 - Lock operators to prevent unwanted upgrades
 - Maintain version consistency across cluster sets
 
-### 📈 Controlled Upgrades
+### Controlled Upgrades
 
 - Discover available operator versions
 - Configure OperatorPolicy for controlled upgrades
 - Monitor rollout progress across managed clusters
 
-### ⚙️ Posible Management Options
+### Possible Management Options
 
 - **Template-based approach**: Update operator versions centrally using ConfigMaps
 - **Custom CatalogSource**: Create curated lists of approved operator versions
 
-## 🛠️ Step-by-Step Implementation
+## Step-by-Step Implementation
 
-### 1️⃣ Discover Available Operator Versions
+### 1. Discover Available Operator Versions
 
 First, let's explore what versions of the Web Terminal operator are available in the marketplace:
 
@@ -239,7 +239,7 @@ status:
 
 </details>
 
-### 2️⃣ Install Initial Operator Version
+### 2. Install Initial Operator Version
 
 Now let's install Web Terminal at a specific version (`web-terminal.v1.9.0`) using ACM policies:
 
@@ -247,9 +247,9 @@ Now let's install Web Terminal at a specific version (`web-terminal.v1.9.0`) usi
 oc apply -f ./files/policy-initial.yml
 ```
 
-💡 **Note**: This policy will deploy the Web Terminal operator at version 1.9.0 across all clusters in the target ClusterSet, ensuring consistency.
+**Note**: This policy will deploy the Web Terminal operator at version 1.9.0 across all clusters in the target ClusterSet, ensuring consistency.
 
-### 3️⃣ Verify Available Versions
+### 3. Verify Available Versions
 
 List all available versions in the `fast` channel to plan your upgrade path:
 
@@ -296,7 +296,7 @@ oc get packagemanifests.packages.operators.coreos.com -n openshift-marketplace w
 
 </details>
 
-### 4️⃣ Execute Controlled Upgrade
+### 4. Execute Controlled Upgrade
 
 Apply the updated policy to upgrade operators to version 1.10.1 across your cluster set:
 
@@ -304,7 +304,7 @@ Apply the updated policy to upgrade operators to version 1.10.1 across your clus
 oc apply -f ./files/policy-updated.yml
 ```
 
-### 5️⃣ Monitor Upgrade Progress
+### 5. Monitor Upgrade Progress
 
 Watch the operator upgrade process in real-time:
 
@@ -312,13 +312,13 @@ Watch the operator upgrade process in real-time:
 watch oc get csv -n openshift-operators
 ```
 
-🔍 **What to look for**:
+**What to look for**:
 
 - ClusterServiceVersion (CSV) transitions from old to new version
 - Operator pod restarts and becomes ready
 - No failed installations or conflicts
 
-## 📋 Policy Files Overview
+## Policy Files Overview
 
 This demo includes two main policy files:
 
@@ -336,11 +336,11 @@ This demo includes two main policy files:
 - Uses `Automatic` upgrade approval for seamless updates
 - Maintains the same targeting and compliance settings
 
-🎯 **Key Difference**: The updated policy expands the `versions` array to include newer releases, enabling controlled upgrade paths.
+**Key Difference**: The updated policy expands the `versions` array to include newer releases, enabling controlled upgrade paths.
 
-## 📚 Additional Resources
+## Additional Resources
 
-### 📖 Documentation
+### Documentation
 
 - [Getting Started with OperatorPolicy](https://developers.redhat.com/articles/2024/08/08/getting-started-operatorpolicy#) - Comprehensive guide to OperatorPolicy usage
 - [Policy-based Governance with ACM](https://www.redhat.com/en/blog/comply-to-standards-using-policy-based-governance-of-red-hat-advanced-cluster-management-for-kubernetes) - Best practices for compliance

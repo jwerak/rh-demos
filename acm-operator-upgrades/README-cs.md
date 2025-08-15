@@ -1,8 +1,8 @@
-# 🚀 ACM Operator Upgrades Demo
+# ACM Operator Upgrades Demo
 
 Tato demonstrace ukazuje, jak spravovat životní cyklus operátorů pomocí politik Red Hat Advanced Cluster Management (ACM). Předvedeme si připnutí verzí, řízené upgrady a správu zavádění na příkladu operátora Web Terminal.
 
-## 📋 Předpoklady
+## Předpoklady
 
 - **OpenShift Container Platform** s nainstalovaným ACM
   - Testováno na OCP 4.16.45 a ACM 2.11
@@ -10,30 +10,30 @@ Tato demonstrace ukazuje, jak spravovat životní cyklus operátorů pomocí pol
   - Politiky budou uloženy v namespace `development-policies`
 - **CLI přístup**: Nástroj `oc` nakonfigurovaný pro váš hub cluster
 
-## 🎯 Přehled
+## Přehled
 
 Tato demonstrace pokrývá:
 
-### 🔒 Správa verzí
+### Správa verzí
 
 - Vytváření politik pro instalaci operátorů ve specifických verzích
 - Zamknutí operátorů pro prevenci nechtěných upgradů
 - Udržování konzistence verzí napříč sadami clusterů
 
-### 📈 Řízené upgrady
+### Řízené upgrady
 
 - Zjišťování dostupných verzí operátorů
 - Konfigurace OperatorPolicy pro řízené upgrady
 - Monitorování průběhu zavádění napříč spravovanými clustery
 
-### ⚙️ Možné možnosti správy
+### Možné možnosti správy
 
 - **Přístup založený na šablonách**: Centrální aktualizace verzí operátorů pomocí ConfigMap
 - **Vlastní CatalogSource**: Vytváření kurátorovaných seznamů schválených verzí operátorů
 
-## 🛠️ Krok za krokem implementace
+## Krok za krokem implementace
 
-### 1️⃣ Zjištění dostupných verzí operátorů
+### 1. Zjištění dostupných verzí operátorů
 
 Nejprve si prozkoumáme, jaké verze operátora Web Terminal jsou dostupné na marketplace:
 
@@ -239,7 +239,7 @@ status:
 
 </details>
 
-### 2️⃣ Instalace počáteční verze operátora
+### 2. Instalace počáteční verze operátora
 
 Nyní nainstalujme Web Terminal v konkrétní verzi (`web-terminal.v1.9.0`) pomocí ACM politik:
 
@@ -247,9 +247,9 @@ Nyní nainstalujme Web Terminal v konkrétní verzi (`web-terminal.v1.9.0`) pomo
 oc apply -f ./files/policy-initial.yml
 ```
 
-💡 **Poznámka**: Tato politika nasadí operátor Web Terminal ve verzi 1.9.0 napříč všemi clustery v cílovém ClusterSet, čímž zajistí konzistenci.
+**Poznámka**: Tato politika nasadí operátor Web Terminal ve verzi 1.9.0 napříč všemi clustery v cílovém ClusterSet, čímž zajistí konzistenci.
 
-### 3️⃣ Ověření dostupných verzí
+### 3. Ověření dostupných verzí
 
 Vypište všechny dostupné verze v kanálu `fast` pro naplánování cesty upgradu:
 
@@ -296,7 +296,7 @@ oc get packagemanifests.packages.operators.coreos.com -n openshift-marketplace w
 
 </details>
 
-### 4️⃣ Provedení řízeného upgradu
+### 4. Provedení řízeného upgradu
 
 Aplikujte aktualizovanou politiku pro upgrade operátorů na verzi 1.10.1 napříč vaší sadou clusterů:
 
@@ -304,7 +304,7 @@ Aplikujte aktualizovanou politiku pro upgrade operátorů na verzi 1.10.1 např�
 oc apply -f ./files/policy-updated.yml
 ```
 
-### 5️⃣ Monitorování průběhu upgradu
+### 5. Monitorování průběhu upgradu
 
 Sledujte proces upgradu operátora v reálném čase:
 
@@ -312,13 +312,13 @@ Sledujte proces upgradu operátora v reálném čase:
 watch oc get csv -n openshift-operators
 ```
 
-🔍 **Na co se zaměřit**:
+**Na co se zaměřit**:
 
 - Přechod ClusterServiceVersion (CSV) ze staré na novou verzi
 - Restart podů operátora a jejich přechod do stavu ready
 - Žádné neúspěšné instalace nebo konflikty
 
-## 📋 Přehled souborů politik
+## Přehled souborů politik
 
 Tato demonstrace obsahuje dva hlavní soubory politik:
 
@@ -336,11 +336,11 @@ Tato demonstrace obsahuje dva hlavní soubory politik:
 - Používá `Automatic` schválení upgradů pro bezproblémové aktualizace
 - Udržuje stejné nastavení cílení a compliance
 
-🎯 **Klíčový rozdíl**: Aktualizovaná politika rozšiřuje pole `versions` o novější verze, což umožňuje řízené cesty upgradů.
+**Klíčový rozdíl**: Aktualizovaná politika rozšiřuje pole `versions` o novější verze, což umožňuje řízené cesty upgradů.
 
-## 📚 Dodatečné zdroje
+## Dodatečné zdroje
 
-### 📖 Dokumentace
+### Dokumentace
 
 - [Getting Started with OperatorPolicy](https://developers.redhat.com/articles/2024/08/08/getting-started-operatorpolicy#) - Komplexní průvodce používáním OperatorPolicy
 - [Policy-based Governance with ACM](https://www.redhat.com/en/blog/comply-to-standards-using-policy-based-governance-of-red-hat-advanced-cluster-management-for-kubernetes) - Nejlepší praktiky pro compliance
