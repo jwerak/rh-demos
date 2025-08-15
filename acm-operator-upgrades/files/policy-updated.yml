@@ -1,0 +1,68 @@
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: web-terminal
+  namespace: development-policies
+  annotations:
+    policy.open-cluster-management.io/categories: ""
+    policy.open-cluster-management.io/standards: ""
+    policy.open-cluster-management.io/controls: ""
+spec:
+  disabled: false
+  policy-templates:
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1beta1
+        kind: OperatorPolicy
+        metadata:
+          name: install-web-terminal
+        spec:
+          remediationAction: enforce
+          severity: low
+          complianceType: musthave
+          subscription:
+            name: web-terminal
+            channel: fast
+            source: redhat-operators
+            sourceNamespace: openshift-marketplace
+            startingCSV: web-terminal.v1.9.0
+          upgradeApproval: Automatic
+          versions:
+            - web-terminal.v1.9.0
+            - web-terminal.v1.9.0-0.1708477317.p
+            - web-terminal.v1.10.0
+            - web-terminal.v1.10.0-0.1720402943.p
+            - web-terminal.v1.10.0-0.1720435222.p
+            - web-terminal.v1.10.0-0.1727169028.p
+            - web-terminal.v1.10.0-0.1731481377.p
+            - web-terminal.v1.10.0-0.1732652667.p
+            - web-terminal.v1.10.1
+            - web-terminal.v1.10.1-0.1740684238.p
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: web-terminal-placement
+  namespace: development-policies
+spec:
+  tolerations:
+    - key: cluster.open-cluster-management.io/unreachable
+      operator: Exists
+    - key: cluster.open-cluster-management.io/unavailable
+      operator: Exists
+  clusterSets:
+    - development
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: web-terminal-placement
+  namespace: development-policies
+placementRef:
+  name: web-terminal-placement
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+subjects:
+  - name: web-terminal
+    apiGroup: policy.open-cluster-management.io
+    kind: Policy
