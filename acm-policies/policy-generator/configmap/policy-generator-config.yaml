@@ -1,0 +1,16 @@
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PolicyGenerator
+metadata:
+  name: config-data-policies
+policyDefaults:
+  namespace: policies
+  policySets: []
+  # remediationAction: enforce
+  namespaceSelector:
+    include:
+      - default
+policies:
+  - name: config-data
+    manifests:
+      - path: configmap.yaml
