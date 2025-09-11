@@ -1,0 +1,61 @@
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: placement-config-templated
+  namespace: development-policies
+spec:
+  predicates:
+  - requiredClusterSelector:
+      labelSelector:
+        matchExpressions: []
+  tolerations:
+  - key: cluster.open-cluster-management.io/unavailable
+    operator: Exists
+  - key: cluster.open-cluster-management.io/unreachable
+    operator: Exists
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: binding-config-data-templated
+  namespace: development-policies
+placementRef:
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+  name: placement-config-templated
+subjects:
+- apiGroup: policy.open-cluster-management.io
+  kind: Policy
+  name: config-data-templated
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  annotations:
+    policy.open-cluster-management.io/description: ""
+  name: config-data-templated
+  namespace: development-policies
+spec:
+  disabled: false
+  policy-templates:
+  - objectDefinition:
+      apiVersion: policy.open-cluster-management.io/v1
+      kind: ConfigurationPolicy
+      metadata:
+        name: config-data-templated
+      spec:
+        namespaceSelector:
+          include:
+          - workload-*
+        object-templates:
+        - complianceType: musthave
+          objectDefinition:
+            apiVersion: v1
+            data:
+              templated-key: '{{ fromConfigMap "default" "my-config" "key1" }}'
+            kind: ConfigMap
+            metadata:
+              name: my-config
+        remediationAction: enforce
+        severity: low
+
