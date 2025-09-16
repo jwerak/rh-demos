@@ -1,5 +1,27 @@
 # ACM Policies
 
+- [ACM Policies](#acm-policies)
+  - [ACM Operator Upgrades Demo](#acm-operator-upgrades-demo)
+    - [Prerequisites](#prerequisites)
+    - [Overview](#overview)
+      - [Version Management](#version-management)
+      - [Controlled Upgrades](#controlled-upgrades)
+      - [Possible Management Options](#possible-management-options)
+    - [Step-by-Step Implementation](#step-by-step-implementation)
+      - [1. Discover Available Operator Versions](#1-discover-available-operator-versions)
+      - [2. Install Initial Operator Version](#2-install-initial-operator-version)
+      - [3. Verify Available Versions](#3-verify-available-versions)
+      - [4. Execute Controlled Upgrade](#4-execute-controlled-upgrade)
+      - [5. Monitor Upgrade Progress](#5-monitor-upgrade-progress)
+    - [Policy Files Overview](#policy-files-overview)
+      - [`policy-initial.yml`](#policy-initialyml)
+      - [`policy-updated.yml`](#policy-updatedyml)
+  - [Generator policies](#generator-policies)
+    - [Generate policies](#generate-policies)
+  - [Creating policies with templates](#creating-policies-with-templates)
+  - [Additional Resources](#additional-resources)
+
+
 ## ACM Operator Upgrades Demo
 
 This demo shows how to manage operator lifecycle using Red Hat Advanced Cluster Management (ACM) policies. We'll demonstrate version pinning, controlled upgrades, and rollout management using the Web Terminal operator as an example.
