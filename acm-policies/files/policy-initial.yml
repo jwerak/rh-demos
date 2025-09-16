@@ -17,7 +17,7 @@ spec:
         metadata:
           name: install-web-terminal
         spec:
-          remediationAction: enforce
+          remediationAction: inform
           severity: low
           complianceType: musthave
           subscription:
