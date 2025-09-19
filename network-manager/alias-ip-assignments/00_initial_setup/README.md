@@ -1,0 +1,102 @@
+# IP alias setup using multiple ifcf files
+
+## Setup libvirt lab
+
+Create secondary network
+
+```bash
+sudo virsh net-define ./libvirt/network-internal.xml
+
+# Start the network
+sudo virsh net-start network-internal
+
+# Set the network to start automatically on host boot
+sudo virsh net-autostart network-internal
+
+# Verify the network is active and running
+sudo virsh net-list
+```
+
+
+Create Bridge br0, e.g. using:
+
+```bash
+sudo nmcli connection down Profile\ 1
+sudo nmcli connection add type bridge con-name bridge0 ifname bridge0
+sudo nmcli connection add type bridge-slave ifname enp73s0 master bridge0
+sudo nmcli connection up bridge0
+```
+
+Create VMs:
+
+```bash
+IMAGE_NAME=rhel-server-7.9-update-12-x86_64-kvm.qcow2
+IMAGE_PATH_SOURCE=${HOME}/Downloads/software/OS/${IMAGE_NAME}
+IMAGE_BASE_PATH=/var/lib/libvirt/images
+DOMAIN_NAME_BASE=00-lab
+
+# Optional: customize image
+virt-customize -a ${IMAGE_PATH_SOURCE} --run-command "useradd -m -s /bin/bash redhat" --run-command "usermod -aG wheel redhat" --ssh-inject redhat:file:${HOME}/.ssh/id_ed25519.pub --password redhat:password:redhat
+
+# Create VMs
+
+for i in {01..02}; do
+    DOMAIN_NAME=${DOMAIN_NAME_BASE}-${i};
+    IMAGE_PATH=${IMAGE_BASE_PATH}/${DOMAIN_NAME}.qcow2
+
+    sudo cp ${IMAGE_PATH_SOURCE} ${IMAGE_PATH}
+
+    sudo virt-install \
+      --import \
+      --name ${DOMAIN_NAME} \
+      --memory 2048 \
+      --vcpus 2 \
+      --os-variant rhel7.9 \
+      --network bridge=bridge0,model=virtio \
+      --network network=network-internal \
+      --noautoconsole \
+      --disk ${IMAGE_PATH}
+done
+```
+
+Get IPs of created VMs
+
+```bash
+sudo virsh list --all --name | grep '^00-lab' | xargs -I{} sudo virsh domifaddr {} --source agent
+```
+
+## Assign IP address
+
+To configure the `eth1` interface on RHEL 7 using the `ifcfg` file notation, create a file named `/etc/sysconfig/network-scripts/ifcfg-eth1` inside the VM with the following content:
+
+*/etc/sysconfig/network-scripts/ifcfg-eth1*:
+
+```env
+DEVICE=eth1
+BOOTPROTO=none
+ONBOOT=yes
+PREFIX=24
+IPADDR1=192.168.200.11
+IPADDR2=192.168.200.12
+```
+
+*/etc/sysconfig/network-scripts/ifcfg-eth1:0*:
+
+```env
+DEVICE=eth1:0
+IPADDR=192.168.200.13
+```
+
+To apply the new network script and bring up the `eth1` interface, run the following command inside the VM: `ifup eth1`
+
+## Cleanup environment
+
+```bash
+# Make it executable
+chmod +x ./cleanup.sh
+
+# Run with sudo (required for libvirt operations)
+sudo ./cleanup.sh
+```
+
+The script includes safety checks and will skip components that don't exist, so it's safe to run multiple times. It also provides clear output about what actions are being performed.
