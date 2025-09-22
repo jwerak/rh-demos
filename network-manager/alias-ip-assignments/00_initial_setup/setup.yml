@@ -1,0 +1,25 @@
+---
+- name: Setup VMs for the demo
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    # Use libvirt_uri from inventory, fallback to host.containers.internal for Podman
+    __libvirt_uri: "{{ libvirt_uri | default('qemu+ssh://root@host.containers.internal/system') }}"
+  tasks:
+    - name: Print Hello World
+      ansible.builtin.debug:
+        msg: "Hello World"
+      delegate_to: localhost
+
+    - name: List VMs
+      community.libvirt.virt:
+        command: list_vms
+        uri: "{{ __libvirt_uri }}"
+      delegate_to: localhost
+      register: vms
+
+    - name: Print existing VMs
+      ansible.builtin.debug:
+        var: vms
+      delegate_to: localhost

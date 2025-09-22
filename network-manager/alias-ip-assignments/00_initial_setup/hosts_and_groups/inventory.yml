@@ -1,0 +1,33 @@
+---
+# Ansible inventory for IP alias lab setup
+all:
+  children:
+    lab_hosts:
+      hosts:
+        00-ifcfg-lab-01:
+          # ansible_host: 192.168.1.101  # Adjust IP as needed
+          ansible_user: redhat
+          internal_ip: 192.168.200.101
+        00-ifcfg-lab-02:
+          # ansible_host: 192.168.1.102  # Adjust IP as needed
+          ansible_user: redhat
+          internal_ip: 192.168.200.102
+      vars:
+        ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+        # Network configuration variables
+        bridge_interface: bridge0
+        internal_network: 192.168.200.0/24
+        # Libvirt SSH connection from container to host
+        # For Podman containers (automatically resolves):
+        libvirt_uri: qemu+ssh://root@host.containers.internal/system?no_verify=1
+        # libvirt_uri: qemu+ssh://root@192.168.0.102/system
+        # For Docker containers (use with --add-host flag):
+        # libvirt_uri: qemu+ssh://root@host.docker.internal/system
+        # Alternative: Use host's actual IP address:
+        # libvirt_uri: qemu+ssh://root@192.168.1.100/system
+
+    # Example grouping by function
+    network_test_nodes:
+      hosts:
+        00-ifcfg-lab-01:
+        00-ifcfg-lab-02:
