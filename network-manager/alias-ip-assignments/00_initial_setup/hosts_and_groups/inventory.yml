@@ -9,11 +9,17 @@ all:
           libvirt_vm_name: "{{ inventory_hostname_short }}"
           libvirt_vm_image_source: rhel-server-7.9-update-12-x86_64-kvm.qcow2
           libvirt_vm_osinfo: rhel7.9
+          libvirt_vm_networks:
+            - bridge: bridge0
+            - network: network-internal
         00-ifcfg-lab-02:
           ansible_user: redhat
           libvirt_vm_name: "{{ inventory_hostname_short }}"
           libvirt_vm_image_source: rhel-server-7.9-update-12-x86_64-kvm.qcow2
           libvirt_vm_osinfo: rhel7.9
+          libvirt_vm_networks:
+            - bridge: bridge0
+            - network: network-internal
         hypervisor_local:
           ansible_host: host.containers.internal
           ansible_user: root
