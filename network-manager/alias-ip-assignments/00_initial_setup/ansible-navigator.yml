@@ -13,17 +13,12 @@ ansible-navigator:
     pull:
       policy: missing
     volume-mounts:
-      - dest: /usr/share/ansible/collections/ansible_collections/jwerak
+      - src: ~/Downloads/software/OS
+        dest: /images
         options: Z
-        src: ../../../../ansible_collections/jwerak
-      # Mount SSH keys for libvirt SSH connections
-      # - dest: /home/runner/.ssh
-      #   options: Z
-      #   src: ~/.ssh
-      # Optional: Mount known_hosts to avoid SSH host key verification issues
-      # - dest: /home/runner/.ssh/known_hosts
-      #   options: Z
-      #   src: ~/.ssh/known_hosts
+      - src: ../../../../ansible_collections/jwerak
+        dest: /usr/share/ansible/collections/ansible_collections/jwerak
+        options: Z
 
   logging:
     level: critical

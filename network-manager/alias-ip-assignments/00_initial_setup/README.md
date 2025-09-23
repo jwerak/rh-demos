@@ -17,7 +17,6 @@ sudo virsh net-autostart network-internal
 sudo virsh net-list
 ```
 
-
 Create Bridge br0, e.g. using:
 
 ```bash
@@ -27,42 +26,18 @@ sudo nmcli connection add type bridge-slave ifname enp73s0 master bridge0
 sudo nmcli connection up bridge0
 ```
 
-Create VMs:
+Create VMs Using Ansible:
+
+review the [inventory file](./hosts_and_groups/inventory.yml) and run
 
 ```bash
-IMAGE_NAME=rhel-server-7.9-update-12-x86_64-kvm.qcow2
-IMAGE_PATH_SOURCE=${HOME}/Downloads/software/OS/${IMAGE_NAME}
-IMAGE_BASE_PATH=/var/lib/libvirt/images
-DOMAIN_NAME_BASE=00-lab
-
-# Optional: customize image
-virt-customize -a ${IMAGE_PATH_SOURCE} --run-command "useradd -m -s /bin/bash redhat" --run-command "usermod -aG wheel redhat" --ssh-inject redhat:file:${HOME}/.ssh/id_ed25519.pub --password redhat:password:redhat
-
-# Create VMs
-
-for i in {01..02}; do
-    DOMAIN_NAME=${DOMAIN_NAME_BASE}-${i};
-    IMAGE_PATH=${IMAGE_BASE_PATH}/${DOMAIN_NAME}.qcow2
-
-    sudo cp ${IMAGE_PATH_SOURCE} ${IMAGE_PATH}
-
-    sudo virt-install \
-      --import \
-      --name ${DOMAIN_NAME} \
-      --memory 2048 \
-      --vcpus 2 \
-      --os-variant rhel7.9 \
-      --network bridge=bridge0,model=virtio \
-      --network network=network-internal \
-      --noautoconsole \
-      --disk ${IMAGE_PATH}
-done
+ansible-navigator run jwerak.cloud.libvirt_vm_setup -e target=network_test_nodes
 ```
 
 Get IPs of created VMs
 
 ```bash
-sudo virsh list --all --name | grep '^00-lab' | xargs -I{} sudo virsh domifaddr {} --source agent
+sudo virsh list --all --name | grep '^00-' | xargs -I{} sudo virsh domifaddr {} --source agent
 ```
 
 ## Assign IP address
