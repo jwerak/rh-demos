@@ -7,7 +7,6 @@ set -e
 
 DOMAIN_NAME_BASE=00-lab
 IMAGE_BASE_PATH=/var/lib/libvirt/images
-BRIDGE_NAME=bridge0
 NETWORK_NAME=network-internal
 
 echo "=== Starting cleanup of IP alias lab setup ==="
@@ -78,22 +77,6 @@ else
     echo "  Network ${NETWORK_NAME} not found, skipping..."
 fi
 
-# Remove bridge connection (optional - uncomment if you want to remove it)
-echo "--- Bridge connection cleanup ---"
-if command_exists nmcli; then
-    if nmcli connection show | grep -q "${BRIDGE_NAME}"; then
-        echo "  Bridge connection ${BRIDGE_NAME} found."
-        echo "  To remove the bridge connection, run:"
-        echo "    sudo nmcli connection down ${BRIDGE_NAME}"
-        echo "    sudo nmcli connection delete ${BRIDGE_NAME}"
-        echo "    sudo nmcli connection delete bridge-slave-*"
-        echo "  Note: This might affect your network connectivity. Remove manually if needed."
-    else
-        echo "  Bridge connection ${BRIDGE_NAME} not found, skipping..."
-    fi
-else
-    echo "  nmcli not found, skipping bridge cleanup..."
-fi
 
 echo ""
 echo "=== Cleanup completed! ==="
@@ -102,7 +85,6 @@ echo "Summary of actions performed:"
 echo "- Removed VMs: ${DOMAIN_NAME_BASE}-01, ${DOMAIN_NAME_BASE}-02"
 echo "- Removed VM disk images from ${IMAGE_BASE_PATH}/"
 echo "- Removed libvirt network: ${NETWORK_NAME}"
-echo "- Bridge connection ${BRIDGE_NAME} cleanup instructions provided"
 echo ""
 echo "To verify cleanup:"
 echo "  virsh list --all"

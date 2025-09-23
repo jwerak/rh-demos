@@ -17,15 +17,6 @@ sudo virsh net-autostart network-internal
 sudo virsh net-list
 ```
 
-Create Bridge br0, e.g. using:
-
-```bash
-sudo nmcli connection down Profile\ 1
-sudo nmcli connection add type bridge con-name bridge0 ifname bridge0
-sudo nmcli connection add type bridge-slave ifname enp73s0 master bridge0
-sudo nmcli connection up bridge0
-```
-
 Create VMs Using Ansible:
 
 review the [inventory file](./hosts_and_groups/inventory.yml) and run

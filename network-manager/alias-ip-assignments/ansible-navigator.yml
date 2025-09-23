@@ -16,7 +16,7 @@ ansible-navigator:
       - src: ~/Downloads/software/OS
         dest: /images
         options: Z
-      - src: ../../../../ansible_collections/jwerak
+      - src: ../../../ansible_collections/jwerak
         dest: /usr/share/ansible/collections/ansible_collections/jwerak
         options: Z
 
