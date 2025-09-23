@@ -5,29 +5,37 @@ all:
     lab_hosts:
       hosts:
         00-ifcfg-lab-01:
-          # ansible_host: 192.168.1.101  # Adjust IP as needed
           ansible_user: redhat
-          internal_ip: 192.168.200.101
+          libvirt_vm_name: "{{ inventory_hostname_short }}"
+          libvirt_vm_image_source: rhel-server-7.9-update-12-x86_64-kvm.qcow2
+          libvirt_vm_osinfo: rhel7.9
         00-ifcfg-lab-02:
-          # ansible_host: 192.168.1.102  # Adjust IP as needed
           ansible_user: redhat
-          internal_ip: 192.168.200.102
+          libvirt_vm_name: "{{ inventory_hostname_short }}"
+          libvirt_vm_image_source: rhel-server-7.9-update-12-x86_64-kvm.qcow2
+          libvirt_vm_osinfo: rhel7.9
+        hypervisor_local:
+          ansible_host: host.containers.internal
+          ansible_user: root
       vars:
+        # Libvirt images variables
+        # Source path is mounted from the host and defined in the ansible-navigator.yml file
+        libvirt_vm_images_path_source: /images
+        # Destination path is path on the hypervisor, or underlying host
+        libvirt_vm_pool_dir: /var/lib/libvirt/images
+
         ansible_ssh_private_key_file: ~/.ssh/id_ed25519
         # Network configuration variables
-        bridge_interface: bridge0
-        internal_network: 192.168.200.0/24
-        # Libvirt SSH connection from container to host
-        # For Podman containers (automatically resolves):
-        libvirt_uri: qemu+ssh://root@host.containers.internal/system?no_verify=1
-        # libvirt_uri: qemu+ssh://root@192.168.0.102/system
-        # For Docker containers (use with --add-host flag):
-        # libvirt_uri: qemu+ssh://root@host.docker.internal/system
-        # Alternative: Use host's actual IP address:
-        # libvirt_uri: qemu+ssh://root@192.168.1.100/system
+        libvirt_vm_bridge_interface: bridge0
+        libvirt_vm_internal_network: 192.168.200.0/24
+
+        libvirt_vm_uri: qemu+ssh://root@host.containers.internal/system?no_verify=1
 
     # Example grouping by function
     network_test_nodes:
       hosts:
         00-ifcfg-lab-01:
         00-ifcfg-lab-02:
+    hypervisors:
+      hosts:
+        hypervisor_local:
