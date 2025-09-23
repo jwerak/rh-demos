@@ -1,0 +1,2 @@
+plugin: community.libvirt.libvirt
+uri: 'qemu+ssh://root@host.containers.internal/system?no_verify=1'

@@ -4,19 +4,11 @@ all:
   children:
     lab_hosts:
       hosts:
-        00-ifcfg-lab-01:
+        00-nm-lab-01:
           ansible_user: redhat
           libvirt_vm_name: "{{ inventory_hostname_short }}"
-          libvirt_vm_image_source: rhel-server-7.9-update-12-x86_64-kvm.qcow2
-          libvirt_vm_osinfo: rhel7.9
-          libvirt_vm_networks:
-            - network: default
-            - network: network-internal
-        00-ifcfg-lab-02:
-          ansible_user: redhat
-          libvirt_vm_name: "{{ inventory_hostname_short }}"
-          libvirt_vm_image_source: rhel-server-7.9-update-12-x86_64-kvm.qcow2
-          libvirt_vm_osinfo: rhel7.9
+          libvirt_vm_image_source: rhel-10.0-x86_64-kvm.qcow2
+          libvirt_vm_osinfo: rhel10.0
           libvirt_vm_networks:
             - network: default
             - network: network-internal
@@ -37,8 +29,7 @@ all:
     # Example grouping by function
     network_test_nodes:
       hosts:
-        00-ifcfg-lab-01:
-        00-ifcfg-lab-02:
+        00-nm-lab-01:
     hypervisors:
       hosts:
         hypervisor_local:
