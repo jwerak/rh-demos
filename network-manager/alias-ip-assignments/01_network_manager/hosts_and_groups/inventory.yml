@@ -5,13 +5,28 @@ all:
     lab_hosts:
       hosts:
         00-nm-lab-01:
-          ansible_user: redhat
+          ansible_user: jveverka
+          ansible_become_pass: redhat
           libvirt_vm_name: "{{ inventory_hostname_short }}"
           libvirt_vm_image_source: rhel-10.0-x86_64-kvm.qcow2
           libvirt_vm_osinfo: rhel10.0
           libvirt_vm_networks:
             - network: default
             - network: network-internal
+          network_state:
+            interfaces:
+              - name: enp2s0
+                type: ethernet
+                state: up
+                ipv4:
+                  enabled: true
+                  address:
+                    - ip: 192.168.200.10
+                      prefix-length: 24
+                  dhcp: false
+                ipv6:
+                  enabled: false
+
         hypervisor_local:
           ansible_host: host.containers.internal
           ansible_user: root

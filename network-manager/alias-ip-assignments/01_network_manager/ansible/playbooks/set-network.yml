@@ -1,0 +1,9 @@
+---
+- name: Set network
+  hosts: "{{ target | default('network_test_nodes') }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Set network
+      ansible.builtin.include_role:
+        name: fedora.linux_system_roles.network
