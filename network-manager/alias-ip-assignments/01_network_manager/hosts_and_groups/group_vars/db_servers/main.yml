@@ -1,0 +1,4 @@
+app_services_db_app:
+  description: "Database server"
+  ip: "192.168.200.12"
+  port: 443
