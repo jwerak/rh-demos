@@ -2,8 +2,49 @@
 - name: Set network
   hosts: "{{ target | default('network_test_nodes') }}"
   become: true
-  gather_facts: false
+  gather_facts: true
+  vars:
+    secondary_interface: enp2s0
+    # secondary_interface: enp2s0
   tasks:
-    - name: Set network
-      ansible.builtin.include_role:
-        name: fedora.linux_system_roles.network
+    - name: Get list of IP addresses on the interface from ansible_facts
+      ansible.builtin.set_fact:
+        current_ip_addresses_list: >-
+          {{
+            (
+              (
+                [ansible_facts[secondary_interface].get('ipv4', {})] |
+                reject('eq', {})
+              ) + (
+                ansible_facts[secondary_interface].get('ipv4_secondaries', [])
+              )
+            ) |
+            map(attribute='address') | list
+          }}
+
+    - name: Debug IP addresses
+      ansible.builtin.debug:
+        msg: "{{ current_ip_addresses_list }}"
+
+    - name: Print variable app_services
+      ansible.builtin.set_fact:
+        assigned_ip_addresses_list: >-
+          {{
+            vars.keys() |
+            select('match', '^app_services_(.*)$') |
+            map('extract', vars) |
+            map(attribute='ip') | list
+          }}
+
+    # TODO: Compare lists of IPs and stop if they are the same
+    # TODO: Remove IPs that are in current_ip_addresses_list list, but not in assigned_ip_addresses_list, do not add any new IPs to the server yet.
+    # TODO: Use system role to apply the IP changes
+    # TODO: Apply all assigned IPs to the server
+
+    - name: Debug assigned IP addresses
+      ansible.builtin.debug:
+        msg: "{{ assigned_ip_addresses_list }}"
+
+    # - name: Set network
+    #   ansible.builtin.include_role:
+    #     name: fedora.linux_system_roles.network

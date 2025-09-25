@@ -1,0 +1,4 @@
+app_services_web_app:
+  description: "Main customer-facing web application"
+  ip: "192.168.200.11"
+  port: 443
