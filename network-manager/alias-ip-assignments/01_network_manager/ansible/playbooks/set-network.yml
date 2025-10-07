@@ -45,6 +45,6 @@
       ansible.builtin.debug:
         msg: "{{ assigned_ip_addresses_list }}"
 
-    # - name: Set network
-    #   ansible.builtin.include_role:
-    #     name: fedora.linux_system_roles.network
+    - name: Set network
+      ansible.builtin.include_role:
+        name: fedora.linux_system_roles.network

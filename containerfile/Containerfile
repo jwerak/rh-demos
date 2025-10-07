@@ -1,0 +1,91 @@
+# Demonstration of copying files from localhost to container image
+# using ADD directive for automatic tar archive extraction
+
+FROM registry.access.redhat.com/ubi9/ubi:latest
+
+# Note: Using basic tools available in UBI9 base image
+# (tree package is not available in UBI9)
+
+# Label the image
+LABEL description="Demo: Copying and merging files using ADD directive"
+LABEL version="1.0"
+
+# Count files in /etc before extraction
+RUN echo "=== Before extraction ===" && \
+    echo "Number of files in /etc before:" && \
+    find /etc -type f | wc -l && \
+    echo "Contents of /opt before (if exists):" && \
+    ls -la /opt/ 2>/dev/null || echo "/opt does not exist yet"
+
+# ADD directive automatically extracts tar archives!
+# When you use ADD with a .tar.gz file and specify a directory destination,
+# it will automatically:
+# - Decompress the archive
+# - Extract contents to the destination
+# - Merge with existing filesystem
+ADD main.tar.gz /
+
+# Verify extraction happened
+RUN echo "=== After extraction ===" && \
+    echo "Number of files in /etc after:" && \
+    find /etc -type f | wc -l && \
+    echo "Contents of /opt after extraction:" && \
+    ls -la /opt/ && \
+    echo "New directories added to /etc:" && \
+    ls -la /etc/myapp/ /etc/custom/
+
+# Make the app script executable
+RUN chmod +x /opt/myapp/bin/app.sh
+
+# Verify that original /etc files are still present
+RUN echo "=== Verification: Original /etc files still exist ===" && \
+    ls -la /etc/passwd /etc/group /etc/hosts /etc/hostname && \
+    echo "=== Verification: New custom files added ===" && \
+    cat /etc/myapp/service.conf && \
+    cat /etc/custom/custom.conf && \
+    echo "=== Verification: /opt files added ===" && \
+    cat /opt/myapp/config/app.conf
+
+# Create a verification script
+RUN cat > /usr/local/bin/verify-files.sh << 'EOF'
+#!/bin/bash
+echo "========================================="
+echo "File Copy Verification Report"
+echo "========================================="
+echo ""
+echo "1. Original /etc system files (should exist):"
+echo "   /etc/passwd: $([ -f /etc/passwd ] && echo 'EXISTS' || echo 'MISSING')"
+echo "   /etc/group: $([ -f /etc/group ] && echo 'EXISTS' || echo 'MISSING')"
+echo "   /etc/hosts: $([ -f /etc/hosts ] && echo 'EXISTS' || echo 'MISSING')"
+echo "   /etc/hostname: $([ -f /etc/hostname ] && echo 'EXISTS' || echo 'MISSING')"
+echo ""
+echo "2. New custom files in /etc (should be added):"
+echo "   /etc/myapp/service.conf: $([ -f /etc/myapp/service.conf ] && echo 'EXISTS' || echo 'MISSING')"
+echo "   /etc/custom/custom.conf: $([ -f /etc/custom/custom.conf ] && echo 'EXISTS' || echo 'MISSING')"
+echo ""
+echo "3. Application files in /opt (should be added):"
+echo "   /opt/myapp/bin/app.sh: $([ -f /opt/myapp/bin/app.sh ] && echo 'EXISTS' || echo 'MISSING')"
+echo "   /opt/myapp/config/app.conf: $([ -f /opt/myapp/config/app.conf ] && echo 'EXISTS' || echo 'MISSING')"
+echo ""
+echo "4. Directory structure:"
+echo "   /opt directory:"
+find /opt -type f -o -type d | head -20
+echo ""
+echo "   /etc/myapp and /etc/custom directories:"
+find /etc/myapp /etc/custom -type f -o -type d 2>/dev/null
+echo ""
+echo "5. Total file count in /etc:"
+find /etc -type f | wc -l
+echo ""
+echo "========================================="
+echo "Verification Complete!"
+echo "========================================="
+EOF
+
+RUN chmod +x /usr/local/bin/verify-files.sh
+
+# Set working directory
+WORKDIR /opt/myapp
+
+# Default command runs the verification script
+CMD ["/usr/local/bin/verify-files.sh"]
