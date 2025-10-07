@@ -1,0 +1,17 @@
+# Archive Manifest
+# This file defines which directories and files should be included in main.tar.gz
+# One path per line, relative to sample_files/ directory
+# Lines starting with # are comments and will be ignored
+# Empty lines are ignored
+
+# Application files for /opt
+opt/myapp/bin/app.sh
+opt/myapp/config/app.conf
+
+# Configuration files for /etc
+etc/myapp/service.conf
+etc/custom/custom.conf
+
+# You can also specify entire directories:
+# opt/myapp/
+# etc/myapp/

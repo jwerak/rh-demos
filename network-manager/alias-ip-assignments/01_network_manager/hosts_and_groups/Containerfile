@@ -1,0 +1,17 @@
+# Containerfile
+
+# Začneme s oficiálním základním image OpenShift AI
+FROM quay.io/opendatahub-contrib/workbench-images:jupyter-datascience-c9s-py311_2023c_latest
+
+# Přepneme na uživatele root pro instalaci balíčků
+USER root
+
+# Zkopírujeme náš soubor s požadavky do image
+COPY requirements.txt /tmp/
+
+# Nainstalujeme balíčky pomocí pip a poté uklidíme
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && \
+    rm /tmp/requirements.txt
+
+# Přepneme zpět na výchozího uživatele notebooku (velmi důležité pro bezpečnost a oprávnění)
+USER 1001
