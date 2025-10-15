@@ -1,0 +1,51 @@
+---
+# Ansible inventory for IP alias lab setup
+all:
+  hosts:
+    hypervisor_local:
+      ansible_host: host.containers.internal
+      ansible_user: root
+  children:
+    lab_hosts:
+      hosts:
+        system-roles-lab-01:
+        system-roles-lab-02:
+        system-roles-lab-03:
+          network_state:
+            interfaces:
+              - name: enp2s0
+                type: ethernet
+                state: up
+                ipv4:
+                  enabled: true
+                  address:
+                    - ip: 192.168.200.10
+                      prefix-length: 24
+                    - ip: 192.168.200.11
+                      prefix-length: 24
+                    - ip: 192.168.200.12
+                      prefix-length: 24
+                  dhcp: false
+                ipv6:
+                  enabled: false
+
+      vars:
+        # Libvirt images variables
+        # Source path is mounted from the host and defined in the ansible-navigator.yml file
+        libvirt_vm_images_path_source: /images
+        # Destination path is path on the hypervisor, or underlying host
+        libvirt_vm_pool_dir: /var/lib/libvirt/images
+
+        ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+
+        libvirt_vm_uri: qemu+ssh://root@host.containers.internal/system?no_verify=1
+
+    # Example grouping by function
+    cockpit_hosts:
+      hosts:
+        system-roles-lab-01:
+    hypervisors:
+      hosts:
+        hypervisor_local:
+
+

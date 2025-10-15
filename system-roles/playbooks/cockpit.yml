@@ -1,0 +1,6 @@
+---
+- name: Install and configure cockpit
+  hosts: cockpit_hosts
+  become: true
+  roles:
+    - fedora.linux_system_roles.cockpit

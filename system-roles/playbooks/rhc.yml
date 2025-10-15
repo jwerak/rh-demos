@@ -1,0 +1,7 @@
+---
+- name: Register hosts with RHC
+  hosts: lab_hosts
+  become: true
+  roles:
+    # - redhat.rhel_system_roles.rhc
+    - fedora.linux_system_roles.rhc

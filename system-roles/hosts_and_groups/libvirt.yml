@@ -1,0 +1,6 @@
+---
+plugin: community.libvirt.libvirt
+uri: 'qemu+ssh://root@host.containers.internal/system?no_verify=1'
+compose:
+  ansible_host: "guest_info['if.1.addr.0.addr']"
+  ansible_connection: "'ssh'"
