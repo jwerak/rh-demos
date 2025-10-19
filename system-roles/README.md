@@ -30,9 +30,6 @@ ansible-navigator run playbooks/cockpit.yml
 
 ## Enable Monitoring
 
-
-## Install Cockpit
-
 ```bash
 ansible-navigator run playbooks/monitoring.yml
 ```
