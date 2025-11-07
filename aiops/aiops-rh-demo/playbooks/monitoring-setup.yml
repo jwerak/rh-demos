@@ -1,0 +1,24 @@
+---
+- name: Configure hosts for Monitoring
+  hosts: node1
+  become: true
+  vars:
+    metrics_graph_service: true
+    metrics_query_service: true
+    metrics_manage_firewall: false
+    metrics_manage_selinux: true
+    metrics_retention_days: 7
+    metrics_monitored_hosts: [node1.example.com]
+  roles:
+    - redhat.rhel_system_roles.metrics
+  tasks:
+    - name: Install pcp-pmda-systemd package
+      ansible.builtin.package:
+        name: pcp-pmda-systemd
+        state: present
+
+    - name: Enable pcp-pmda-systemd service
+      ansible.builtin.systemd:
+        name: pcp-pmda-systemd
+        state: started
+        enabled: true
