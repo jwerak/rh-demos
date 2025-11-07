@@ -1,0 +1,44 @@
+---
+- name: Create AIOps Workflow
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Create a workflow job template
+      ansible.controller.workflow_job_template:
+        name: AI Insights and Lightspeed prompt generation
+        description: created by Ansible Playbook
+        organization: Default
+        workflow_nodes:
+          - identifier: Apache Status Check
+            unified_job_template:
+              organization:
+                name: Default
+              name: "⚙️ Apache Service Status Check"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: Analyze Incident
+          - identifier: Analyze Incident
+            unified_job_template:
+              organization:
+                name: Default
+              name: "🤖 RHEL AI: Analyze Incident"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: Notify via Chat
+          - identifier: Notify via Chat
+            unified_job_template:
+              organization:
+                name: Default
+              name: "📣 Notify via Mattermost"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: Build Lightspeed Job
+          - identifier: Build Lightspeed Job
+            unified_job_template:
+              organization:
+                name: Default
+              name: "⚙️ Build Ansible Lightspeed Job Template"
+              type: job_template

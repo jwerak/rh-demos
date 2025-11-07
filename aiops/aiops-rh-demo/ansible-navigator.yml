@@ -1,0 +1,23 @@
+---
+ansible-navigator:
+  execution-environment:
+    image: registry.redhat.io/ansible-automation-platform-26/ee-supported-rhel9
+    pull:
+      policy: missing
+    volume-mounts:
+      - src: ~/git/ansible_collections/jwerak
+        dest: /usr/share/ansible/collections/ansible_collections/jwerak
+        options: Z
+
+  logging:
+    level: critical
+    append: false
+    file: /tmp/log.txt
+
+  playbook-artifact:
+    enable: true
+    replay: /tmp/test_artifact.json
+    save-as: /tmp/test_artifact.json
+  ansible:
+    config:
+      path: ./ansible.cfg
