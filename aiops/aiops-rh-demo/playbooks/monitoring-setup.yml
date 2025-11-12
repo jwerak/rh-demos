@@ -16,9 +16,3 @@
       ansible.builtin.package:
         name: pcp-pmda-systemd
         state: present
-
-    - name: Enable pcp-pmda-systemd service
-      ansible.builtin.systemd:
-        name: pcp-pmda-systemd
-        state: started
-        enabled: true

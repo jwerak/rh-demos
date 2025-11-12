@@ -11,23 +11,6 @@ all:
         system-roles-lab-01:
         system-roles-lab-02:
         system-roles-lab-03:
-          network_state:
-            interfaces:
-              - name: enp2s0
-                type: ethernet
-                state: up
-                ipv4:
-                  enabled: true
-                  address:
-                    - ip: 192.168.200.10
-                      prefix-length: 24
-                    - ip: 192.168.200.11
-                      prefix-length: 24
-                    - ip: 192.168.200.12
-                      prefix-length: 24
-                  dhcp: false
-                ipv6:
-                  enabled: false
 
       vars:
         # Libvirt images variables
@@ -47,5 +30,3 @@ all:
     hypervisors:
       hosts:
         hypervisor_local:
-
-

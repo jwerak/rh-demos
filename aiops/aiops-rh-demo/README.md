@@ -23,3 +23,103 @@ ansible-navigator run playbooks/aiops-workflows.yml --penv CONTROLLER_OAUTH_TOKE
 - Job Template to use monitoring-setup playbook.
 - Disable node1 filebeat
   - `systemctl stop filebeat`
+
+
+### Deploy AAP MCP
+
+MCP is forked from [mancubus77](https://github.com/mancubus77/mcp-server-aap).
+
+To deploy to OCP, follow [this repo instructions](https://github.com/jwerak/mcp-server-aap/tree/main/k8s).
+
+### Deploy N8N in OCP
+
+k8s resources are [based on this repo](https://github.com/jwerak/n8n-hosting).
+
+```bash
+oc project n8n
+oc apply -k ocp/n8n/
+
+# View the route:
+N8N_URL=https://$(oc get route n8n -n n8n -o jsonpath='{.spec.host}')
+```
+
+Then import workflow from [n8n directory](./n8n/).
+
+Configure credentials.
+
+Test execute the workflow:
+
+```bash
+curl  -X POST \
+      -H "Content-type: application/json; charset=utf-8" \
+      ${N8N_URL}/webhook-test/7d1a79c6-2189-47d5-92c6-dfbac5b1fa59 \
+      -d @./prompts/01-disk-full.json
+```
+
+## Python/LangGraph Implementation
+
+As an alternative to n8n, we've created a Python implementation using LangGraph that provides the same functionality with additional benefits for production environments.
+
+### Features
+
+- 🐍 **Pure Python**: Built with LangGraph, FastAPI, and LangChain
+- 🔧 **Full Control**: Complete customization of agent behavior
+- 🧪 **Testable**: Unit and integration tests included
+- 📦 **Containerized**: Docker and OpenShift ready
+- 📊 **Observable**: Better logging and monitoring capabilities
+- 🚀 **Scalable**: Designed for production workloads
+
+### Quick Start (Local)
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment (copy and edit)
+cp env.example .env
+# Edit .env with your API keys and configuration
+
+# Run locally
+python ops_incident_assistant.py
+
+# Test
+python test_client.py
+```
+
+### Deploy to OpenShift
+
+```bash
+oc new-project aiops
+oc apply -k ocp/ops-assistant/
+
+# Get route
+oc get route ops-incident-assistant
+```
+
+### Test the Python Implementation
+
+```bash
+ROUTE=$(oc get route ops-incident-assistant -o jsonpath='{.spec.host}')
+
+curl -X POST https://${ROUTE}/webhook/7d1a79c6-2189-47d5-92c6-dfbac5b1fa59 \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What job templates are available?"}'
+```
+
+### Documentation
+
+- **[IMPLEMENTATION_GUIDE.md](./ops-assistant/IMPLEMENTATION_GUIDE.md)** - Complete implementation guide
+- **[ocp/ops-assistant/README.md](./ocp/ops-assistant/README.md)** - OpenShift deployment guide
+
+### Choosing Between n8n and Python
+
+**Use n8n if:**
+- Your team prefers visual workflow design
+- You need rapid prototyping
+- No coding experience required
+
+**Use Python/LangGraph if:**
+- You need production-grade reliability
+- Testing and CI/CD are important
+- You want full customization
+- Your team has Python experience

@@ -1,8 +1,8 @@
 ansible_user: jveverka
 ansible_become_pass: redhat
 libvirt_vm_name: "{{ inventory_hostname_short }}"
-libvirt_vm_image_source: rhel-10.0-x86_64-kvm.qcow2
-libvirt_vm_osinfo: rhel10.0
+libvirt_vm_image_source: rhel-9.6-x86_64-kvm.qcow2
+libvirt_vm_osinfo: rhel9.5
 libvirt_vm_networks:
   - network: default
   - network: network-internal
