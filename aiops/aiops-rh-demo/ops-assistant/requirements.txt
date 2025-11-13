@@ -20,6 +20,9 @@ litellm  # No version constraint - let pip resolve based on all dependencies
 # Note: Install from source if not available on PyPI
 # mcp>=0.1.0
 
+# Color logging
+colorama==0.4.6
+
 # Development and testing (optional)
 pytest==7.4.3
 pytest-asyncio==0.21.1

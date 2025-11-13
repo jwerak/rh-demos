@@ -4,9 +4,99 @@ Implements Model Context Protocol using langchain_mcp_adapters
 """
 
 import httpx
+import asyncio
 from typing import Any, Dict, List, Optional
-from langchain_core.tools import tool
+from langchain_core.tools import tool, StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from functools import wraps
+
+
+def create_retry_wrapper(func, max_retries=3, initial_delay=1.0):
+    """
+    Create a retry wrapper for async functions with exponential backoff
+
+    Args:
+        func: The async function to wrap
+        max_retries: Maximum number of retry attempts
+        initial_delay: Initial delay between retries in seconds
+
+    Returns:
+        Wrapped function with retry logic
+    """
+
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        last_exception = None
+        delay = initial_delay
+
+        for attempt in range(max_retries + 1):
+            try:
+                # Ensure func is callable
+                if func is None:
+                    return "ERROR: Tool function is None - this is a bug in the retry wrapper setup"
+                return await func(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+                error_msg = str(e)
+
+                # Add more context for debugging
+                if "NoneType" in error_msg and "callable" in error_msg:
+                    error_msg = f"{error_msg} (Tool function appears to be None - check MCP tool setup)"
+
+                # Check if it's a retryable error (connection/stream issues)
+                # vs non-retryable (parameter/validation/type errors)
+                is_retryable = (
+                    "ClosedResourceError" in error_msg
+                    or "SSE" in error_msg
+                    or "stream" in error_msg.lower()
+                    or "connection" in error_msg.lower()
+                    or "timeout" in error_msg.lower()
+                )
+
+                # Identify parameter/type/validation errors (should NOT retry)
+                is_parameter_error = any(
+                    [
+                        "parameter" in error_msg.lower(),
+                        "argument" in error_msg.lower(),
+                        "validation" in error_msg.lower(),
+                        "type" in error_msg.lower(),
+                        "expected" in error_msg.lower()
+                        and ("int" in error_msg.lower() or "str" in error_msg.lower()),
+                        "invalid" in error_msg.lower(),
+                        "required" in error_msg.lower(),
+                        "missing" in error_msg.lower(),
+                    ]
+                )
+
+                if attempt < max_retries and is_retryable and not is_parameter_error:
+                    print(
+                        f"⚠️  Tool call failed (attempt {attempt + 1}/{max_retries + 1}): {error_msg}"
+                    )
+                    print(f"   Retrying in {delay:.1f} seconds...")
+                    await asyncio.sleep(delay)
+                    delay *= 2  # Exponential backoff
+                else:
+                    # For parameter/type errors, provide detailed error message
+                    if is_parameter_error:
+                        error_detail = (
+                            f"Parameter/Type Error: {error_msg}\n\n"
+                            f"Hint: Check that:\n"
+                            f"- All required parameters are provided\n"
+                            f"- Parameter types are correct (e.g., integers not strings for IDs)\n"
+                            f"- Parameter names match the tool's schema\n"
+                            f"Please call the tool again with corrected parameters."
+                        )
+                    else:
+                        error_detail = f"Tool execution failed after {attempt + 1} attempts: {error_msg}"
+
+                    # Return error as string instead of raising exception
+                    # This allows the agent to see the error and potentially retry with different params
+                    return f"ERROR: {error_detail}"
+
+        # Should not reach here, but just in case
+        return f"ERROR: Tool execution failed after {max_retries + 1} attempts: {str(last_exception)}"
+
+    return wrapper
 
 
 class MCPHTTPClient:
@@ -103,8 +193,24 @@ class MCPHTTPClient:
 # Example usage functions for specific AAP tools
 
 
-async def create_aap_tools(mcp_url: str, verify_ssl: bool = True):
-    """Create AAP-specific tools from MCP server using langchain_mcp_adapters"""
+async def create_aap_tools(
+    mcp_url: str,
+    verify_ssl: bool = True,
+    max_retries: int = 3,
+    enable_retry: bool = True,
+):
+    """
+    Create AAP-specific tools from MCP server using langchain_mcp_adapters
+
+    Args:
+        mcp_url: URL of the MCP server
+        verify_ssl: Whether to verify SSL certificates
+        max_retries: Maximum number of retries for tool calls
+        enable_retry: Whether to enable retry wrapper (set False for debugging)
+
+    Returns:
+        Tuple of (client, tools) where tools optionally have retry logic
+    """
     try:
         # Use MultiServerMCPClient with streamable_http transport
         client = MultiServerMCPClient(
@@ -121,7 +227,64 @@ async def create_aap_tools(mcp_url: str, verify_ssl: bool = True):
         mcp_tools = await client.get_tools()
         print(f"Retrieved {len(mcp_tools)} tools from MCP server")
 
-        return client, mcp_tools
+        # Return tools without wrapping if retry is disabled
+        if not enable_retry:
+            print(f"⚠️  Retry wrapper disabled - using tools as-is")
+            return client, mcp_tools
+
+        # Wrap each tool with retry logic
+        wrapped_tools = []
+        for tool in mcp_tools:
+            # Get the original tool function (MCP tools are async, so check coroutine first)
+            if hasattr(tool, "coroutine") and tool.coroutine is not None:
+                original_func = tool.coroutine
+            elif hasattr(tool, "func") and tool.func is not None:
+                original_func = tool.func
+            elif hasattr(tool, "_run"):
+                original_func = tool._run
+            else:
+                # If we can't find the function, skip wrapping this tool
+                print(f"⚠️  Warning: Could not wrap tool {tool.name}, using original")
+                wrapped_tools.append(tool)
+                continue
+
+            # Wrap it with retry logic
+            wrapped_func = create_retry_wrapper(original_func, max_retries=max_retries)
+
+            # Create a new tool with the wrapped function, preserving all original properties
+            # Since MCP tools are async, the wrapped function is always a coroutine
+            tool_kwargs = {
+                "name": tool.name,
+                "description": tool.description,
+                "coroutine": wrapped_func,
+            }
+
+            # Preserve optional attributes from original tool
+            if hasattr(tool, "args_schema") and tool.args_schema is not None:
+                tool_kwargs["args_schema"] = tool.args_schema
+            if hasattr(tool, "return_direct"):
+                tool_kwargs["return_direct"] = tool.return_direct
+            if hasattr(tool, "verbose"):
+                tool_kwargs["verbose"] = tool.verbose
+            if hasattr(tool, "callbacks"):
+                tool_kwargs["callbacks"] = tool.callbacks
+            if hasattr(tool, "tags"):
+                tool_kwargs["tags"] = tool.tags
+            if hasattr(tool, "metadata"):
+                tool_kwargs["metadata"] = tool.metadata
+
+            try:
+                wrapped_tool = StructuredTool(**tool_kwargs)
+                wrapped_tools.append(wrapped_tool)
+            except Exception as e:
+                print(f"⚠️  Error wrapping tool {tool.name}: {e}")
+                print(f"   Using original tool instead")
+                wrapped_tools.append(tool)
+
+        print(
+            f"✅ Wrapped {len(wrapped_tools)} tools with retry logic (max {max_retries} retries)"
+        )
+        return client, wrapped_tools
 
     except Exception as e:
         import traceback

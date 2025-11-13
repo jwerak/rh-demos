@@ -98,13 +98,13 @@ curl -X POST https://$ROUTE/webhook/7d1a79c6-2189-47d5-92c6-dfbac5b1fa59 \
 
 The deployment uses the following environment variables:
 
-| Variable | Source | Description |
-|----------|--------|-------------|
-| `OPENAI_API_KEY` | Secret | API key for OpenAI-compatible endpoint |
-| `OPENAI_BASE_URL` | ConfigMap | Base URL for OpenAI-compatible API |
-| `MCP_SERVER_URL` | ConfigMap | URL of the MCP server |
-| `MODEL_NAME` | ConfigMap | Name of the LLM model to use |
-| `WEBHOOK_PATH` | ConfigMap | Webhook path identifier |
+| Variable          | Source    | Description                            |
+| ----------------- | --------- | -------------------------------------- |
+| `OPENAI_API_KEY`  | Secret    | API key for OpenAI-compatible endpoint |
+| `OPENAI_BASE_URL` | ConfigMap | Base URL for OpenAI-compatible API     |
+| `MCP_SERVER_URL`  | ConfigMap | URL of the MCP server                  |
+| `MODEL_NAME`      | ConfigMap | Name of the LLM model to use           |
+| `WEBHOOK_PATH`    | ConfigMap | Webhook path identifier                |
 
 ### Updating Configuration
 
@@ -278,4 +278,5 @@ If you want to integrate with the existing n8n deployment, you can:
 - Implement request authentication
 - Add rate limiting
 - Set up CI/CD pipeline for automatic deployments
+
 

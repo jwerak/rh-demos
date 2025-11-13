@@ -1,3 +1,3 @@
 {
-  "question": "Find a job template to solve the following error: \"host\": \"app-db-02\", \"message\": \"Disk /data is 95% full. Please ensure this device has sufficient space\" }' If you find a solution, launch the job template with the relevant inventory."
+  "question": "Disk is full on host app-db-02, find a job template to clean up the disk. Determine whether AAP has a job template to solve this issue. If so, find the relevant host inventory that needs to be used, and launch the job template"
 }

@@ -68,6 +68,7 @@ As an alternative to n8n, we've created a Python implementation using LangGraph 
 - 📦 **Containerized**: Docker and OpenShift ready
 - 📊 **Observable**: Better logging and monitoring capabilities
 - 🚀 **Scalable**: Designed for production workloads
+- 🔄 **Resilient**: Automatic retry with exponential backoff for transient failures
 
 ### Quick Start (Local)
 
