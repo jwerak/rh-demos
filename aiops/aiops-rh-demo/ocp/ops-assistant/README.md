@@ -1,6 +1,6 @@
 # Ops Incident Assistant - OpenShift Deployment
 
-Kubernetes/OpenShift deployment manifests for the Ops Incident Assistant.
+This directory contains a Kustomize overlay that uses the upstream [agent-ops-assistant](https://github.com/jwerak/agent-ops-assistant/tree/main/k8s) repository as a base.
 
 ## Prerequisites
 
@@ -10,69 +10,160 @@ Kubernetes/OpenShift deployment manifests for the Ops Incident Assistant.
 - OpenAI API key (or compatible endpoint credentials)
 - MCP server for Ansible Automation Platform deployed
 
-## Quick Start
+## Kustomize Structure
 
-### 1. Build and Push Container Image
-
-```bash
-# Build the image
-cd /home/jveverka/git/rh-demos/aiops/aiops-rh-demo
-podman build -t quay.io/your-org/ops-incident-assistant:latest .
-
-# Push to registry
-podman push quay.io/your-org/ops-incident-assistant:latest
-```
-
-### 2. Create Namespace
-
-```bash
-oc new-project aiops
-```
-
-### 3. Configure Secrets and ConfigMap
-
-Edit `secret.yaml` to add your OpenAI API key:
-
-```bash
-oc create secret generic ops-assistant-secrets \
-  --from-literal=openai-api-key='your-actual-api-key'
-```
-
-Edit `configmap.yaml` to configure your endpoints:
+This overlay references the remote GitHub repository as a base:
 
 ```yaml
-data:
-  openai-base-url: "https://your-openai-endpoint.com/v1"
-  mcp-server-url: "https://mcp-server-aap.apps.your-cluster.com/mcp"
-  model-name: "DeepSeek-R1-Distill-Qwen-14B-W4A16"
-  webhook-path: "7d1a79c6-2189-47d5-92c6-dfbac5b1fa59"
+resources:
+  - https://github.com/jwerak/agent-ops-assistant/k8s
 ```
 
-### 4. Deploy Using Kustomize
+This approach allows you to:
+- Use the upstream configuration as a base
+- Override specific values with patches
+- Keep your local changes minimal and maintainable
+
+## Quick Start
+
+### 1. Deploy with Default Configuration
 
 ```bash
-# Deploy all resources
-oc apply -k .
+# Deploy using kustomize
+oc apply -k ./ocp/ops-assistant
 
-# Or deploy individually
-oc apply -f configmap.yaml
-oc apply -f secret.yaml
-oc apply -f deployment.yaml
-oc apply -f service.yaml
-oc apply -f route.yaml
+# Or using kubectl
+kubectl apply -k ./ocp/ops-assistant
 ```
 
-### 5. Verify Deployment
+### 2. Verify Deployment
 
 ```bash
 # Check pod status
-oc get pods -l app=ops-incident-assistant
+oc get pods -l app=ops-incident-assistant -n aiops
 
 # Check logs
-oc logs -f deployment/ops-incident-assistant
+oc logs -f deployment/ops-incident-assistant -n aiops
 
 # Get route URL
-oc get route ops-incident-assistant
+oc get route ops-incident-assistant -n aiops
+```
+
+## Customization
+
+To customize the deployment, you can add patches to the `kustomization.yaml` file. Here are some common examples:
+
+### Change Namespace
+
+Edit `kustomization.yaml`:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: my-custom-namespace
+
+resources:
+  - https://github.com/jwerak/agent-ops-assistant/k8s
+```
+
+### Patch ConfigMap Values
+
+Create a file `patch-configmap.yaml`:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ops-assistant-config
+data:
+  openai-base-url: "https://my-openai-endpoint.com/v1"
+  mcp-server-url: "https://my-mcp-server.example.com/mcp"
+  model-name: "gpt-4"
+  webhook-path: "my-custom-webhook-path"
+```
+
+Then reference it in `kustomization.yaml`:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - https://github.com/jwerak/agent-ops-assistant/k8s
+
+patches:
+  - path: patch-configmap.yaml
+```
+
+### Update Secret
+
+Create a file `patch-secret.yaml`:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ops-assistant-secrets
+type: Opaque
+stringData:
+  openai-api-key: "your-actual-api-key"
+```
+
+Then reference it in `kustomization.yaml`:
+
+```yaml
+patches:
+  - path: patch-secret.yaml
+```
+
+### Change Container Image
+
+Create a file `patch-deployment.yaml`:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ops-incident-assistant
+spec:
+  template:
+    spec:
+      containers:
+      - name: ops-assistant
+        image: quay.io/my-org/ops-incident-assistant:v1.0.0
+```
+
+### Scale Replicas
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ops-incident-assistant
+spec:
+  replicas: 3
+```
+
+### Adjust Resources
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ops-incident-assistant
+spec:
+  template:
+    spec:
+      containers:
+      - name: ops-assistant
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
 ```
 
 ## Testing the Deployment
@@ -81,7 +172,7 @@ Once deployed, get the route URL and test:
 
 ```bash
 # Get the route
-ROUTE=$(oc get route ops-incident-assistant -o jsonpath='{.spec.host}')
+ROUTE=$(oc get route ops-incident-assistant -n aiops -o jsonpath='{.spec.host}')
 
 # Test health endpoint
 curl https://$ROUTE/health
@@ -92,191 +183,79 @@ curl -X POST https://$ROUTE/webhook/7d1a79c6-2189-47d5-92c6-dfbac5b1fa59 \
   -d '{"question": "What job templates are available?"}'
 ```
 
-## Configuration
+## Viewing Built Configuration
 
-### Environment Variables
-
-The deployment uses the following environment variables:
-
-| Variable          | Source    | Description                            |
-| ----------------- | --------- | -------------------------------------- |
-| `OPENAI_API_KEY`  | Secret    | API key for OpenAI-compatible endpoint |
-| `OPENAI_BASE_URL` | ConfigMap | Base URL for OpenAI-compatible API     |
-| `MCP_SERVER_URL`  | ConfigMap | URL of the MCP server                  |
-| `MODEL_NAME`      | ConfigMap | Name of the LLM model to use           |
-| `WEBHOOK_PATH`    | ConfigMap | Webhook path identifier                |
-
-### Updating Configuration
-
-To update configuration without redeploying:
+To see the final rendered Kubernetes manifests:
 
 ```bash
-# Update ConfigMap
-oc edit configmap ops-assistant-config
-
-# Restart deployment to pick up changes
-oc rollout restart deployment/ops-incident-assistant
+kubectl kustomize ./ocp/ops-assistant
 ```
 
-### Updating Secrets
+Or with oc:
 
 ```bash
-# Update secret
-oc create secret generic ops-assistant-secrets \
-  --from-literal=openai-api-key='new-api-key' \
-  --dry-run=client -o yaml | oc apply -f -
-
-# Restart deployment
-oc rollout restart deployment/ops-incident-assistant
+oc kustomize ./ocp/ops-assistant
 ```
-
-## Resource Requirements
-
-Default resource configuration:
-
-- **Requests**: 512Mi memory, 250m CPU
-- **Limits**: 2Gi memory, 1000m CPU
-
-Adjust in `deployment.yaml` based on your workload:
-
-```yaml
-resources:
-  requests:
-    memory: "512Mi"
-    cpu: "250m"
-  limits:
-    memory: "2Gi"
-    cpu: "1000m"
-```
-
-## Scaling
-
-The deployment defaults to 1 replica. To scale:
-
-```bash
-# Scale up
-oc scale deployment ops-incident-assistant --replicas=3
-
-# Autoscaling
-oc autoscale deployment ops-incident-assistant \
-  --min=1 --max=5 --cpu-percent=80
-```
-
-## Monitoring
-
-### View Logs
-
-```bash
-# Stream logs
-oc logs -f deployment/ops-incident-assistant
-
-# View recent logs
-oc logs deployment/ops-incident-assistant --tail=100
-```
-
-### Health Checks
-
-The deployment includes liveness and readiness probes:
-
-- **Liveness**: `/health` endpoint checked every 10s
-- **Readiness**: `/health` endpoint checked every 5s
-
-### Metrics
-
-To expose Prometheus metrics, add a ServiceMonitor:
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: ops-incident-assistant
-spec:
-  selector:
-    matchLabels:
-      app: ops-incident-assistant
-  endpoints:
-  - port: http
-    path: /metrics
-    interval: 30s
-```
-
-## Troubleshooting
-
-### Pod Not Starting
-
-```bash
-# Check pod events
-oc describe pod -l app=ops-incident-assistant
-
-# Check logs
-oc logs -l app=ops-incident-assistant
-```
-
-### Common Issues
-
-1. **Image Pull Errors**
-   - Verify image exists in registry
-   - Check image pull secrets if using private registry
-
-2. **Configuration Errors**
-   - Verify ConfigMap and Secret values
-   - Check environment variable names
-
-3. **MCP Connection Failed**
-   - Verify MCP server URL is accessible
-   - Check network policies
-   - Verify MCP server is running
-
-4. **OpenAI API Errors**
-   - Verify API key is correct
-   - Check base URL configuration
-   - Verify model name is available
-
-## Security Considerations
-
-1. **Secrets Management**
-   - Use sealed secrets or external secret operators
-   - Rotate API keys regularly
-   - Never commit secrets to git
-
-2. **Network Policies**
-   - Restrict ingress to necessary sources
-   - Limit egress to OpenAI and MCP endpoints
-
-3. **RBAC**
-   - Create service account with minimal permissions
-   - Use pod security policies
 
 ## Clean Up
 
 To remove the deployment:
 
 ```bash
-# Delete all resources
-oc delete -k .
-
-# Or delete individually
-oc delete deployment ops-incident-assistant
-oc delete service ops-incident-assistant
-oc delete route ops-incident-assistant
-oc delete configmap ops-assistant-config
-oc delete secret ops-assistant-secrets
+oc delete -k ./ocp/ops-assistant
 ```
 
-## Integration with n8n
+## Benefits of This Approach
 
-If you want to integrate with the existing n8n deployment, you can:
+1. **Minimal local files**: Only maintain overrides, not entire configurations
+2. **Upstream updates**: Easy to pull updates from the upstream repository
+3. **Clear customizations**: Local changes are explicit and easy to review
+4. **Version control**: Can pin to specific Git commits/tags if needed
 
-1. Update the n8n workflow to point to this service
-2. Use the internal service URL: `http://ops-incident-assistant.aiops.svc.cluster.local:5678`
-3. Update the webhook path in both services to match
+## Pinning to a Specific Version
+
+To use a specific version of the upstream configuration:
+
+```yaml
+resources:
+  - https://github.com/jwerak/agent-ops-assistant/k8s?ref=v1.0.0
+```
+
+Or a specific commit:
+
+```yaml
+resources:
+  - https://github.com/jwerak/agent-ops-assistant/k8s?ref=abc123
+```
+
+## Troubleshooting
+
+### Remote Repository Access Issues
+
+If you encounter issues accessing the remote repository, you can:
+
+1. Clone the repository locally and reference it:
+   ```yaml
+   resources:
+     - ../../path/to/agent-ops-assistant/k8s
+   ```
+
+2. Or fork the repository and use your fork:
+   ```yaml
+   resources:
+     - https://github.com/your-org/agent-ops-assistant/k8s
+   ```
+
+### Configuration Not Applied
+
+Make sure to restart the deployment after updating ConfigMaps or Secrets:
+
+```bash
+oc rollout restart deployment/ops-incident-assistant -n aiops
+```
 
 ## Next Steps
 
-- Set up monitoring with Prometheus/Grafana
-- Configure alerting for failures
-- Implement request authentication
-- Add rate limiting
-- Set up CI/CD pipeline for automatic deployments
-
-
+- Create patches for your environment-specific configuration
+- Set up CI/CD to automatically apply kustomize changes
+- Add additional overlays for different environments (dev, staging, prod)
