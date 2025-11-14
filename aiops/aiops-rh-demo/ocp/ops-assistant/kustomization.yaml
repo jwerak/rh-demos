@@ -1,17 +1,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: aiops
-
 resources:
-  - deployment.yaml
-  - service.yaml
-  - route.yaml
-  - configmap.yaml
-  - secret.yaml
+  - https://github.com/jwerak/agent-ops-assistant/k8s
 
-commonLabels:
-  app: ops-incident-assistant
-  component: aiops
-
-
+# Add any customizations here, for example:
+# namespace: aiops
+# patches:
+#   - path: patch-configmap.yaml
+#   - path: patch-secret.yaml

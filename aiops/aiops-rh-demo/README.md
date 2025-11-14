@@ -31,31 +31,6 @@ MCP is forked from [mancubus77](https://github.com/mancubus77/mcp-server-aap).
 
 To deploy to OCP, follow [this repo instructions](https://github.com/jwerak/mcp-server-aap/tree/main/k8s).
 
-### Deploy N8N in OCP
-
-k8s resources are [based on this repo](https://github.com/jwerak/n8n-hosting).
-
-```bash
-oc project n8n
-oc apply -k ocp/n8n/
-
-# View the route:
-N8N_URL=https://$(oc get route n8n -n n8n -o jsonpath='{.spec.host}')
-```
-
-Then import workflow from [n8n directory](./n8n/).
-
-Configure credentials.
-
-Test execute the workflow:
-
-```bash
-curl  -X POST \
-      -H "Content-type: application/json; charset=utf-8" \
-      ${N8N_URL}/webhook-test/7d1a79c6-2189-47d5-92c6-dfbac5b1fa59 \
-      -d @./prompts/01-disk-full.json
-```
-
 ## Python/LangGraph Implementation
 
 As an alternative to n8n, we've created a Python implementation using LangGraph that provides the same functionality with additional benefits for production environments.
