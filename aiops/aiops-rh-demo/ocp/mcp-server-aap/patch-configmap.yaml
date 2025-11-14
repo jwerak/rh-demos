@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-server-aap-config
+data:
+  aap-url: "https://demo-aap-aap.apps.cluster.example.com"
+  aap-verify-ssl: "true"
