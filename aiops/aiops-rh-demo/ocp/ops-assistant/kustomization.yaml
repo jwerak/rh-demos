@@ -4,8 +4,15 @@ kind: Kustomization
 resources:
   - https://github.com/jwerak/agent-ops-assistant/k8s
 
-# Add any customizations here, for example:
-# namespace: aiops
-# patches:
-#   - path: patch-configmap.yaml
-#   - path: patch-secret.yaml
+namespace: aiops
+patches:
+  - path: patch-configmap.yaml
+  - path: patch-secret.yaml
+
+  - target:
+      kind: Deployment
+      name: ops-incident-assistant
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: quay.io/jwerak/agent-ops-assistant:latest
