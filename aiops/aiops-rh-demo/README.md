@@ -1,4 +1,4 @@
-# AIOps from RH Demo portal
+# AIOps - Agentic
 
 Speed up setup of AAP demo for AIOps.
 
@@ -23,7 +23,7 @@ ansible-navigator run playbooks/aiops-workflows.yml --penv CONTROLLER_OAUTH_TOKE
 
 To deploy to OCP, follow [this repo instructions](https://github.com/jwerak/ansible_devops_demo/tree/main/demo_aiops).
 
-tl;dr: When OCP is ready, execute:
+tl;dr: When OCP is ready, execute (from ansible_devops_demo directory):
 
 ```bash
 ansible-playbook -i localhost-only  -e @./demo_aiops/.env ./playbooks/_deploy_demo_on_ocp.yml
@@ -62,21 +62,15 @@ More deployment info is in [this folder](./ocp/mcp-server-aap/).
 #### Quick Start (Local)
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+podman build quay.io/jwerak/agent-ops-assistant
 
-# Configure environment (copy and edit)
-cp env.example .env
-# Edit .env with your API keys and configuration
-
-# Run locally
-python ops_incident_assistant.py
-
-# Test
-python test_client.py
+# Run in
+podman run -it --network host --env-file .env quay.io/jwerak/agent-ops-assistant
 ```
 
 #### Deploy to OpenShift
+
+Update configmap and secret patches [in this folder](./ocp/ops-assistant/) to `patch-configmap.yaml` and `patch-secret.yaml`.
 
 ```bash
 oc new-project aiops
@@ -89,9 +83,13 @@ oc get route -n aiops ops-incident-assistant
 ### Test the Python Implementation
 
 ```bash
-ROUTE=$(oc get route -n aiops ops-incident-assistant -o jsonpath='{.spec.host}')
+ROUTE_OPS_ASSISTANT=$(oc get route -n aiops ops-incident-assistant -o jsonpath='{.spec.host}')
 
-curl -X POST https://${ROUTE}/webhook/7d1a79c6-2189-47d5-92c6-dfbac5b1fa59 \
+curl -X POST https://${ROUTE_OPS_ASSISTANT}/webhook/7d1a79c6-2189-47d5-92c6-dfbac5b1fa59 \
   -H "Content-Type: application/json" \
   -d '{"question": "What job templates are available?"}'
+
+curl -X POST https://${ROUTE_OPS_ASSISTANT}/webhook/7d1a79c6-2189-47d5-92c6-dfbac5b1fa59 \
+  -H "Content-Type: application/json" \
+  -d@./prompts/01-disk-full.json
 ```
