@@ -1,23 +1,8 @@
 # AIOps - Agentic
 
-Speed up setup of AAP demo for AIOps.
-
-## Order
-
-Item listed under name [Introduction to AI Driven Ansible Automation](https://catalog.demo.redhat.com/catalog?search=aiops&item=babylon-catalog-prod%2Fsandboxes-gpte.ai-driven-ansible-automation.prod)
-
-![AIOps](./pics/aiops.png)
-
-## Configure
-
-Copy *.env.sample* to *.env* and fill in controller login info.
-
-```bash
-source .env
-ansible-navigator run playbooks/aiops-workflows.yml --penv CONTROLLER_OAUTH_TOKEN --penv CONTROLLER_HOST
-```
-
 ## Deploy Agentic AIOps
+
+[Deploy OpenShift Environment](https://catalog.demo.redhat.com/catalog?search=openshift+aws&item=babylon-catalog-prod%2Fsandboxes-gpte.ocp-wksp.prod).
 
 ### Deploy AAP Environment with Demo
 
@@ -92,4 +77,10 @@ curl -X POST https://${ROUTE_OPS_ASSISTANT}/webhook/7d1a79c6-2189-47d5-92c6-dfba
 curl -X POST https://${ROUTE_OPS_ASSISTANT}/webhook/7d1a79c6-2189-47d5-92c6-dfbac5b1fa59 \
   -H "Content-Type: application/json" \
   -d@./prompts/01-disk-full.json
+```
+
+### Watch the logs
+
+```bash
+oc logs -l app=ops-incident-assistant -n aiops --tail=100 -f
 ```
