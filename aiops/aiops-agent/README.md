@@ -14,6 +14,8 @@ tl;dr: When OCP is ready, execute (from ansible_devops_demo directory):
 ansible-playbook -i localhost-only  -e @./demo_aiops/.env ./playbooks/_deploy_demo_on_ocp.yml
 ```
 
+Add the policy path 'aap_tests/allowed' to the 'midrange-vms' Inventory.
+
 ### Deploy AAP MCP
 
 Update patches for configmap (`./ocp/mcp-server-aap/patch-configmap.yaml`) and secret `./ocp/mcp-server-aap/secret.yaml`:
@@ -72,11 +74,11 @@ ROUTE_OPS_ASSISTANT=$(oc get route -n aiops ops-incident-assistant -o jsonpath='
 
 curl -X POST https://${ROUTE_OPS_ASSISTANT}/webhook/7d1a79c6-2189-47d5-92c6-dfbac5b1fa59 \
   -H "Content-Type: application/json" \
-  -d '{"question": "What job templates are available?"}'
+  -d '{"question": "What job templates are available?"}' | sed 's/\\n/\n/g'
 
 curl -X POST https://${ROUTE_OPS_ASSISTANT}/webhook/7d1a79c6-2189-47d5-92c6-dfbac5b1fa59 \
   -H "Content-Type: application/json" \
-  -d@./prompts/01-disk-full.json
+  -d@./prompts/01-disk-full.json | sed 's/\\n/\n/g'
 ```
 
 ### Watch the logs

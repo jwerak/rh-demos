@@ -1,4 +1,4 @@
-# AIOps - Agentic
+# AIOps - AAP
 
 Speed up setup of AAP demo for AIOps.
 
@@ -14,5 +14,5 @@ Copy *.env.sample* to *.env* and fill in controller login info.
 
 ```bash
 source .env
-ansible-navigator run playbooks/aiops-workflows.yml --penv CONTROLLER_OAUTH_TOKEN --penv CONTROLLER_HOST
+ansible-navigator run playbooks/aiops-workflows.yml --penv CONTROLLER_USERNAME --penv CONTROLLER_PASSWORD --penv CONTROLLER_HOST
 ```
