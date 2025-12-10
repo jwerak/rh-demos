@@ -1,0 +1,40 @@
+---
+# Tasks for libvirt provisioning
+
+- name: Get VMs list
+  community.libvirt.virt:
+    command: list_vms
+    uri: "{{ libvirt_vm_uri }}"
+  register: existing_vms
+  changed_when: false
+  delegate_to: localhost
+
+- name: Stop Execution if VM already exists
+  when: "libvirt_vm_name in existing_vms.list_vms"
+  ansible.builtin.meta: end_host
+
+- name: Ensure VM image exists
+  ansible.builtin.copy:
+    src: "{{ libvirt_vm_images_path_source }}/{{ libvirt_vm_image_source }}"
+    dest: "{{ libvirt_vm_pool_dir }}/{{ libvirt_vm_image_source }}"
+    mode: "0644"
+  delegate_to: localhost
+
+- name: Create VM from XML template
+  community.libvirt.virt:
+    command: define
+    xml: "{{ lookup('template', 'vm.xml.j2') }}"
+    uri: "{{ libvirt_vm_uri }}"
+  delegate_to: localhost
+
+- name: Start VM
+  community.libvirt.virt:
+    name: "{{ libvirt_vm_name }}"
+    state: running
+    uri: "{{ libvirt_vm_uri }}"
+  delegate_to: localhost
+
+- name: Print message about VM installation
+  ansible.builtin.debug:
+    msg: "VM {{ libvirt_vm_name }} installed"
+  delegate_to: localhost

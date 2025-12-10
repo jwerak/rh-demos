@@ -1,0 +1,48 @@
+---
+- name: Deploy a demo
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_prompt:
+    - name: demo_name
+      prompt: "Which demo do you want to deploy? (aiops, demo-acm-policies, demo-containerfile, demo-network-manager, demo-podman-build-push-run, demo-satellite, demo-system-roles)"
+      private: no
+
+  pre_tasks:
+    - name: Check if demo_name is provided
+      ansible.builtin.fail:
+        msg: "The variable 'demo_name' is required. Please provide it via the command line, e.g., -e 'demo_name=demo-containerfile'"
+      when: demo_name is not defined or demo_name == ""
+
+    - name: Check if role for demo exists
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/roles/{{ demo_name }}"
+      register: role_path
+
+    - name: Fail if role does not exist
+      ansible.builtin.fail:
+        msg: "The role for demo '{{ demo_name }}' does not exist at '{{ playbook_dir }}/roles/{{ demo_name }}'."
+      when: not role_path.stat.exists
+
+- name: Provision VMs
+  hosts: network_vms
+  gather_facts: false
+  roles:
+    - role: provision
+  when: "demo_name in ['demo-network-manager']"
+
+- name: Configure VMs
+  hosts: network_vms
+  gather_facts: false
+  roles:
+    - role: "{{ demo_name }}"
+  when: "demo_name in ['demo-network-manager']"
+
+- name: Run demo without provisioning
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - role: "{{ demo_name }}"
+  when: "demo_name not in ['demo-network-manager']"

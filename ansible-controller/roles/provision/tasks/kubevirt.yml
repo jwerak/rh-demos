@@ -1,0 +1,5 @@
+---
+# Placeholder for kubevirt provisioning
+- name: "Kubevirt provisioning not implemented yet"
+  ansible.builtin.debug:
+    msg: "Kubevirt provisioning is not yet implemented."

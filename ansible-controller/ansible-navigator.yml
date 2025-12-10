@@ -1,0 +1,12 @@
+---
+ansible-navigator:
+  ansible:
+    playbook: main.yml
+    inventory:
+      - inventory/
+  playbook-artifact:
+    enable: false
+  logging:
+    level: info
+  roles:
+    path: ./roles

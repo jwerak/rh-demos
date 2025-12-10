@@ -1,0 +1,9 @@
+---
+# Main tasks for provisioning
+- name: "Provisioning {{ provision_group }}"
+  ansible.builtin.include_tasks: "{{ provisioner }}.yml"
+  loop: "{{ groups[provision_group] }}"
+  loop_control:
+    loop_var: current_host
+  vars:
+    ansible_host: "{{ current_host }}"

@@ -21,3 +21,41 @@ Here is an overview of the available demos:
 * [**Satellite**](./demo-satellite/): An introduction to Red Hat Satellite, although it's noted as being older and not recently tested.
 
 * [**System Roles**](./demo-system-roles/): This demo showcases the use of RHEL System Roles for configuring and managing RHEL systems. It includes examples for registering hosts, installing Cockpit, and enabling monitoring.
+
+## Unified Demo Deployment
+
+This repository includes a unified Ansible playbook to deploy and manage the demos. The playbook is located in the `ansible-controller` directory and is designed to be run with `ansible-navigator`.
+
+### Prerequisites
+
+- `ansible-navigator` is installed.
+- `podman` is installed.
+- For demos requiring VMs: `libvirt` is installed and running.
+
+### Usage
+
+1.  Navigate to the `ansible-controller` directory:
+    ```bash
+    cd ansible-controller
+    ```
+
+2.  Run `ansible-navigator`. You will be prompted to enter the name of the demo you want to deploy.
+
+    For demos that **do not** require VM provisioning (e.g., `demo-containerfile`):
+    ```bash
+    ansible-navigator run --extra-vars "demo_name=demo-containerfile"
+    ```
+
+    For demos that **do** require VM provisioning (e.g., `demo-network-manager`):
+    ```bash
+    ansible-navigator run -i inventory/demo-network-manager.yml --extra-vars "demo_name=demo-network-manager provisioner=libvirt"
+    ```
+
+    The available demos are:
+    - `aiops`
+    - `demo-acm-policies`
+    - `demo-containerfile`
+    - `demo-network-manager`
+    - `demo-podman-build-push-run`
+    - `demo-satellite`
+    - `demo-system-roles`

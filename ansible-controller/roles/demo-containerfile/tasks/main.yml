@@ -1,0 +1,61 @@
+---
+# Tasks for the demo-containerfile demo
+
+- name: Set demo path
+  ansible.builtin.set_fact:
+    demo_path: "{{ playbook_dir }}/../../demo-containerfile"
+
+- name: Check if main.tar.gz exists
+  ansible.builtin.stat:
+    path: "{{ demo_path }}/main.tar.gz"
+  register: main_tar_gz
+
+- name: Create main.tar.gz if it does not exist
+  ansible.builtin.command:
+    cmd: ./create-archive.sh
+    chdir: "{{ demo_path }}"
+  when: not main_tar_gz.stat.exists
+
+- name: Build container image
+  ansible.builtin.command:
+    cmd: podman build -t demo-file-copy:latest -f Containerfile .
+    chdir: "{{ demo_path }}"
+  register: build_result
+
+- name: Show build result
+  ansible.builtin.debug:
+    var: build_result.stdout_lines
+
+- name: Run container to verify files
+  ansible.builtin.command:
+    cmd: podman run --rm demo-file-copy:latest
+    chdir: "{{ demo_path }}"
+  register: verification_result
+
+- name: Show verification result
+  ansible.builtin.debug:
+    var: verification_result.stdout_lines
+
+- name: Test application script
+  ansible.builtin.command:
+    cmd: podman run --rm demo-file-copy:latest /opt/myapp/bin/app.sh
+    chdir: "{{ demo_path }}"
+  register: app_test_result
+
+- name: Show app test result
+  ansible.builtin.debug:
+    var: app_test_result.stdout_lines
+
+- name: Display connection details
+  ansible.builtin.debug:
+    msg:
+      - "Interactive Mode Available"
+      - "To explore the container interactively, run:"
+      - "  podman run --rm -it demo-file-copy:latest /bin/bash"
+      - ""
+      - "Then you can:"
+      - "  - Run: verify-files.sh"
+      - "  - Run: /opt/myapp/bin/app.sh"
+      - "  - Explore: ls -la /etc/myapp/ /etc/custom/ /opt/myapp/"
+      - "  - Verify: cat /etc/passwd  # Original file still exists"
+      - "  - Check: cat /etc/myapp/service.conf  # New file added"

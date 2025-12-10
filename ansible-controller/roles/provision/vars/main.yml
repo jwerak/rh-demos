@@ -1,0 +1,8 @@
+---
+# Default VM definition
+default_vm_definition:
+  name: "default-vm"
+  osinfo: "rhel8.6"
+  image_source: "rhel-8.6-x86_64-kvm.qcow2"
+  networks:
+    - network: default

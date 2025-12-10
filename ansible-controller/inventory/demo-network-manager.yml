@@ -1,0 +1,28 @@
+---
+all:
+  children:
+    network_vms:
+      hosts:
+        00-ifcfg-lab-01:
+          libvirt_vm_name: "00-ifcfg-lab-01"
+          libvirt_vm_osinfo: "rhel7.9"
+          libvirt_vm_image_source: "rhel-server-7.9-update-12-x86_64-kvm.qcow2"
+          libvirt_vm_ram_mb: 4096
+          libvirt_vm_vcpus: 2
+          libvirt_vm_networks:
+            - network: default
+            - network: network-internal
+        00-ifcfg-lab-02:
+          libvirt_vm_name: "00-ifcfg-lab-02"
+          libvirt_vm_osinfo: "rhel7.9"
+          libvirt_vm_image_source: "rhel-server-7.9-update-12-x86_64-kvm.qcow2"
+          libvirt_vm_ram_mb: 4096
+          libvirt_vm_vcpus: 2
+          libvirt_vm_networks:
+            - network: default
+            - network: network-internal
+  vars:
+    libvirt_vm_images_path_source: "/images"
+    libvirt_vm_pool_dir: "/var/lib/libvirt/images"
+    ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
+    libvirt_vm_uri: "qemu:///system"

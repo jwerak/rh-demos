@@ -15,6 +15,7 @@ ansible-playbook -i localhost-only  -e @./demo_aiops/.env ./playbooks/_deploy_de
 ```
 
 Add the policy path 'aap_tests/allowed' to the 'midrange-vms' Inventory.
+The policy is at the [same git repo](https://github.com/jwerak/ansible_devops_demo/blob/main/playbooks/roles/install_opa/templates/configmap.yaml.j2).
 
 ### Deploy AAP MCP
 

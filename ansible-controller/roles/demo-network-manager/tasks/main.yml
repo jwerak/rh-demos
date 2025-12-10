@@ -1,0 +1,5 @@
+---
+# Tasks for demo-network-manager
+- name: "Run demo-network-manager specific tasks"
+  ansible.builtin.debug:
+    msg: "Running demo-network-manager specific tasks"

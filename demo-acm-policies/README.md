@@ -30,6 +30,7 @@ This demo shows how to manage operator lifecycle using Red Hat Advanced Cluster 
 
 - **OpenShift Container Platform** with ACM installed
   - Tested on OCP 4.16.45 and ACM 2.11
+  - e.g. provisioning Red Hat Demo portal - [Using Hosted Control Planes for OpenShift on OpenShift](https://catalog.demo.redhat.com/catalog?search=hcp&item=babylon-catalog-prod%2Fopenshift-cnv.hcp-ocp-virt-cnv.prod)
 - **Managed Cluster**: At least one OCP cluster joined to ACM and configured in the `development` ClusterSet
   - Policies will be stored in namespace `development-policies`
 - **CLI Access**: `oc` command-line tool configured for your hub cluster
@@ -54,10 +55,8 @@ Verify the pods being created:
 ```bash
 watch oc get pod -n clusters-cluster1
 
-
 watch oc get --namespace clusters hostedclusters
 ```
-
 
 ### Overview
 
