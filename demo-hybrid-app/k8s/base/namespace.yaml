@@ -1,0 +1,8 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hybrid-app-demo
+  labels:
+    name: hybrid-app-demo
+    app.kubernetes.io/part-of: hybrid-app

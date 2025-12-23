@@ -244,7 +244,7 @@ status:
 Nyní nainstalujme Web Terminal v konkrétní verzi (`web-terminal.v1.9.0`) pomocí ACM politik:
 
 ```bash
-oc apply -f ./files/policy-initial.yml
+oc apply -f ./files/policy-web-terminal-initial.yml
 ```
 
 **Poznámka**: Tato politika nasadí operátor Web Terminal ve verzi 1.9.0 napříč všemi clustery v cílovém ClusterSet, čímž zajistí konzistenci.
@@ -301,7 +301,7 @@ oc get packagemanifests.packages.operators.coreos.com -n openshift-marketplace w
 Aplikujte aktualizovanou politiku pro upgrade operátorů na verzi 1.10.1 napříč vaší sadou clusterů:
 
 ```bash
-oc apply -f ./files/policy-updated.yml
+oc apply -f ./files/policy-web-terminal-updated.yml
 ```
 
 ### 5. Monitorování průběhu upgradu
@@ -322,14 +322,14 @@ watch oc get csv -n openshift-operators
 
 Tato demonstrace obsahuje dva hlavní soubory politik:
 
-### `policy-initial.yml`
+### `policy-web-terminal-initial.yml`
 
 - Instaluje operátor Web Terminal ve verzi **1.9.0**
 - Používá compliance `musthave` pro zajištění instalace
 - Cílí na ClusterSet `development`
 - Nastavuje `startingCSV` pro zamknutí počáteční verze
 
-### `policy-updated.yml`
+### `policy-web-terminal-updated.yml`
 
 - Povoluje upgrady z verze **1.9.0** na **1.10.1**
 - Zahrnuje patch verze (např. `1.10.0-0.1720402943.p`)

@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: development-policies
+
+resources:
+  - ../../base
+
+# This overlay represents the initial deployment state:
+# - Web Terminal operator v1.9.0
+# - remediationAction: inform (audit mode)
+# - Single version in the versions array

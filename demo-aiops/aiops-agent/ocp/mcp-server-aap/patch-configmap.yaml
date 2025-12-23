@@ -3,5 +3,5 @@ kind: ConfigMap
 metadata:
   name: mcp-server-aap-config
 data:
-  aap-url: "https://demo-aap-aap.apps.cluster.example.com"
+  aap-url: "https://demo-aap-aap.apps.cluster-v2fvv.v2fvv.sandbox3325.opentlc.com/"
   aap-verify-ssl: "true"

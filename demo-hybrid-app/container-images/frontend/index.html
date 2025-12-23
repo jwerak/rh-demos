@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hybrid Cloud Application Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Red Hat Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .card h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.5rem;
+        }
+
+        .architecture {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .architecture h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+        }
+
+        .arch-diagram {
+            text-align: center;
+            font-family: monospace;
+            font-size: 14px;
+            line-height: 1.8;
+            background: #f7f7f7;
+            padding: 20px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+
+        .component {
+            display: inline-block;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+
+        .frontend-comp { background: #667eea; color: white; }
+        .backend-comp { background: #764ba2; color: white; }
+        .redis-comp { background: #ff6b6b; color: white; }
+        .postgres-comp { background: #51cf66; color: white; }
+
+        .status {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 10px 0;
+            padding: 10px;
+            background: #f7f7f7;
+            border-radius: 5px;
+        }
+
+        .status-label {
+            font-weight: 600;
+        }
+
+        .status-value {
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+        }
+
+        .status-healthy {
+            background: #51cf66;
+            color: white;
+        }
+
+        .status-degraded {
+            background: #ff6b6b;
+            color: white;
+        }
+
+        .status-unknown {
+            background: #868e96;
+            color: white;
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1rem;
+            margin: 5px;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #5568d3;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .data-table {
+            width: 100%;
+            margin-top: 15px;
+            border-collapse: collapse;
+        }
+
+        .data-table th,
+        .data-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .data-table th {
+            background: #f7f7f7;
+            font-weight: 600;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #868e96;
+        }
+
+        .error {
+            background: #ffe3e3;
+            color: #c92a2a;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+
+        .info-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            margin-left: 10px;
+        }
+
+        .badge-cache { background: #ff6b6b; color: white; }
+        .badge-db { background: #51cf66; color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Hybrid Cloud Application Demo</h1>
+            <p class="subtitle">Demonstrating KubeVirt VM integration with containerized applications on OpenShift</p>
+        </header>
+
+        <div class="architecture">
+            <h2>Architecture Overview</h2>
+            <div class="arch-diagram">
+                <div style="margin-bottom: 20px;">
+                    <div class="component frontend-comp">Frontend (Nginx)</div>
+                </div>
+                <div style="margin-bottom: 10px;">↓ HTTP</div>
+                <div style="margin-bottom: 20px;">
+                    <div class="component backend-comp">Backend API (Python)</div>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <span style="display: inline-block; width: 45%;">↓ SQL</span>
+                    <span style="display: inline-block; width: 45%;">↓ TCP</span>
+                </div>
+                <div>
+                    <div class="component postgres-comp">PostgreSQL VM</div>
+                    <div class="component redis-comp">Redis Cache</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="cards">
+            <div class="card">
+                <h2>System Health</h2>
+                <div id="health-status">
+                    <p class="loading">Loading health status...</p>
+                </div>
+                <button onclick="checkHealth()">Refresh Health</button>
+            </div>
+
+            <div class="card">
+                <h2>Cache Statistics</h2>
+                <div id="cache-stats">
+                    <p class="loading">Loading cache stats...</p>
+                </div>
+                <button onclick="getCacheStats()">Refresh Stats</button>
+                <button onclick="clearCache()">Clear Cache</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Application Data</h2>
+            <div id="data-info"></div>
+            <button onclick="loadData()">Load Data</button>
+            <button onclick="loadData(true)">Force DB Query (Bypass Cache)</button>
+            <div id="data-display"></div>
+        </div>
+    </div>
+
+    <script>
+        const BACKEND_URL = window.BACKEND_URL || '/api';
+
+        async function checkHealth() {
+            const container = document.getElementById('health-status');
+            container.innerHTML = '<p class="loading">Checking health...</p>';
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/health`);
+                const data = await response.json();
+
+                let html = `<div class="status">
+                    <span class="status-label">Overall Status:</span>
+                    <span class="status-value status-${data.status}">${data.status.toUpperCase()}</span>
+                </div>`;
+
+                for (const [service, status] of Object.entries(data.services)) {
+                    const isHealthy = status === 'healthy';
+                    html += `<div class="status">
+                        <span class="status-label">${service}:</span>
+                        <span class="status-value ${isHealthy ? 'status-healthy' : 'status-degraded'}">${status}</span>
+                    </div>`;
+                }
+
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `<div class="error">Failed to check health: ${error.message}</div>`;
+            }
+        }
+
+        async function getCacheStats() {
+            const container = document.getElementById('cache-stats');
+            container.innerHTML = '<p class="loading">Loading cache stats...</p>';
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/api/cache-stats`);
+                const data = await response.json();
+
+                if (data.status === 'disabled') {
+                    container.innerHTML = '<p>Redis cache is not configured</p>';
+                    return;
+                }
+
+                const html = `
+                    <div class="status">
+                        <span class="status-label">Hit Rate:</span>
+                        <span class="status-value status-healthy">${data.hit_rate}%</span>
+                    </div>
+                    <div class="status">
+                        <span class="status-label">Hits:</span>
+                        <span>${data.keyspace_hits}</span>
+                    </div>
+                    <div class="status">
+                        <span class="status-label">Misses:</span>
+                        <span>${data.keyspace_misses}</span>
+                    </div>
+                    <div class="status">
+                        <span class="status-label">Total Commands:</span>
+                        <span>${data.total_commands_processed}</span>
+                    </div>
+                `;
+
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `<div class="error">Failed to load cache stats: ${error.message}</div>`;
+            }
+        }
+
+        async function clearCache() {
+            if (!confirm('Are you sure you want to clear the cache?')) return;
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/api/cache`, { method: 'DELETE' });
+                const data = await response.json();
+                alert(data.message);
+                getCacheStats();
+            } catch (error) {
+                alert(`Failed to clear cache: ${error.message}`);
+            }
+        }
+
+        async function loadData(forceDB = false) {
+            const infoContainer = document.getElementById('data-info');
+            const dataContainer = document.getElementById('data-display');
+            dataContainer.innerHTML = '<p class="loading">Loading data...</p>';
+            infoContainer.innerHTML = '';
+
+            try {
+                if (forceDB) {
+                    await fetch(`${BACKEND_URL}/api/cache`, { method: 'DELETE' });
+                }
+
+                const response = await fetch(`${BACKEND_URL}/api/data`);
+                const data = await response.json();
+
+                const sourceBadge = data.source === 'redis_cache'
+                    ? '<span class="info-badge badge-cache">FROM CACHE</span>'
+                    : '<span class="info-badge badge-db">FROM DATABASE</span>';
+
+                infoContainer.innerHTML = `<p><strong>Data Source:</strong> ${data.source} ${sourceBadge}</p>
+                    <p><strong>Retrieved at:</strong> ${new Date(data.timestamp).toLocaleString()}</p>
+                    <p><strong>Records:</strong> ${data.data.length}</p>`;
+
+                if (data.data.length === 0) {
+                    dataContainer.innerHTML = '<p>No data available. The database may need to be initialized.</p>';
+                    return;
+                }
+
+                let html = '<table class="data-table"><thead><tr>';
+                const keys = Object.keys(data.data[0]);
+                keys.forEach(key => {
+                    html += `<th>${key}</th>`;
+                });
+                html += '</tr></thead><tbody>';
+
+                data.data.forEach(row => {
+                    html += '<tr>';
+                    keys.forEach(key => {
+                        html += `<td>${row[key]}</td>`;
+                    });
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                dataContainer.innerHTML = html;
+            } catch (error) {
+                dataContainer.innerHTML = `<div class="error">Failed to load data: ${error.message}</div>`;
+            }
+        }
+
+        // Auto-load on page load
+        window.addEventListener('load', () => {
+            checkHealth();
+            getCacheStats();
+            loadData();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql-vm
+  namespace: hybrid-app-demo
+  labels:
+    app: postgresql-vm
+    app.kubernetes.io/name: postgresql-vm
+    app.kubernetes.io/part-of: hybrid-app
+    app.kubernetes.io/component: database
+spec:
+  selector:
+    app: postgresql-vm
+  ports:
+    - name: postgresql
+      protocol: TCP
+      port: 5432
+      targetPort: 5432
+  type: ClusterIP

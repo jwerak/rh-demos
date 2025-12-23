@@ -1,0 +1,216 @@
+---
+# Tasks for the demo-hybrid-app demo
+
+- name: Set demo path
+  ansible.builtin.set_fact:
+    demo_path: "{{ playbook_dir }}/../../demo-hybrid-app"
+
+- name: Display demo information
+  ansible.builtin.debug:
+    msg:
+      - "========================================="
+      - "Hybrid Cloud Application Demo"
+      - "========================================="
+      - "This demo deploys a hybrid cloud application with:"
+      - "  - KubeVirt VirtualMachine (PostgreSQL)"
+      - "  - Container applications (Frontend, Backend, Redis)"
+      - "  - Topology visualization in OpenShift"
+      - ""
+      - "Demo path: {{ demo_path }}"
+      - "Environment: {{ environment | default('development') }}"
+
+- name: Check if oc CLI is available
+  ansible.builtin.command: oc version
+  register: oc_version
+  changed_when: false
+  failed_when: false
+
+- name: Fail if oc CLI is not available
+  ansible.builtin.fail:
+    msg: "oc CLI is not available. Please install and configure oc to continue."
+  when: oc_version.rc != 0
+
+- name: Display OpenShift connection info
+  ansible.builtin.debug:
+    msg:
+      - "Connected to OpenShift cluster"
+      - "{{ oc_version.stdout_lines }}"
+
+- name: Check if images should be built
+  ansible.builtin.stat:
+    path: "{{ demo_path }}/scripts/build-images.sh"
+  register: build_script
+
+- name: Build container images (if requested)
+  when:
+    - build_images | default(false) | bool
+    - build_script.stat.exists
+  block:
+    - name: Build backend image
+      ansible.builtin.command:
+        cmd: podman build -t {{ registry | default('quay.io/jwerak') }}/hybrid-app-backend:{{ image_tag | default('latest') }} -f Containerfile .
+        chdir: "{{ demo_path }}/container-images/backend"
+      register: backend_build
+
+    - name: Build frontend image
+      ansible.builtin.command:
+        cmd: podman build -t {{ registry | default('quay.io/jwerak') }}/hybrid-app-frontend:{{ image_tag | default('latest') }} -f Containerfile .
+        chdir: "{{ demo_path }}/container-images/frontend"
+      register: frontend_build
+
+    - name: Display build results
+      ansible.builtin.debug:
+        msg:
+          - "Images built successfully:"
+          - "  Backend: {{ registry | default('quay.io/jwerak') }}/hybrid-app-backend:{{ image_tag | default('latest') }}"
+          - "  Frontend: {{ registry | default('quay.io/jwerak') }}/hybrid-app-frontend:{{ image_tag | default('latest') }}"
+
+- name: Set deployment overlay
+  ansible.builtin.set_fact:
+    overlay: "{{ environment | default('development') }}"
+
+- name: Validate overlay exists
+  ansible.builtin.stat:
+    path: "{{ demo_path }}/k8s/overlays/{{ overlay }}"
+  register: overlay_path
+
+- name: Fail if overlay does not exist
+  ansible.builtin.fail:
+    msg: "Overlay '{{ overlay }}' does not exist. Available overlays: development, production"
+  when: not overlay_path.stat.exists
+
+- name: Deploy application using kustomize
+  ansible.builtin.command:
+    cmd: oc apply -k overlays/{{ overlay }}/
+    chdir: "{{ demo_path }}/k8s"
+  register: deploy_result
+
+- name: Display deployment result
+  ansible.builtin.debug:
+    var: deploy_result.stdout_lines
+
+- name: Set namespace based on environment
+  ansible.builtin.set_fact:
+    app_namespace: "hybrid-app-{{ overlay }}"
+
+- name: Wait for namespace to be created
+  ansible.builtin.command:
+    cmd: oc get namespace {{ app_namespace }}
+  register: namespace_check
+  retries: 10
+  delay: 2
+  until: namespace_check.rc == 0
+  changed_when: false
+
+- name: Wait for VirtualMachine to be created
+  ansible.builtin.command:
+    cmd: oc get vm -n {{ app_namespace }}
+  register: vm_check
+  retries: 10
+  delay: 3
+  until: vm_check.rc == 0
+  changed_when: false
+
+- name: Display VM status
+  ansible.builtin.debug:
+    msg:
+      - "VirtualMachine created. It will take 3-5 minutes to boot and initialize PostgreSQL."
+      - "Monitor VM status with: oc get vmi -n {{ app_namespace }} -w"
+
+- name: Wait for deployments to be created
+  ansible.builtin.command:
+    cmd: oc get deployment -n {{ app_namespace }}
+  register: deployment_check
+  retries: 10
+  delay: 2
+  until: deployment_check.rc == 0
+  changed_when: false
+
+- name: Wait for pods to be ready (timeout 5 minutes)
+  ansible.builtin.command:
+    cmd: oc wait --for=condition=Ready pod -l app=backend -n {{ app_namespace }} --timeout=300s
+  register: backend_ready
+  failed_when: false
+
+- name: Wait for frontend to be ready
+  ansible.builtin.command:
+    cmd: oc wait --for=condition=Ready pod -l app=frontend -n {{ app_namespace }} --timeout=300s
+  register: frontend_ready
+  failed_when: false
+
+- name: Wait for redis to be ready
+  ansible.builtin.command:
+    cmd: oc wait --for=condition=Ready pod -l app=redis -n {{ app_namespace }} --timeout=300s
+  register: redis_ready
+  failed_when: false
+
+- name: Get route information
+  ansible.builtin.command:
+    cmd: oc get route -n {{ app_namespace }} -o json
+  register: route_info
+  changed_when: false
+
+- name: Parse route URL
+  ansible.builtin.set_fact:
+    frontend_url: "{{ (route_info.stdout | from_json).items[0].spec.host }}"
+  when: route_info.stdout | from_json | json_query('items') | length > 0
+
+- name: Display access information
+  ansible.builtin.debug:
+    msg:
+      - "========================================="
+      - "Deployment Complete"
+      - "========================================="
+      - "Environment: {{ overlay }}"
+      - "Namespace: {{ app_namespace }}"
+      - ""
+      - "Frontend URL: https://{{ frontend_url | default('(route not found)') }}"
+      - ""
+      - "Useful commands:"
+      - "  View all resources:  oc get all -n {{ app_namespace }}"
+      - "  View VM status:      oc get vm,vmi -n {{ app_namespace }}"
+      - "  View topology:       OpenShift Console → Developer → Topology"
+      - "  View backend logs:   oc logs -n {{ app_namespace }} deployment/backend-{{ overlay }}"
+      - "  View VM console:     virtctl console postgresql-vm-{{ overlay }} -n {{ app_namespace }}"
+      - ""
+      - "Note: The PostgreSQL VM takes 3-5 minutes to fully initialize."
+      - "      Monitor progress: oc get vmi -n {{ app_namespace }} -w"
+
+- name: Create summary file
+  ansible.builtin.copy:
+    content: |
+      Hybrid Cloud Application Demo - Deployment Summary
+      ===================================================
+
+      Environment: {{ overlay }}
+      Namespace: {{ app_namespace }}
+      Deployment Time: {{ ansible_date_time.iso8601 }}
+
+      Access URLs:
+      - Frontend: https://{{ frontend_url | default('(pending)') }}
+
+      Component Status:
+      - Backend: {{ 'Ready' if backend_ready.rc == 0 else 'Not Ready' }}
+      - Frontend: {{ 'Ready' if frontend_ready.rc == 0 else 'Not Ready' }}
+      - Redis: {{ 'Ready' if redis_ready.rc == 0 else 'Not Ready' }}
+      - PostgreSQL VM: Initializing (check with: oc get vmi -n {{ app_namespace }})
+
+      Next Steps:
+      1. Wait for PostgreSQL VM to complete initialization (3-5 minutes)
+      2. Access the frontend URL to view the application
+      3. Check the topology view in OpenShift Console (Developer perspective)
+      4. Monitor component connections and data flow
+
+      Verification Commands:
+      - oc get all -n {{ app_namespace }}
+      - oc get vm,vmi -n {{ app_namespace }}
+      - oc logs -n {{ app_namespace }} deployment/backend-{{ overlay }}
+
+      Cleanup:
+      - oc delete -k {{ demo_path }}/k8s/overlays/{{ overlay }}/
+    dest: "{{ demo_path }}/deployment-summary-{{ overlay }}.txt"
+    mode: '0644'
+
+- name: Display summary file location
+  ansible.builtin.debug:
+    msg: "Deployment summary saved to: {{ demo_path }}/deployment-summary-{{ overlay }}.txt"

@@ -1,0 +1,33 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hybrid-app-demo
+
+resources:
+  - namespace.yaml
+  - postgresql-vm.yaml
+  - postgresql-vm-service.yaml
+  - redis-deployment.yaml
+  - redis-service.yaml
+  - backend-deployment.yaml
+  - backend-service.yaml
+  - frontend-deployment.yaml
+  - frontend-service.yaml
+  - frontend-route.yaml
+
+# Generate PostgreSQL credentials secret
+secretGenerator:
+  - name: postgresql-credentials
+    literals:
+      - username=appuser
+      - password=apppassword
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/part-of: hybrid-app
+  demo: hybrid-cloud
+
+# Common annotations
+commonAnnotations:
+  description: "Hybrid cloud application demo with KubeVirt VM and containers"

@@ -14,8 +14,9 @@
       - [4. Execute Controlled Upgrade](#4-execute-controlled-upgrade)
       - [5. Monitor Upgrade Progress](#5-monitor-upgrade-progress)
     - [Policy Files Overview](#policy-files-overview)
-      - [`policy-initial.yml`](#policy-initialyml)
-      - [`policy-updated.yml`](#policy-updatedyml)
+      - [`policy-web-terminal-initial.yml`](#policy-web-terminal-initialyml)
+      - [`policy-web-terminal-updated.yml`](#policy-web-terminal-updatedyml)
+    - [Kustomize Structure (Recommended Approach)](#kustomize-structure-recommended-approach)
   - [Generator policies](#generator-policies)
     - [Generate policies](#generate-policies)
   - [Creating policies with templates](#creating-policies-with-templates)
@@ -57,6 +58,8 @@ watch oc get pod -n clusters-cluster1
 
 watch oc get --namespace clusters hostedclusters
 ```
+
+Create **ClusterSet** with created cluster and binding to namespace `development-policies` via Console.
 
 ### Overview
 
@@ -289,10 +292,19 @@ status:
 
 #### 2. Install Initial Operator Version
 
-Now let's install Web Terminal at a specific version (`web-terminal.v1.9.0`) using ACM policies:
+Now let's install Web Terminal at a specific version (`web-terminal.v1.9.0`) using ACM policies.
+
+
+**Option A: Using Kustomize (Recommended)**
 
 ```bash
-oc apply -f ./files/policy-initial.yml
+kustomize build operators/web-terminal/overlays/initial/ | oc apply -f -
+```
+
+**Option B: Using Legacy Files**
+
+```bash
+oc apply -f ./files/policy-web-terminal-initial.yml
 ```
 
 **Note**: This policy will deploy the Web Terminal operator at version 1.9.0 across all clusters in the target ClusterSet, ensuring consistency.
@@ -346,10 +358,18 @@ oc get packagemanifests.packages.operators.coreos.com -n openshift-marketplace w
 
 #### 4. Execute Controlled Upgrade
 
-Apply the updated policy to upgrade operators to version 1.10.1 across your cluster set:
+Apply the updated policy to upgrade operators to version 1.10.1 across your cluster set.
+
+**Option A: Using Kustomize (Recommended)**
 
 ```bash
-oc apply -f ./files/policy-updated.yml
+kustomize build operators/web-terminal/overlays/updated/ | oc apply -f -
+```
+
+**Option B: Using Legacy Files**
+
+```bash
+oc apply -f ./files/policy-web-terminal-updated.yml
 ```
 
 #### 5. Monitor Upgrade Progress
@@ -370,14 +390,14 @@ watch oc get csv -n openshift-operators
 
 This demo includes two main policy files:
 
-#### `policy-initial.yml`
+#### `policy-web-terminal-initial.yml`
 
 - Installs Web Terminal operator at version **1.9.0**
 - Uses `musthave` compliance to ensure installation
 - Targets the `development` ClusterSet
 - Sets `startingCSV` to lock the initial version
 
-#### `policy-updated.yml`
+#### `policy-web-terminal-updated.yml`
 
 - Allows upgrades from **1.9.0** to **1.10.1**
 - Includes patch versions (e.g., `1.10.0-0.1720402943.p`)
@@ -385,6 +405,40 @@ This demo includes two main policy files:
 - Maintains the same targeting and compliance settings
 
 **Key Difference**: The updated policy expands the `versions` array to include newer releases, enabling controlled upgrade paths.
+
+### Kustomize Structure (Recommended Approach)
+
+The demo now includes a kustomize-based structure in the `operators/web-terminal/` directory that makes it easier to manage policy variations:
+
+```
+operators/
+└── web-terminal/
+    ├── base/                          # Common policy components
+    │   ├── policy.yaml               # Base OperatorPolicy definition
+    │   ├── placement.yaml            # Cluster targeting
+    │   ├── placementbinding.yaml     # Binds policy to placement
+    │   └── kustomization.yaml
+    └── overlays/
+        ├── initial/                   # v1.9.0 deployment
+        │   └── kustomization.yaml
+        └── updated/                   # v1.10.1 upgrade
+            └── kustomization.yaml    # Inline JSON 6902 patches
+```
+
+**Benefits of the Kustomize Approach:**
+
+- **DRY Principle**: Common components defined once in `base/`
+- **Surgical Patches**: JSON 6902 patches modify only what changes (no field duplication)
+- **Version Management**: Easy to create new overlays for different operator versions
+- **Clear Separation**: Deployment state (initial vs updated) clearly separated
+- **Scalability**: Easy to add more operators (e.g., `operators/another-operator/`)
+- **Gitops Ready**: Works seamlessly with ArgoCD and other GitOps tools
+
+**How it Works:**
+
+1. **Base**: Contains the common Policy, Placement, and PlacementBinding
+2. **Initial Overlay**: References base, represents fresh installation at v1.9.0
+3. **Updated Overlay**: Uses JSON 6902 patches to change only `remediationAction` and `versions` array
 
 ## Generator policies
 

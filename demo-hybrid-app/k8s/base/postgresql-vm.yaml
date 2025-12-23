@@ -1,0 +1,81 @@
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: postgresql-vm
+  namespace: hybrid-app-demo
+  labels:
+    app: postgresql-vm
+    app.kubernetes.io/name: postgresql-vm
+    app.kubernetes.io/part-of: hybrid-app
+    app.kubernetes.io/component: database
+    app.openshift.io/runtime: postgresql
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: postgresql-vm
+        app: postgresql-vm
+        app.kubernetes.io/name: postgresql-vm
+        app.kubernetes.io/part-of: hybrid-app
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        devices:
+          disks:
+            - name: containerdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: containerdisk
+          containerDisk:
+            image: quay.io/containerdisks/fedora:40
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: fedora
+              password: fedora
+              chpasswd:
+                expire: false
+              ssh_pwauth: true
+              packages:
+                - postgresql
+                - postgresql-server
+              runcmd:
+                # Initialize PostgreSQL
+                - sudo -u postgres postgresql-setup --initdb
+                - sudo systemctl enable postgresql
+                - sudo systemctl start postgresql
+                # Wait for PostgreSQL to start
+                - sleep 10
+                # Create database user and database
+                - sudo -u postgres psql -c "CREATE USER appuser WITH PASSWORD 'apppassword';"
+                - sudo -u postgres psql -c "CREATE DATABASE appdb OWNER appuser;"
+                - sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE appdb TO appuser;"
+                # Create sample table and data
+                - sudo -u postgres psql -d appdb -c "CREATE TABLE app_data (id SERIAL PRIMARY KEY, name VARCHAR(100), description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+                - sudo -u postgres psql -d appdb -c "ALTER TABLE app_data OWNER TO appuser;"
+                - sudo -u postgres psql -d appdb -c "INSERT INTO app_data (name, description) VALUES ('Sample Item 1', 'This data is stored in PostgreSQL running on a KubeVirt VM'), ('Sample Item 2', 'Demonstrating hybrid cloud architecture'), ('Sample Item 3', 'Containers can access this legacy database'), ('Sample Item 4', 'Perfect for migration scenarios'), ('Sample Item 5', 'OpenShift + KubeVirt integration');"
+                # Configure PostgreSQL to accept connections from pods
+                - echo "host all all 0.0.0.0/0 md5" | sudo tee -a /var/lib/pgsql/data/pg_hba.conf
+                - echo "listen_addresses = '*'" | sudo tee -a /var/lib/pgsql/data/postgresql.conf
+                # Restart PostgreSQL to apply changes
+                - sudo systemctl restart postgresql
+                # Set up firewall rules
+                - sudo firewall-cmd --permanent --add-service=postgresql
+                - sudo firewall-cmd --reload
