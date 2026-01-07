@@ -23,7 +23,7 @@ from pydantic import BaseModel
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Hybrid App Backend",
     description="Backend API for hybrid cloud application demo",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # Enable CORS for frontend
@@ -81,7 +81,7 @@ def get_db_connection():
             password=POSTGRES_PASSWORD,
             database=POSTGRES_DB,
             cursor_factory=RealDictCursor,
-            connect_timeout=5
+            connect_timeout=5,
         )
         logger.debug(f"Connected to PostgreSQL at {POSTGRES_HOST}:{POSTGRES_PORT}")
         return conn
@@ -98,10 +98,7 @@ async def startup_event():
     # Initialize Redis client
     try:
         redis_client = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            decode_responses=True,
-            socket_timeout=5
+            host=REDIS_HOST, port=REDIS_PORT, decode_responses=True, socket_timeout=5
         )
         redis_client.ping()
         logger.info(f"Connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
@@ -113,7 +110,9 @@ async def startup_event():
     try:
         conn = get_db_connection()
         conn.close()
-        logger.info(f"PostgreSQL connection verified at {POSTGRES_HOST}:{POSTGRES_PORT}")
+        logger.info(
+            f"PostgreSQL connection verified at {POSTGRES_HOST}:{POSTGRES_PORT}"
+        )
     except Exception as e:
         logger.warning(f"PostgreSQL connection failed: {e}")
 
@@ -124,11 +123,12 @@ async def root():
     return {
         "service": "Hybrid App Backend API",
         "version": "1.0.0",
-        "endpoints": "/health, /api/data, /api/cache-stats"
+        "endpoints": "/health, /api/data, /api/cache-stats",
     }
 
 
 @app.get("/health", response_model=HealthResponse)
+@app.get("/api/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint - verifies all service connections"""
     services = {}
@@ -159,13 +159,15 @@ async def health_check():
         logger.error(f"Redis health check failed: {e}")
 
     # Overall status
-    all_healthy = all(status == "healthy" for status in services.values() if status != "not configured")
+    all_healthy = all(
+        status == "healthy"
+        for status in services.values()
+        if status != "not configured"
+    )
     status = "healthy" if all_healthy else "degraded"
 
     return HealthResponse(
-        status=status,
-        timestamp=datetime.utcnow().isoformat(),
-        services=services
+        status=status, timestamp=datetime.utcnow().isoformat(), services=services
     )
 
 
@@ -186,13 +188,14 @@ async def get_data():
             cached_data = redis_client.get(cache_key)
             if cached_data:
                 import json
+
                 data = json.loads(cached_data)
                 logger.info("Cache HIT: Data retrieved from Redis")
                 return DataResponse(
                     data=data,
                     source="redis_cache",
                     cached=True,
-                    timestamp=datetime.utcnow().isoformat()
+                    timestamp=datetime.utcnow().isoformat(),
                 )
         except Exception as e:
             logger.warning(f"Cache read failed: {e}")
@@ -201,12 +204,14 @@ async def get_data():
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, name, description, created_at::text
                 FROM app_data
                 ORDER BY id
                 LIMIT 100;
-            """)
+            """
+            )
             rows = cur.fetchall()
         conn.close()
 
@@ -217,6 +222,7 @@ async def get_data():
         if redis_client:
             try:
                 import json
+
                 redis_client.setex(cache_key, 300, json.dumps(data))  # 5 min TTL
                 logger.debug("Data cached in Redis")
             except Exception as e:
@@ -226,7 +232,7 @@ async def get_data():
             data=data,
             source="postgresql_vm",
             cached=False,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.utcnow().isoformat(),
         )
 
     except Exception as e:
@@ -249,10 +255,11 @@ async def cache_stats():
             "keyspace_hits": info.get("keyspace_hits", 0),
             "keyspace_misses": info.get("keyspace_misses", 0),
             "hit_rate": round(
-                info.get("keyspace_hits", 0) /
-                max(1, info.get("keyspace_hits", 0) + info.get("keyspace_misses", 0)) * 100,
-                2
-            )
+                info.get("keyspace_hits", 0)
+                / max(1, info.get("keyspace_hits", 0) + info.get("keyspace_misses", 0))
+                * 100,
+                2,
+            ),
         }
     except Exception as e:
         logger.error(f"Failed to get cache stats: {e}")
@@ -276,4 +283,5 @@ async def clear_cache():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level=LOG_LEVEL.lower())

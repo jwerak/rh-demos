@@ -3,12 +3,17 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
+  annotations:
+    app.openshift.io/connects-to: '[{"apiVersion":"apps/v1","kind":"Deployment","name":"backend-prod","namespace":"hybrid-app-prod"}]'
 spec:
   replicas: 2
   template:
     spec:
       containers:
         - name: frontend
+          env:
+            - name: BACKEND_SERVICE_NAME
+              value: "backend-prod"
           resources:
             requests:
               memory: "128Mi"

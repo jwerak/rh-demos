@@ -5,6 +5,10 @@ metadata:
   name: postgresql-vm
 spec:
   template:
+    metadata:
+      labels:
+        demo: hybrid-cloud
+        environment: production
     spec:
       domain:
         cpu:
@@ -12,3 +16,14 @@ spec:
         resources:
           requests:
             memory: 4Gi
+      volumes:
+        - name: containerdisk
+          containerDisk:
+            image: quay.io/containerdisks/fedora:40
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            secretRef:
+              name: postgresql-vm-cloudinit-prod
+        - name: postgresql-data
+          dataVolume:
+            name: postgresql-vm-data-prod

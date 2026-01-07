@@ -8,6 +8,7 @@ metadata:
     app: frontend
     app.kubernetes.io/name: frontend
     app.kubernetes.io/part-of: hybrid-app
+    app.kubernetes.io/component: web
 spec:
   to:
     kind: Service

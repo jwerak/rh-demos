@@ -3,6 +3,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: backend
+  annotations:
+    app.openshift.io/connects-to: '[{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"postgresql-vm-prod","namespace":"hybrid-app-prod"},{"apiVersion":"apps/v1","kind":"Deployment","name":"redis-prod","namespace":"hybrid-app-prod"}]'
 spec:
   replicas: 3
   template:
@@ -10,6 +12,10 @@ spec:
       containers:
         - name: backend
           env:
+            - name: POSTGRES_HOST
+              value: "postgresql-vm-prod"
+            - name: REDIS_HOST
+              value: "redis-prod"
             - name: LOG_LEVEL
               value: "INFO"
           resources:

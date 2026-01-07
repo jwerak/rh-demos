@@ -6,6 +6,8 @@ namespace: hybrid-app-demo
 
 resources:
   - namespace.yaml
+  - postgresql-vm-datavolume.yaml
+  - postgresql-vm-cloudinit-secret.yaml
   - postgresql-vm.yaml
   - postgresql-vm-service.yaml
   - redis-deployment.yaml
@@ -24,9 +26,11 @@ secretGenerator:
       - password=apppassword
 
 # Common labels applied to all resources
-commonLabels:
-  app.kubernetes.io/part-of: hybrid-app
-  demo: hybrid-cloud
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/part-of: hybrid-app
+      demo: hybrid-cloud
 
 # Common annotations
 commonAnnotations:

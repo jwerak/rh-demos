@@ -1,0 +1,22 @@
+---
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: postgresql-vm-data
+  namespace: hybrid-app-demo
+  labels:
+    app: postgresql-vm
+    app.kubernetes.io/name: postgresql-vm
+    app.kubernetes.io/part-of: hybrid-app
+    app.kubernetes.io/component: database
+    demo: hybrid-cloud
+spec:
+  source:
+    blank: {}
+  storage:
+    accessModes:
+      - ReadWriteMany
+    resources:
+      requests:
+        storage: 10Gi
+

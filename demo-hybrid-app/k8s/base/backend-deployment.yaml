@@ -11,7 +11,8 @@ metadata:
     app.kubernetes.io/component: api
     app.openshift.io/runtime: python
   annotations:
-    app.openshift.io/connects-to: '[{"apiVersion":"v1","kind":"Service","name":"postgresql-vm"},{"apiVersion":"v1","kind":"Service","name":"redis"}]'
+    app.openshift.io/connects-to: '[{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"postgresql-vm","namespace":"hybrid-app-demo"},{"apiVersion":"apps/v1","kind":"Deployment","name":"redis","namespace":"hybrid-app-demo"}]'
+
 spec:
   replicas: 1
   selector:

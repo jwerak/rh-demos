@@ -24,5 +24,7 @@ patches:
       name: postgresql-vm
 
 # Production-specific labels
-commonLabels:
-  environment: production
+labels:
+  - includeSelectors: true
+    pairs:
+      environment: production

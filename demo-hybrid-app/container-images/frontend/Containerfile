@@ -1,12 +1,62 @@
-FROM registry.access.redhat.com/ubi9/nginx-124:latest
+FROM quay.io/centos/centos:stream9
 
-# Copy nginx configuration
-COPY --chown=1001:0 nginx.conf /etc/nginx/nginx.conf.d/default.conf
+# Install nginx
+RUN dnf install -y nginx && \
+    dnf clean all
+
+# Create app user (OpenShift best practice: UID 1001, GID 0)
+RUN useradd -u 1001 -r -g 0 -m -d /opt/app-root -s /sbin/nologin \
+    -c "Application user" appuser || true
+
+# Create directory structure
+RUN mkdir -p /opt/app-root/src \
+    /etc/nginx/conf.d \
+    /var/lib/nginx \
+    /var/lib/nginx/tmp \
+    /var/log/nginx \
+    /var/cache/nginx \
+    /var/cache/nginx/client_temp \
+    /var/cache/nginx/proxy_temp \
+    /var/cache/nginx/fastcgi_temp \
+    /var/cache/nginx/uwsgi_temp \
+    /var/cache/nginx/scgi_temp
+
+# Set ownership and permissions (OpenShift best practice: g=u for group 0)
+RUN chown -R 1001:0 /opt/app-root \
+    /var/log/nginx \
+    /var/lib/nginx \
+    /var/cache/nginx \
+    /etc/nginx && \
+    chmod -R g=u /opt/app-root \
+    /var/log/nginx \
+    /var/lib/nginx \
+    /var/cache/nginx \
+    /etc/nginx && \
+    chmod 644 /etc/nginx/mime.types 2>/dev/null || true
+
+# Copy main nginx configuration (non-root compatible)
+COPY --chown=1001:0 nginx-main.conf /etc/nginx/nginx.conf
+
+# Copy entrypoint script
+COPY --chown=1001:0 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Copy static files
 COPY --chown=1001:0 index.html /opt/app-root/src/
 
+# Ensure permissions are correct after copying (OpenShift best practice)
+RUN chown -R 1001:0 /etc/nginx/nginx.conf \
+    /opt/app-root/src/index.html \
+    /usr/local/bin/entrypoint.sh && \
+    chmod -R g=u /etc/nginx \
+    /opt/app-root \
+    /usr/local/bin/entrypoint.sh && \
+    chmod 755 /usr/local/bin/entrypoint.sh
+
+# Use non-root user
+USER 1001
+
 # Expose port
 EXPOSE 8080
 
-# The base image already has the correct CMD to start nginx
+# Use entrypoint script
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

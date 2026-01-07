@@ -10,6 +10,8 @@ metadata:
     app.kubernetes.io/part-of: hybrid-app
     app.kubernetes.io/component: cache
     app.openshift.io/runtime: redis
+  annotations:
+    app.openshift.io/connects-to: '[]'
 spec:
   replicas: 1
   selector:

@@ -9,6 +9,7 @@ metadata:
     app.kubernetes.io/name: redis
     app.kubernetes.io/part-of: hybrid-app
     app.kubernetes.io/component: cache
+    app.openshift.io/runtime: redis
 spec:
   selector:
     app: redis

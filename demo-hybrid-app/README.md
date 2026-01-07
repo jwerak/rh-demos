@@ -160,6 +160,90 @@ export REGISTRY=quay.io/your-username
 # - k8s/base/frontend-deployment.yaml
 ```
 
+## Rolling Out Deployments
+
+After making code changes and building new container images, you need to rollout the updated deployments. This section covers different rollout strategies.
+
+### Building and Tagging Images
+
+For production rollouts, use version tags instead of `latest`:
+
+```bash
+# Set version tag (e.g., git commit hash or semantic version)
+export TAG=v1.2.3
+export REGISTRY=quay.io/your-username
+
+# Build and push with version tag
+TAG=${TAG} ./scripts/build-images.sh
+```
+
+### Rolling Restart (Force Pull Latest)
+
+If using `latest` tag and need to force pull updated image:
+
+```bash
+NAMESPACE=hybrid-app-dev
+
+# Rolling restart triggers new pod creation with latest image
+oc rollout restart deployment/backend-dev -n ${NAMESPACE}
+oc rollout restart deployment/frontend-dev -n ${NAMESPACE}
+
+# Monitor rollout
+oc rollout status deployment/backend-dev -n ${NAMESPACE} --timeout=5m
+oc rollout status deployment/frontend-dev -n ${NAMESPACE} --timeout=5m
+```
+
+### Rollback Procedures
+
+If a rollout causes issues, rollback to the previous revision:
+
+```bash
+NAMESPACE=hybrid-app-dev
+
+# View rollout history
+oc rollout history deployment/backend-dev -n ${NAMESPACE}
+oc rollout history deployment/frontend-dev -n ${NAMESPACE}
+
+# Rollback to previous revision
+oc rollout undo deployment/backend-dev -n ${NAMESPACE}
+oc rollout undo deployment/frontend-dev -n ${NAMESPACE}
+
+# Rollback to specific revision
+oc rollout undo deployment/backend-dev -n ${NAMESPACE} --to-revision=2
+
+# Monitor rollback
+oc rollout status deployment/backend-dev -n ${NAMESPACE}
+```
+
+### Troubleshooting Failed Rollouts
+
+If a rollout fails or pods are stuck:
+
+```bash
+NAMESPACE=hybrid-app-dev
+
+# Check pod events
+oc get events -n ${NAMESPACE} --sort-by='.lastTimestamp' | tail -20
+
+# Check pod status
+oc get pods -n ${NAMESPACE}
+
+# Describe failing pod
+oc describe pod <pod-name> -n ${NAMESPACE}
+
+# Check logs
+oc logs <pod-name> -n ${NAMESPACE} --previous  # Previous container if restarted
+
+# Check image pull issues
+oc describe pod <pod-name> -n ${NAMESPACE} | grep -A 5 "Events"
+
+# Pause rollout to investigate
+oc rollout pause deployment/backend-dev -n ${NAMESPACE}
+
+# Resume after fixing issues
+oc rollout resume deployment/backend-dev -n ${NAMESPACE}
+```
+
 ## Deployment Details
 
 ### Development Overlay
@@ -254,26 +338,13 @@ oc get pods -n hybrid-app-dev
 
 # Expected output:
 # NAME                        READY   STATUS    RESTARTS   AGE
-# backend-xxx                 1/1     Running   0          5m
-# frontend-xxx                1/1     Running   0          5m
-# redis-xxx                   1/1     Running   0          5m
+# backend-dev-xxx             1/1     Running   0          5m
+# frontend-dev-xxx            1/1     Running   0          5m
+# redis-dev-xxx               1/1     Running   0          5m
 # virt-launcher-postgresql-vm 1/1     Running   0          5m
 ```
 
-### 3. Test Health Endpoints
-
-```bash
-# Get route
-ROUTE=$(oc get route -n hybrid-app-dev frontend-dev -o jsonpath='{.spec.host}')
-
-# Test frontend
-curl -k https://${ROUTE}/healthz
-
-# Test backend health
-oc exec -n hybrid-app-dev deployment/backend -- curl localhost:8000/health
-```
-
-### 4. Test Database Connectivity
+### 3. Test Database Connectivity
 
 ```bash
 # Check if backend can query PostgreSQL
@@ -282,7 +353,7 @@ oc logs -n hybrid-app-dev deployment/backend --tail=50
 # You should see successful PostgreSQL connections in logs
 ```
 
-### 5. Access the Web UI
+### 4. Access the Web UI
 
 ```bash
 # Get frontend URL
@@ -299,13 +370,13 @@ echo "https://$(oc get route -n hybrid-app-dev frontend-dev -o jsonpath='{.spec.
 
 The backend exposes the following REST API endpoints:
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | API information |
-| `/health` | GET | Health check for all services |
-| `/api/data` | GET | Retrieve data (cached or from DB) |
-| `/api/cache-stats` | GET | Redis cache statistics |
-| `/api/cache` | DELETE | Clear all cached data |
+| Endpoint           | Method | Description                       |
+| ------------------ | ------ | --------------------------------- |
+| `/`                | GET    | API information                   |
+| `/health`          | GET    | Health check for all services     |
+| `/api/data`        | GET    | Retrieve data (cached or from DB) |
+| `/api/cache-stats` | GET    | Redis cache statistics            |
+| `/api/cache`       | DELETE | Clear all cached data             |
 
 ## Troubleshooting
 

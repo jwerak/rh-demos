@@ -9,9 +9,13 @@ metadata:
     app.kubernetes.io/name: postgresql-vm
     app.kubernetes.io/part-of: hybrid-app
     app.kubernetes.io/component: database
+    app.openshift.io/runtime: postgresql
+    demo: hybrid-cloud
 spec:
   selector:
     app: postgresql-vm
+    app.kubernetes.io/part-of: hybrid-app
+    demo: hybrid-cloud
   ports:
     - name: postgresql
       protocol: TCP
