@@ -1,0 +1,21 @@
+# Log files
+*.log
+ansible-navigator.log
+
+# Environment files
+.env
+.env.local
+
+# Vault files (if they contain real secrets)
+# Uncomment if vault.yml contains real secrets:
+# vault.yml
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
