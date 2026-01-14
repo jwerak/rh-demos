@@ -6,6 +6,9 @@ Based on [this blog post](https://developers.redhat.com/articles/2024/09/09/crea
 
 ### Prerequisite
 
+- Get Windows 11 ISO URL from [Windows website](https://www.microsoft.com/en-us/software-download/windows11)
+- Update URL and approve EULA if you agree in [pipelineRun](./pipelineRun/windows2k22-installer-run.yaml)
+
 Grant privileges for service account in given namespace.
 
 ```bash

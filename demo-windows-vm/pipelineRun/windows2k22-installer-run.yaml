@@ -1,22 +1,13 @@
----
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
-    generateName: windows2k22-installer-run-
+    generateName: windows11-installer-run-
 spec:
     params:
     -   name: winImageDownloadURL
-        value: 'https://software.download.prss.microsoft.com/dbazure/XXX'
+        value: ${WIN_IMAGE_DOWNLOAD_URL}
     -   name: acceptEula
-        value: true
-    -   name: preferenceName
-        value: windows.2k22.virtio
-    -   name: autounattendConfigMapName
-        value: windows2k22-autounattend
-    -   name: baseDvName
-        value: win2k22
-    -   name: isoDVName
-        value: win2k22
+        value: false # change to true to accept the EULA
     pipelineRef:
         params:
         -   name: catalog
@@ -31,9 +22,8 @@ spec:
             value: v4.20.4
         resolver: hub
     taskRunSpecs:
-    - pipelineTaskName: modify-windows-iso-file
-      podTemplate:
-        securityContext:
-          fsGroup: 107
-          runAsUser: 107
-      timeout: 1h0m0s
+    -   pipelineTaskName: modify-windows-iso-file
+        podTemplate:
+            securityContext:
+                fsGroup: 107
+                runAsUser: 107

@@ -18,6 +18,10 @@ patches:
     target:
       kind: Deployment
       name: frontend
+  - path: frontend-route-patch.yaml
+    target:
+      kind: Route
+      name: frontend
   - path: postgresql-vm-patch.yaml
     target:
       kind: VirtualMachine
