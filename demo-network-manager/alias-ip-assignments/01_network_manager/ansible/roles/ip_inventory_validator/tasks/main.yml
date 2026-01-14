@@ -1,0 +1,120 @@
+---
+# Main entry point for ip_inventory_validator role
+# Validates IP assignments across all teams to prevent conflicts
+
+- name: Skip validation if disabled
+  ansible.builtin.meta: end_play
+  when: not (enable_conflict_detection | default(true) | bool)
+  run_once: true
+
+- name: Build service list with metadata for each host
+  ansible.builtin.set_fact:
+    host_ip_list: >-
+      {%- set services = [] -%}
+      {%- for key, value in hostvars[inventory_hostname].items() -%}
+        {%- if key.startswith('app_services_') and value is mapping and 'ip' in value -%}
+          {%- set _ = services.append({
+            'service': key,
+            'ip': value.ip,
+            'host': inventory_hostname,
+            'team': hostvars[inventory_hostname].team_name | default('unknown'),
+            'description': value.description | default('No description')
+          }) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ services }}
+
+- name: Consolidate IP inventory from all hosts
+  ansible.builtin.set_fact:
+    all_ips: >-
+      {{
+        groups['network_test_nodes'] |
+        map('extract', hostvars, 'host_ip_list') |
+        select('defined') |
+        flatten
+      }}
+  run_once: true
+  delegate_to: localhost
+
+- name: Detect duplicate IPs across teams
+  ansible.builtin.set_fact:
+    ip_conflicts: >-
+      {%- set conflicts = [] -%}
+      {%- set seen_ips = {} -%}
+      {%- for entry in all_ips -%}
+        {%- set ip = entry.ip -%}
+        {%- if ip in seen_ips -%}
+          {%- set conflict_msg = "IP " ~ ip ~ " CONFLICT: " ~ entry.service ~ " (" ~ entry.team ~ " on " ~ entry.host ~ ") vs " ~ seen_ips[ip].service ~ " (" ~ seen_ips[ip].team ~ " on " ~ seen_ips[ip].host ~ ")" -%}
+          {%- set _ = conflicts.append(conflict_msg) -%}
+        {%- else -%}
+          {%- set _ = seen_ips.update({ip: entry}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ conflicts }}
+  run_once: true
+  delegate_to: localhost
+
+- name: Check for reserved IP range violations
+  ansible.builtin.set_fact:
+    reserved_violations: >-
+      {%- set violations = [] -%}
+      {%- for entry in all_ips -%}
+        {%- for range in reserved_ip_ranges | default([]) -%}
+          {%- set ip_int = entry.ip.split('.') | map('int') | list -%}
+          {%- set start_int = range.start.split('.') | map('int') | list -%}
+          {%- set end_int = range.end.split('.') | map('int') | list -%}
+          {%- set ip_num = (ip_int[0] * 16777216) + (ip_int[1] * 65536) + (ip_int[2] * 256) + ip_int[3] -%}
+          {%- set start_num = (start_int[0] * 16777216) + (start_int[1] * 65536) + (start_int[2] * 256) + start_int[3] -%}
+          {%- set end_num = (end_int[0] * 16777216) + (end_int[1] * 65536) + (end_int[2] * 256) + end_int[3] -%}
+          {%- if ip_num >= start_num and ip_num <= end_num -%}
+            {%- set violation_msg = "IP " ~ entry.ip ~ " (" ~ entry.service ~ " on " ~ entry.host ~ ") is in RESERVED RANGE: " ~ range.start ~ "-" ~ range.end ~ " (" ~ range.description ~ ")" -%}
+            {%- set _ = violations.append(violation_msg) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ violations }}
+  run_once: true
+  delegate_to: localhost
+
+- name: Display validation summary
+  ansible.builtin.debug:
+    msg: |
+      ========================================
+      IP VALIDATION SUMMARY
+      ========================================
+      Total IPs checked: {{ all_ips | length }}
+      Conflicts found: {{ ip_conflicts | length }}
+      Reserved range violations: {{ reserved_violations | length }}
+
+      {% if ip_conflicts | length > 0 %}
+      CONFLICTS:
+      {{ ip_conflicts | join('\n') }}
+      {% endif %}
+
+      {% if reserved_violations | length > 0 %}
+      RESERVED RANGE VIOLATIONS:
+      {{ reserved_violations | join('\n') }}
+      {% endif %}
+
+      {% if ip_conflicts | length == 0 and reserved_violations | length == 0 %}
+      ✓ No conflicts detected - all IP assignments are valid
+      {% endif %}
+  run_once: true
+  delegate_to: localhost
+
+- name: Fail if conflicts detected in strict mode
+  ansible.builtin.fail:
+    msg: |
+      ========================================
+      IP VALIDATION FAILED
+      ========================================
+
+      {{ ip_conflicts | length }} conflict(s) found
+      {{ reserved_violations | length }} reserved range violation(s) found
+
+      Please resolve these issues in group_vars before proceeding.
+  when:
+    - strict_validation | default(true) | bool
+    - (ip_conflicts | length > 0) or (reserved_violations | length > 0)
+  run_once: true
+  delegate_to: localhost

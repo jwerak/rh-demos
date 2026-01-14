@@ -1,0 +1,38 @@
+---
+# Apply network configuration using RHEL System Roles
+
+- name: Build network connection configuration for System Roles
+  ansible.builtin.set_fact:
+    network_connections:
+      - name: "{{ secondary_interface }}{{ connection_name_suffix }}"
+        type: ethernet
+        interface_name: "{{ secondary_interface }}"
+        state: up
+        autoconnect: true
+        ip:
+          dhcp4: false
+          address: "{{ assigned_ip_addresses | map('regex_replace', '$', '/' + (ip_prefix_length | string)) | list }}"
+    # Clear network_state to prevent nmstate installation attempts (set to empty dict)
+    network_state: {}
+
+- name: Display network configuration to be applied
+  ansible.builtin.debug:
+    msg:
+      - "Applying network configuration to {{ secondary_interface }}"
+      - "Connection name: {{ secondary_interface }}{{ connection_name_suffix }}"
+      - "IP addresses: {{ assigned_ip_addresses }}"
+
+- name: Apply network configuration using fedora.linux_system_roles.network
+  ansible.builtin.include_role:
+    name: fedora.linux_system_roles.network
+
+- name: Verify connection is active
+  ansible.builtin.command:
+    cmd: "nmcli connection show --active {{ secondary_interface }}{{ connection_name_suffix }}"
+  register: connection_status
+  changed_when: false
+  failed_when: connection_status.rc != 0
+
+- name: Display connection status
+  ansible.builtin.debug:
+    msg: "Connection {{ secondary_interface }}{{ connection_name_suffix }} is active"

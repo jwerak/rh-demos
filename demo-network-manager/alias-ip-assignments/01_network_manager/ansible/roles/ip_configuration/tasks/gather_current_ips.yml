@@ -1,0 +1,27 @@
+---
+# Gather current IP addresses from the interface using ansible_facts
+
+- name: Ensure network facts are gathered
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+  when: ansible_facts[secondary_interface] is not defined
+
+- name: Extract current IP addresses on interface
+  ansible.builtin.set_fact:
+    current_ip_addresses: >-
+      {{
+        (
+          (
+            [ansible_facts[secondary_interface].get('ipv4', {})] |
+            reject('eq', {})
+          ) + (
+            ansible_facts[secondary_interface].get('ipv4_secondaries', [])
+          )
+        ) |
+        map(attribute='address') | list
+      }}
+
+- name: Display current IPs for debugging
+  ansible.builtin.debug:
+    msg: "Current IPs on {{ secondary_interface }}: {{ current_ip_addresses }}"

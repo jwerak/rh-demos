@@ -1,50 +1,39 @@
 ---
-- name: Set network
+# Pre-flight validation play (runs before main configuration)
+- name: Validate IP assignments across all teams
+  hosts: "{{ target | default('network_test_nodes') }}"
+  gather_facts: false
+
+  tasks:
+    - name: Run IP conflict validation
+      ansible.builtin.include_role:
+        name: ip_inventory_validator
+      run_once: true
+
+# Main network configuration play
+- name: Configure network interfaces with IP aliases
   hosts: "{{ target | default('network_test_nodes') }}"
   become: true
   gather_facts: true
+
   vars:
-    secondary_interface: enp2s0
-    # secondary_interface: enp2s0
-  tasks:
-    - name: Get list of IP addresses on the interface from ansible_facts
-      ansible.builtin.set_fact:
-        current_ip_addresses_list: >-
-          {{
-            (
-              (
-                [ansible_facts[secondary_interface].get('ipv4', {})] |
-                reject('eq', {})
-              ) + (
-                ansible_facts[secondary_interface].get('ipv4_secondaries', [])
-              )
-            ) |
-            map(attribute='address') | list
-          }}
+    secondary_interface: "{{ network_interface | default('enp2s0') }}"
 
-    - name: Debug IP addresses
+  pre_tasks:
+    - name: Display target host and interface
       ansible.builtin.debug:
-        msg: "{{ current_ip_addresses_list }}"
+        msg: "Configuring {{ secondary_interface }} on {{ inventory_hostname }}"
 
-    - name: Print variable app_services
-      ansible.builtin.set_fact:
-        assigned_ip_addresses_list: >-
-          {{
-            vars.keys() |
-            select('match', '^app_services_(.*)$') |
-            map('extract', vars) |
-            map(attribute='ip') | list
-          }}
+  roles:
+    - role: ip_configuration
 
-    # TODO: Compare lists of IPs and stop if they are the same
-    # TODO: Remove IPs that are in current_ip_addresses_list list, but not in assigned_ip_addresses_list, do not add any new IPs to the server yet.
-    # TODO: Use system role to apply the IP changes
-    # TODO: Apply all assigned IPs to the server
+  post_tasks:
+    - name: Verify applied configuration
+      ansible.builtin.command:
+        cmd: "ip -br addr show {{ secondary_interface }}"
+      register: ip_verification
+      changed_when: false
 
-    - name: Debug assigned IP addresses
+    - name: Display current IP configuration
       ansible.builtin.debug:
-        msg: "{{ assigned_ip_addresses_list }}"
-
-    - name: Set network
-      ansible.builtin.include_role:
-        name: fedora.linux_system_roles.network
+        var: ip_verification.stdout_lines

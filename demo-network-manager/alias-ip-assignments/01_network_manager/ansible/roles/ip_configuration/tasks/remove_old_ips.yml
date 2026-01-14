@@ -1,0 +1,41 @@
+---
+# Remove obsolete IP addresses using nmcli before applying final configuration
+
+- name: Get active connection name for interface
+  ansible.builtin.command:
+    cmd: "nmcli -t -f NAME,DEVICE connection show --active"
+  register: nmcli_connections
+  changed_when: false
+  failed_when: false
+
+- name: Parse connection name from nmcli output
+  ansible.builtin.set_fact:
+    interface_connection: >-
+      {{
+        (nmcli_connections.stdout_lines |
+        select('search', secondary_interface) |
+        first | default('')).split(':')[0]
+      }}
+  when:
+    - nmcli_connections.rc == 0
+    - nmcli_connections.stdout_lines | length > 0
+
+- name: Display connection name
+  ansible.builtin.debug:
+    msg: "Active connection for {{ secondary_interface }}: {{ interface_connection | default('NOT FOUND') }}"
+
+- name: Remove obsolete IP addresses from connection
+  ansible.builtin.command:
+    cmd: "nmcli connection modify {{ interface_connection }} -ipv4.addresses {{ item }}/{{ ip_prefix_length }}"
+  loop: "{{ ips_to_remove }}"
+  register: remove_result
+  failed_when: false
+  changed_when: remove_result.rc == 0
+  when:
+    - interface_connection is defined
+    - interface_connection | length > 0
+
+- name: Display removed IPs
+  ansible.builtin.debug:
+    msg: "Removed IP addresses: {{ ips_to_remove | join(', ') }}"
+  when: ips_to_remove | length > 0

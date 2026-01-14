@@ -1,0 +1,17 @@
+---
+# Default variables for ip_configuration role
+
+# Secondary interface to configure (default for demo environment)
+secondary_interface: enp2s0
+
+# Subnet prefix length for IP addresses
+ip_prefix_length: 24
+
+# Enable idempotency check (skip if no changes needed)
+skip_when_in_sync: true
+
+# Network provider for RHEL System Roles (nm = NetworkManager)
+network_provider: nm
+
+# Connection name pattern for NetworkManager
+connection_name_suffix: "-multi"

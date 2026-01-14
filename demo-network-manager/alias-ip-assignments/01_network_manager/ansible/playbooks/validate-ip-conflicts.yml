@@ -1,0 +1,10 @@
+---
+# Standalone playbook for validating IP assignments across all teams
+# Can be run independently or as part of the main workflow
+
+- name: Validate IP assignments across all teams
+  hosts: "{{ target | default('network_test_nodes') }}"
+  gather_facts: false
+
+  roles:
+    - role: ip_inventory_validator

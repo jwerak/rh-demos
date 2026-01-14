@@ -1,0 +1,17 @@
+---
+# Main entry point for ip_configuration role
+# Orchestrates IP alias management on RHEL 10 using NetworkManager
+
+- name: Gather current IP addresses from interface
+  ansible.builtin.include_tasks: gather_current_ips.yml
+
+- name: Calculate required IP changes
+  ansible.builtin.include_tasks: calculate_changes.yml
+
+- name: Remove obsolete IPs (if any)
+  ansible.builtin.include_tasks: remove_old_ips.yml
+  when: ips_to_remove | default([]) | length > 0
+
+- name: Apply network configuration with all assigned IPs
+  ansible.builtin.include_tasks: apply_network_config.yml
+  when: ips_to_add | default([]) | length > 0 or ips_to_remove | default([]) | length > 0

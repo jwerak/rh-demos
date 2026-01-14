@@ -1,0 +1,26 @@
+---
+# IP validation and conflict detection settings
+
+# Enable conflict detection across teams
+enable_conflict_detection: true
+
+# Strict validation mode (fail on any conflict)
+strict_validation: true
+
+# Reserved IP ranges (infrastructure use only - no team can use these)
+reserved_ip_ranges:
+  - start: "192.168.200.1"
+    end: "192.168.200.10"
+    description: "Network infrastructure (gateway, DNS, DHCP)"
+
+# Allowed subnets for IP assignment
+allowed_subnets:
+  - "192.168.200.0/24"
+
+# Team IP allocations (documentation/guidance - not enforced)
+# This helps teams choose IPs within their designated ranges
+team_ip_allocations:
+  web_team: "192.168.200.11-50"
+  db_team: "192.168.200.51-90"
+  monitoring_team: "192.168.200.91-130"
+  infrastructure_team: "192.168.200.131-200"

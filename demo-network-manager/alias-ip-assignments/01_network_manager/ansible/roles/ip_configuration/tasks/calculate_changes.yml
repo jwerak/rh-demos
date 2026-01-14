@@ -1,0 +1,41 @@
+---
+# Calculate IP changes needed by comparing current vs assigned IPs
+
+- name: Collect assigned IP addresses from all app_services_* variables
+  ansible.builtin.set_fact:
+    assigned_ip_addresses: >-
+      {{
+        vars.keys() |
+        select('match', '^app_services_(.*)$') |
+        map('extract', vars) |
+        map(attribute='ip') | list
+      }}
+
+- name: Display assigned IPs from inventory
+  ansible.builtin.debug:
+    msg: "Assigned IPs from inventory: {{ assigned_ip_addresses }}"
+
+- name: Calculate IPs to remove (current minus assigned)
+  ansible.builtin.set_fact:
+    ips_to_remove: "{{ current_ip_addresses | difference(assigned_ip_addresses) }}"
+
+- name: Calculate IPs to add (assigned minus current)
+  ansible.builtin.set_fact:
+    ips_to_add: "{{ assigned_ip_addresses | difference(current_ip_addresses) }}"
+
+- name: Check if configuration is already in sync
+  ansible.builtin.set_fact:
+    config_in_sync: "{{ (ips_to_remove | length == 0) and (ips_to_add | length == 0) }}"
+
+- name: Display planned changes
+  ansible.builtin.debug:
+    msg: |
+      Configuration status: {{ 'IN SYNC ✓' if config_in_sync else 'REQUIRES CHANGES' }}
+      IPs to remove: {{ ips_to_remove | default([]) | join(', ') if ips_to_remove | length > 0 else 'none' }}
+      IPs to add: {{ ips_to_add | default([]) | join(', ') if ips_to_add | length > 0 else 'none' }}
+
+- name: Skip further changes if configuration is in sync
+  ansible.builtin.meta: end_host
+  when:
+    - config_in_sync | bool
+    - skip_when_in_sync | default(true) | bool

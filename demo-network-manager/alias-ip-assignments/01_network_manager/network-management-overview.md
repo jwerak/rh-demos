@@ -545,8 +545,6 @@ sudo ip addr add 192.168.200.15/24 dev eth1 label eth1:1
 sudo ip link set eth1 up
 ```
 
-
-
 ## Unified Ansible Solution for Multi-Persona IP Management
 
 This section presents a comprehensive, production-ready Ansible solution that combines RHEL System Roles with multi-persona IP management. This approach allows multiple teams to manage their IP assignments independently while using Red Hat's officially supported configuration methods.

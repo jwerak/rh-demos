@@ -1,0 +1,15 @@
+---
+# Default variables for ip_inventory_validator role
+
+# Enable validation (can be disabled for testing)
+enable_conflict_detection: true
+
+# Strict mode - fail on any conflict
+strict_validation: true
+
+# Reserved IP ranges (overridden by group_vars/all/validation_rules.yml)
+reserved_ip_ranges: []
+
+# Allowed subnets
+allowed_subnets:
+  - "192.168.200.0/24"
