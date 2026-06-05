@@ -110,116 +110,64 @@ oc get policy -n prod-policies
 
 ## Demo Scenarios
 
-All changes are made on the `demo/acm-gitops` branch. ArgoCD auto-syncs within ~3 minutes of each push.
+All changes are made on the `demo/${DEMO_ID}` branch. ArgoCD auto-syncs within ~3 minutes of each push. Complete scenario files are in `scenarios/` — just copy them over.
 
 ### Scenario 1: Promote Quay to Production
 
-Add the Quay operator to the prod environment. Edit `environments/prod/policies/kustomization.yaml`:
-
-```diff
- resources:
-   - ../../../base/policies/web-terminal
-+  - ../../../base/policies/quay
-```
-
-Push the change:
+Add the Quay operator to the prod environment:
 
 ```bash
+cp scenarios/scenario-1-quay-to-prod/kustomization.yaml environments/prod/policies/kustomization.yaml
 git add environments/prod/policies/kustomization.yaml
 git commit -m "Promote Quay operator to production"
 git push
 ```
 
-Verify:
+Verify (~3 minutes for ArgoCD sync):
 
 ```bash
-# Wait for ArgoCD sync (~3 minutes), then check
 oc get policy -n prod-policies
-# web-terminal    enforce   Compliant
-# quay-operator   enforce   Compliant
+# web-terminal           enforce   Compliant
+# quay-operator          enforce   Compliant
+# environment-branding   enforce   Compliant
 ```
 
-### Scenario 2: Upgrade Web Terminal on Dev (v1.9.0 → v1.14.0)
+### Scenario 2: Upgrade Web Terminal on Dev (v1.9.0 → v1.12.1)
 
-Expand the allowed versions in the dev overlay to trigger an upgrade. Edit `environments/dev/policies/kustomization.yaml` — change the `Policy` patch to target `web-terminal` by name and add a versions override:
-
-```diff
- patches:
-   - target:
-       kind: Policy
-+      name: web-terminal
-     patch: |-
-       - op: replace
-         path: /metadata/namespace
-         value: dev-policies
-+      - op: replace
-+        path: /spec/policy-templates/0/objectDefinition/spec/versions
-+        value:
-+          - web-terminal.v1.14.0
-+          - web-terminal.v1.13.0
-+          - web-terminal.v1.12.1
-+          - web-terminal.v1.11.1
-+          - web-terminal.v1.11.0
-+          - web-terminal.v1.10.1
-+          - web-terminal.v1.10.0
-+          - web-terminal.v1.9.0
-+  - target:
-+      kind: Policy
-+      name: quay-operator
-+    patch: |-
-+      - op: replace
-+        path: /metadata/namespace
-+        value: dev-policies
-```
-
-Push the change:
+Expand the allowed versions to include the full upgrade path from v1.9.0 through v1.12.1 (all intermediate versions from the `fast` channel):
 
 ```bash
+cp scenarios/scenario-2-web-term-1.12.1-dev/kustomization.yaml environments/dev/policies/kustomization.yaml
 git add environments/dev/policies/kustomization.yaml
-git commit -m "Upgrade web-terminal to v1.14.0 on dev"
+git commit -m "Upgrade web-terminal to v1.12.1 on dev"
 git push
 ```
 
-Monitor the upgrade (~3-5 minutes through the version chain):
+Monitor the upgrade (~3-5 minutes through the version chain v1.9.0 → v1.10.x → v1.11.x → v1.12.1):
 
 ```bash
 watch oc get policy -n dev-policies
-# web-terminal will briefly show NonCompliant during upgrade, then Compliant at v1.14.0
+# web-terminal will briefly show NonCompliant during upgrade, then Compliant at v1.12.1
 
 # Check installed version
 oc get policy dev-policies.web-terminal -n dev-cluster \
   -o jsonpath='{.status.details[0].history[0].message}' | grep -oE 'web-terminal\.[v0-9.]+'
 ```
 
+> **Note:** The versions array must include ALL intermediate versions (including pre-release `.p` builds) so OLM can traverse the upgrade graph. These can be listed with:
+> ```bash
+> oc get packagemanifests -n openshift-marketplace web-terminal \
+>   -o jsonpath='{range .status.channels[?(@.name=="fast")].entries[*]}- {.name}{"\n"}{end}' | sort -V
+> ```
+
 ### Scenario 3: Promote Upgrade to Production
 
-Once dev is validated at v1.14.0, apply the same versions patch to `environments/prod/policies/kustomization.yaml`:
-
-```diff
- patches:
-   - target:
-       kind: Policy
-+      name: web-terminal
-     patch: |-
-       - op: replace
-         path: /metadata/namespace
-         value: prod-policies
-+      - op: replace
-+        path: /spec/policy-templates/0/objectDefinition/spec/versions
-+        value:
-+          - web-terminal.v1.14.0
-+          - web-terminal.v1.13.0
-+          - web-terminal.v1.12.1
-+          - web-terminal.v1.11.1
-+          - web-terminal.v1.11.0
-+          - web-terminal.v1.10.1
-+          - web-terminal.v1.10.0
-+          - web-terminal.v1.9.0
-```
+Once dev is validated at v1.12.1, apply the same upgrade to prod:
 
 ```bash
+cp scenarios/scenario-3-web-term-1.12.1-prod/kustomization.yaml environments/prod/policies/kustomization.yaml
 git add environments/prod/policies/kustomization.yaml
-git commit -m "Promote web-terminal v1.14.0 upgrade to production"
+git commit -m "Promote web-terminal v1.12.1 upgrade to production"
 git push
 ```
 
