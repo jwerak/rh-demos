@@ -18,11 +18,11 @@ oc extract secret/pull-secret -n openshift-config --to=- \
       --from-file=.dockerconfigjson=/dev/stdin \
       --type=kubernetes.io/dockerconfigjson
 
-ssh-keygen -t ed25519 -N '' -f "/tmp/${CLUSTER_NAME}-ssh-key" -C "${CLUSTER_NAME}" <<< y >/dev/null 2>&1
+ssh-keygen -t rsa -b 4096 -N '' -f "/tmp/${CLUSTER_NAME}-ssh-key" -C "${CLUSTER_NAME}" <<< y >/dev/null 2>&1
 oc create secret generic "sshkey-cluster-${CLUSTER_NAME}" \
   -n "${NAMESPACE}" \
-  --from-file=id_ed25519="/tmp/${CLUSTER_NAME}-ssh-key" \
-  --from-file=id_ed25519.pub="/tmp/${CLUSTER_NAME}-ssh-key.pub"
+  --from-file=id_rsa="/tmp/${CLUSTER_NAME}-ssh-key" \
+  --from-file=id_rsa.pub="/tmp/${CLUSTER_NAME}-ssh-key.pub"
 rm -f "/tmp/${CLUSTER_NAME}-ssh-key" "/tmp/${CLUSTER_NAME}-ssh-key.pub"
 
 ETCD_KEY=$(openssl rand -base64 32)

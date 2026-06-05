@@ -35,6 +35,45 @@ patches:
         path: /spec/clusterName
         value: dev-cluster
   - target:
+      kind: Job
+      name: create-secrets-CLUSTER_NAME
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: create-secrets-dev-cluster
+      - op: replace
+        path: /spec/template/spec/containers/0/args/0
+        value: |
+          set -euo pipefail
+          CLUSTER_NAME="dev-cluster"
+          NAMESPACE="clusters"
+
+          if oc get secret "pullsecret-cluster-${CLUSTER_NAME}" -n "${NAMESPACE}" 2>/dev/null; then
+            echo "Secrets already exist for ${CLUSTER_NAME}, skipping"
+            exit 0
+          fi
+
+          echo "Creating secrets for ${CLUSTER_NAME}..."
+
+          oc extract secret/pull-secret -n openshift-config --to=/tmp --confirm >/dev/null
+          oc create secret generic "pullsecret-cluster-${CLUSTER_NAME}" \
+            -n "${NAMESPACE}" \
+            --from-file=.dockerconfigjson=/tmp/.dockerconfigjson \
+            --type=kubernetes.io/dockerconfigjson
+
+          ssh-keygen -t rsa -b 4096 -N '' -f /tmp/ssh-key -C "${CLUSTER_NAME}" <<< y >/dev/null 2>&1
+          oc create secret generic "sshkey-cluster-${CLUSTER_NAME}" \
+            -n "${NAMESPACE}" \
+            --from-file=id_rsa=/tmp/ssh-key \
+            --from-file=id_rsa.pub=/tmp/ssh-key.pub
+
+          ETCD_KEY=$(openssl rand -base64 32)
+          oc create secret generic "${CLUSTER_NAME}-etcd-encryption-key" \
+            -n "${NAMESPACE}" \
+            --from-literal=key="${ETCD_KEY}"
+
+          echo "Secrets created for ${CLUSTER_NAME}"
+  - target:
       kind: ManagedClusterSet
       name: CLUSTER_SET
     patch: |-
