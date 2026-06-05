@@ -1,24 +1,24 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: acm-gitops-demo
+  name: acm-gitops-DEMO_ID
   namespace: openshift-gitops
 spec:
   generators:
     - git:
         repoURL: https://github.com/jwerak/rh-demos.git
-        revision: demo/acm-gitops
+        revision: DEMO_BRANCH
         directories:
           - path: demo-acm-gitops/environments/*/clusters
           - path: demo-acm-gitops/environments/*/policies
   template:
     metadata:
-      name: "{{path[2]}}-{{path[3]}}"
+      name: "DEMO_ID-{{path[2]}}-{{path[3]}}"
     spec:
       project: default
       source:
         repoURL: https://github.com/jwerak/rh-demos.git
-        targetRevision: master
+        targetRevision: DEMO_BRANCH
         path: "{{path}}"
       destination:
         server: https://kubernetes.default.svc

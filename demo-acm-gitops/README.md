@@ -24,7 +24,7 @@ Manage operator installation and upgrades across OpenShift clusters using ArgoCD
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  Git Repository                                                  │
-│  branch: demo/acm-gitops (created from master)                   │
+│  branch: demo/<your-id> (created from master)                    │
 │                                                                  │
 │  environments/dev/clusters/    environments/prod/clusters/        │
 │  environments/dev/policies/    environments/prod/policies/        │
@@ -48,10 +48,18 @@ Manage operator installation and upgrades across OpenShift clusters using ArgoCD
 
 ## Setup
 
-### 1. Bootstrap GitOps
+### 1. Choose a Demo ID
+
+Pick a unique ID for your demo session (e.g., your name or team). This allows multiple demos to run in parallel on the same cluster:
 
 ```bash
-# Install GitOps operator, RBAC, and namespaces
+export DEMO_ID=alice   # change this to your name/id
+```
+
+### 2. Bootstrap GitOps
+
+```bash
+# Install GitOps operator, RBAC, and namespaces (shared, run once per cluster)
 oc apply -k bootstrap/
 
 # Wait for the GitOps operator (~2-3 minutes)
@@ -59,19 +67,24 @@ watch oc get csv -n openshift-gitops
 # Wait for openshift-gitops-operator to reach Succeeded
 ```
 
-### 2. Create Demo Branch and Deploy ApplicationSet
+### 3. Create Demo Branch and Deploy ApplicationSet
 
-ArgoCD tracks the `demo/acm-gitops` branch. Create it from master and deploy the ApplicationSet:
+Each demo session uses its own branch. The ApplicationSet template has `DEMO_BRANCH` and `DEMO_ID` placeholders that get replaced with your values:
 
 ```bash
-git checkout -b demo/acm-gitops
-git push -u origin demo/acm-gitops
+# Create your demo branch from master
+git checkout -b "demo/${DEMO_ID}"
+git push -u origin "demo/${DEMO_ID}"
 
-# Deploy the ApplicationSet (points to demo/acm-gitops branch)
-oc apply -f bootstrap/03-root-applicationset.yaml
+# Deploy ApplicationSet with your branch and ID
+sed "s|DEMO_BRANCH|demo/${DEMO_ID}|g; s|DEMO_ID|${DEMO_ID}|g" \
+  bootstrap/03-root-applicationset.yaml | oc apply -f -
+
+# Verify — your apps will be prefixed with your DEMO_ID
+oc get applications.argoproj.io -n openshift-gitops -l "app.kubernetes.io/instance=${DEMO_ID}"
 ```
 
-### 3. Wait for Cluster Provisioning (~15-20 minutes)
+### 4. Wait for Cluster Provisioning (~15-20 minutes)
 
 ```bash
 watch oc get hostedclusters -n clusters
@@ -82,7 +95,7 @@ oc get managedclusters
 # prod-cluster   true   https://...   True   True
 ```
 
-### 4. Verify Initial State
+### 5. Verify Initial State
 
 ```bash
 # Dev: both Web Terminal (v1.9.0) and Quay (v3.17.2)
@@ -216,16 +229,16 @@ Delete the demo branch and recreate it from master to return to the starting sta
 
 ```bash
 git checkout master
-git branch -D demo/acm-gitops
-git push origin --delete demo/acm-gitops
+git branch -D "demo/${DEMO_ID}"
+git push origin --delete "demo/${DEMO_ID}"
 
 # Recreate from clean master
-git checkout -b demo/acm-gitops
-git push -u origin demo/acm-gitops
+git checkout -b "demo/${DEMO_ID}"
+git push -u origin "demo/${DEMO_ID}"
 
 # ArgoCD auto-syncs back to initial state:
-# - Dev: web-terminal v1.9.0 + quay v3.17.2
-# - Prod: web-terminal v1.9.0 only
+# - Dev: web-terminal v1.9.0 + quay v3.17.2 + green banner
+# - Prod: web-terminal v1.9.0 + red banner (no Quay)
 ```
 
 > **Note:** OLM does not downgrade operators. After reset, the operators remain at their upgraded versions on the clusters, but the policies will show Compliant since the base version (v1.9.0) is still in the allowed list.
@@ -235,19 +248,22 @@ git push -u origin demo/acm-gitops
 Remove all GitOps-managed resources from the cluster:
 
 ```bash
-oc delete applicationset acm-gitops-demo -n openshift-gitops
+# Remove your ApplicationSet (cascades to all apps)
+oc delete applicationset "${DEMO_ID}-acm-gitops" -n openshift-gitops
 
+# Destroy HCP clusters
 hcp destroy cluster kubevirt --name dev-cluster --namespace clusters
 hcp destroy cluster kubevirt --name prod-cluster --namespace clusters
 
+# Clean up
 oc delete managedclusterset dev prod
-oc delete namespace dev-policies prod-policies clusters
+oc delete namespace dev-policies prod-policies
 
 # Remove demo branch
 git checkout master
-git push origin --delete demo/acm-gitops
+git push origin --delete "demo/${DEMO_ID}"
 
-# Remove GitOps operator (optional)
+# Remove GitOps operator (optional, shared resource)
 oc delete subscription openshift-gitops-operator -n openshift-operators
 ```
 
@@ -258,7 +274,7 @@ demo-acm-gitops/
 ├── bootstrap/                        # Manual: oc apply -k bootstrap/
 │   ├── 01-gitops-operator.yaml      # GitOps operator + policy namespaces
 │   ├── 02-argocd-rbac.yaml          # ClusterRole for ACM/HCP resources
-│   ├── 03-root-applicationset.yaml  # Git directory generator (tracks demo/acm-gitops branch)
+│   ├── 03-root-applicationset.yaml  # Git directory generator (DEMO_BRANCH/DEMO_ID placeholders)
 │   └── create-secrets.sh            # HCP cluster secrets helper (fallback)
 ├── base/                             # Shared templates (not applied directly)
 │   ├── clusters/                    # HostedCluster, NodePool, ClusterSet, pull secret
