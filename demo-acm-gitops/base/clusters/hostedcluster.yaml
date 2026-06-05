@@ -8,7 +8,6 @@ metadata:
     cluster.open-cluster-management.io/clusterset: CLUSTER_SET
 spec:
   autoscaling:
-    maxNodeCount: 5
     maxPodGracePeriod: 3600
     maxNodesTotal: 5
   controllerAvailabilityPolicy: HighlyAvailable
