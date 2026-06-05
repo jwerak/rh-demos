@@ -8,6 +8,25 @@ resources:
 patches:
   - target:
       kind: Policy
+      name: web-terminal
+    patch: |-
+      - op: replace
+        path: /metadata/namespace
+        value: dev-policies
+      - op: replace
+        path: /spec/policy-templates/0/objectDefinition/spec/versions
+        value:
+          - web-terminal.v1.14.0
+          - web-terminal.v1.13.0
+          - web-terminal.v1.12.1
+          - web-terminal.v1.11.1
+          - web-terminal.v1.11.0
+          - web-terminal.v1.10.1
+          - web-terminal.v1.10.0
+          - web-terminal.v1.9.0
+  - target:
+      kind: Policy
+      name: quay-operator
     patch: |-
       - op: replace
         path: /metadata/namespace

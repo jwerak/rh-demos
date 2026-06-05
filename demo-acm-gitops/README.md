@@ -167,6 +167,87 @@ oc get policy -n prod-policies
 # quay-operator   enforce   Compliant
 ```
 
+### 8. Upgrade Web Terminal on Dev (v1.9.0 → v1.14.0)
+
+The dev overlay expands the `versions` array in the web-terminal policy to allow upgrades through the full version chain. The base pins to v1.9.0; the dev overlay already includes versions up to v1.14.0.
+
+```bash
+# Check current version on dev-cluster
+oc get policy dev-policies.web-terminal -n dev-cluster \
+  -o jsonpath='{.status.details[0].history[0].message}' | grep -o 'web-terminal\.[^ ]*'
+
+# Watch the upgrade progress (v1.9.0 → v1.10.x → v1.11.x → v1.12.x → v1.13.0 → v1.14.0)
+watch oc get policy -n dev-policies
+# Policy will briefly show NonCompliant during upgrade, then Compliant at v1.14.0
+```
+
+The upgrade takes approximately 3-5 minutes as OLM processes the version chain.
+
+### 9. Promote Upgrade to Production
+
+Once dev is validated at v1.14.0, add the same versions patch to `environments/prod/policies/kustomization.yaml`:
+
+```yaml
+patches:
+  - target:
+      kind: Policy
+      name: web-terminal
+    patch: |-
+      - op: replace
+        path: /metadata/namespace
+        value: prod-policies
+      - op: replace
+        path: /spec/policy-templates/0/objectDefinition/spec/versions
+        value:
+          - web-terminal.v1.14.0
+          - web-terminal.v1.13.0
+          - web-terminal.v1.12.1
+          - web-terminal.v1.11.1
+          - web-terminal.v1.11.0
+          - web-terminal.v1.10.1
+          - web-terminal.v1.10.0
+          - web-terminal.v1.9.0
+```
+
+Commit and push:
+
+```bash
+git add environments/prod/policies/kustomization.yaml
+git commit -m "Promote web-terminal v1.14.0 upgrade to production"
+git push
+```
+
+## Reset to Starting Point
+
+To undo all demo changes and return to the initial state (v1.9.0, no Quay in prod):
+
+```bash
+# Revert to the initial commit of the demo (before any promotion/upgrade changes)
+git checkout origin/master -- demo-acm-gitops/environments/
+git commit -m "Reset environments to initial state"
+git push
+
+# ArgoCD auto-syncs: versions revert to v1.9.0, Quay removed from prod
+# Note: OLM does not downgrade operators — the operator stays at the upgraded
+# version but the policy will show Compliant since the installed version is
+# still in the allowed list (the base includes v1.9.0).
+```
+
+To fully reset the cluster state (remove all GitOps-managed resources):
+
+```bash
+# Delete the ApplicationSet (cascades to all apps and managed resources)
+oc delete applicationset acm-gitops-demo -n openshift-gitops
+
+# Destroy HCP clusters
+hcp destroy cluster kubevirt --name dev-cluster --namespace clusters
+hcp destroy cluster kubevirt --name prod-cluster --namespace clusters
+
+# Clean up ClusterSets and namespaces
+oc delete managedclusterset dev prod
+oc delete namespace dev-policies prod-policies
+```
+
 ## Kustomize Structure
 
 ```
