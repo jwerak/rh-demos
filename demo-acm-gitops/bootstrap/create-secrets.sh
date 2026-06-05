@@ -25,7 +25,7 @@ oc create secret generic "sshkey-cluster-${CLUSTER_NAME}" \
   --from-file=id_rsa.pub="/tmp/${CLUSTER_NAME}-ssh-key.pub"
 rm -f "/tmp/${CLUSTER_NAME}-ssh-key" "/tmp/${CLUSTER_NAME}-ssh-key.pub"
 
-ETCD_KEY=$(openssl rand -base64 32)
+ETCD_KEY=$(openssl rand -base64 24)
 oc create secret generic "${CLUSTER_NAME}-etcd-encryption-key" \
   -n "${NAMESPACE}" \
   --from-literal=key="${ETCD_KEY}"
