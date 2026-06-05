@@ -34,14 +34,9 @@ spec:
     kubevirt:
       baseDomainPassthrough: true
   pullSecret:
-    name: pullsecret-cluster-CLUSTER_NAME
+    name: hcp-pull-secret
   release:
     image: quay.io/openshift-release-dev/ocp-release:4.18.43-multi
-  secretEncryption:
-    type: aescbc
-    aescbc:
-      activeKey:
-        name: CLUSTER_NAME-etcd-encryption-key
   services:
     - service: APIServer
       servicePublishingStrategy:
@@ -58,6 +53,4 @@ spec:
     - service: Ignition
       servicePublishingStrategy:
         type: Route
-  sshKey:
-    name: sshkey-cluster-CLUSTER_NAME
   infrastructureAvailabilityPolicy: HighlyAvailable

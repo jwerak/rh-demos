@@ -15,15 +15,6 @@ patches:
       - op: replace
         path: /metadata/labels/cluster.open-cluster-management.io~1clusterset
         value: dev
-      - op: replace
-        path: /spec/pullSecret/name
-        value: pullsecret-cluster-dev-cluster
-      - op: replace
-        path: /spec/secretEncryption/aescbc/activeKey/name
-        value: dev-cluster-etcd-encryption-key
-      - op: replace
-        path: /spec/sshKey/name
-        value: sshkey-cluster-dev-cluster
   - target:
       kind: NodePool
       name: CLUSTER_NAME-node-pool
@@ -34,54 +25,6 @@ patches:
       - op: replace
         path: /spec/clusterName
         value: dev-cluster
-  - target:
-      kind: Job
-      name: create-secrets-CLUSTER_NAME
-    patch: |-
-      - op: replace
-        path: /metadata/name
-        value: create-secrets-dev-cluster
-      - op: replace
-        path: /spec/template/spec/containers/0/args/0
-        value: |
-          set -euo pipefail
-          CLUSTER_NAME="dev-cluster"
-          NAMESPACE="clusters"
-
-          if ! oc get secret "pullsecret-cluster-${CLUSTER_NAME}" -n "${NAMESPACE}" &>/dev/null; then
-            echo "Creating pull secret..."
-            oc extract secret/pull-secret -n openshift-config --to=/tmp --confirm >/dev/null
-            oc create secret generic "pullsecret-cluster-${CLUSTER_NAME}" \
-              -n "${NAMESPACE}" \
-              --from-file=.dockerconfigjson=/tmp/.dockerconfigjson \
-              --type=kubernetes.io/dockerconfigjson
-          else
-            echo "Pull secret already exists"
-          fi
-
-          if ! oc get secret "sshkey-cluster-${CLUSTER_NAME}" -n "${NAMESPACE}" &>/dev/null; then
-            echo "Creating SSH key..."
-            dnf install -y -q openssh-clients
-            ssh-keygen -t rsa -b 4096 -N '' -f /tmp/id_rsa -C "${CLUSTER_NAME}" -q
-            oc create secret generic "sshkey-cluster-${CLUSTER_NAME}" \
-              -n "${NAMESPACE}" \
-              --from-file=id_rsa=/tmp/id_rsa \
-              --from-file=id_rsa.pub=/tmp/id_rsa.pub
-          else
-            echo "SSH key already exists"
-          fi
-
-          if ! oc get secret "${CLUSTER_NAME}-etcd-encryption-key" -n "${NAMESPACE}" &>/dev/null; then
-            echo "Creating ETCD encryption key..."
-            ETCD_KEY=$(openssl rand -base64 24)
-            oc create secret generic "${CLUSTER_NAME}-etcd-encryption-key" \
-              -n "${NAMESPACE}" \
-              --from-literal=key="${ETCD_KEY}"
-          else
-            echo "ETCD encryption key already exists"
-          fi
-
-          echo "All secrets ready for ${CLUSTER_NAME}"
   - target:
       kind: ManagedClusterSet
       name: CLUSTER_SET
