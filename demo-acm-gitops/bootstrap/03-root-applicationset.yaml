@@ -7,7 +7,7 @@ spec:
   generators:
     - git:
         repoURL: https://github.com/jwerak/rh-demos.git
-        revision: master
+        revision: demo/acm-gitops
         directories:
           - path: demo-acm-gitops/environments/*/clusters
           - path: demo-acm-gitops/environments/*/policies

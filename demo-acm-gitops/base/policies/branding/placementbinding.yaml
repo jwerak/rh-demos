@@ -1,0 +1,14 @@
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: branding-placement
+  namespace: POLICY_NAMESPACE
+placementRef:
+  name: branding-placement
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+subjects:
+  - name: environment-branding
+    apiGroup: policy.open-cluster-management.io
+    kind: Policy

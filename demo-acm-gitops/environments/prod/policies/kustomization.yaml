@@ -3,6 +3,7 @@ kind: Kustomization
 
 resources:
   - ../../../base/policies/web-terminal
+  - ../../../base/policies/branding
 
 patches:
   - target:
@@ -11,6 +12,16 @@ patches:
       - op: replace
         path: /metadata/namespace
         value: prod-policies
+  - target:
+      kind: Policy
+      name: environment-branding
+    patch: |-
+      - op: replace
+        path: /spec/policy-templates/0/objectDefinition/spec/object-templates/0/objectDefinition/spec/text
+        value: "🔴 PRODUCTION ENVIRONMENT"
+      - op: replace
+        path: /spec/policy-templates/0/objectDefinition/spec/object-templates/0/objectDefinition/spec/backgroundColor
+        value: "#dc291c"
   - target:
       kind: Placement
     patch: |-
