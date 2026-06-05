@@ -32,7 +32,7 @@ Manages the Web Terminal operator lifecycle across development clusters.
 kustomize build operators/web-terminal/overlays/initial/ | oc apply -f -
 ```
 
-**Upgrade to v1.10.1:**
+**Upgrade to v1.12.1:**
 ```bash
 kustomize build operators/web-terminal/overlays/updated/ | oc apply -f -
 ```
@@ -77,12 +77,12 @@ Contains the common components shared across all overlays. Defines:
 Environment-specific or version-specific customizations:
 
 - **initial**: Fresh deployment, typically with:
-  - `remediationAction: inform` (audit mode)
-  - Single version in `versions` array
+  - `remediationAction: enforce` (installs the operator)
+  - Single version in `versions` array (pins the version)
   - Specific `startingCSV`
 
 - **updated**: Upgrade configuration, typically with:
-  - `remediationAction: enforce` (active enforcement)
+  - `remediationAction: enforce` (same)
   - Expanded `versions` array with upgrade path
   - Same `startingCSV` as initial
 

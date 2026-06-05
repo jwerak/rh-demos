@@ -1,475 +1,298 @@
-# ACM Policies
+# ACM Operator Lifecycle Management Demo
 
-- [ACM Policies](#acm-policies)
-  - [ACM Operator Upgrades Demo](#acm-operator-upgrades-demo)
-    - [Prerequisites](#prerequisites)
-    - [Overview](#overview)
-      - [Version Management](#version-management)
-      - [Controlled Upgrades](#controlled-upgrades)
-      - [Possible Management Options](#possible-management-options)
-    - [Step-by-Step Implementation](#step-by-step-implementation)
-      - [1. Discover Available Operator Versions](#1-discover-available-operator-versions)
-      - [2. Install Initial Operator Version](#2-install-initial-operator-version)
-      - [3. Verify Available Versions](#3-verify-available-versions)
-      - [4. Execute Controlled Upgrade](#4-execute-controlled-upgrade)
-      - [5. Monitor Upgrade Progress](#5-monitor-upgrade-progress)
-    - [Policy Files Overview](#policy-files-overview)
-      - [`policy-web-terminal-initial.yml`](#policy-web-terminal-initialyml)
-      - [`policy-web-terminal-updated.yml`](#policy-web-terminal-updatedyml)
-    - [Kustomize Structure (Recommended Approach)](#kustomize-structure-recommended-approach)
-  - [Generator policies](#generator-policies)
-    - [Generate policies](#generate-policies)
-  - [Creating policies with templates](#creating-policies-with-templates)
+> **[Česká verze / Czech version](README-cs.md)**
+
+Manage operator installation and upgrades across OpenShift clusters using Red Hat Advanced Cluster Management (ACM) policies. This demo uses the Web Terminal operator as an example to demonstrate version pinning, controlled upgrades, and fleet-wide rollout management via OperatorPolicy.
+
+- [ACM Operator Lifecycle Management Demo](#acm-operator-lifecycle-management-demo)
+  - [Overview](#overview)
+  - [Prerequisites](#prerequisites)
+    - [Deploy a Hosted Cluster](#deploy-a-hosted-cluster)
+      - [Option A: GUI (ACM Console)](#option-a-gui-acm-console)
+      - [Option B: CLI (hcp)](#option-b-cli-hcp)
+    - [Verify the Hosted Cluster](#verify-the-hosted-cluster)
+  - [Setup: ClusterSet and Policy Namespace](#setup-clusterset-and-policy-namespace)
+  - [Demo Walkthrough](#demo-walkthrough)
+    - [1. Discover Available Operator Versions](#1-discover-available-operator-versions)
+    - [2. Install Operator at Pinned Version](#2-install-operator-at-pinned-version)
+    - [3. Verify Installation at v1.9.0](#3-verify-installation-at-v190)
+    - [4. Trigger Controlled Upgrade](#4-trigger-controlled-upgrade)
+    - [5. Monitor Upgrade and Verify Compliance](#5-monitor-upgrade-and-verify-compliance)
+    - [6. Remove Operator via Policy](#6-remove-operator-via-policy)
+  - [Cleanup](#cleanup)
+  - [Kustomize Structure](#kustomize-structure)
+  - [Policy Generator](#policy-generator)
   - [Additional Resources](#additional-resources)
 
+## Overview
 
-## ACM Operator Upgrades Demo
+This demo covers three key capabilities:
 
-This demo shows how to manage operator lifecycle using Red Hat Advanced Cluster Management (ACM) policies. We'll demonstrate version pinning, controlled upgrades, and rollout management using the Web Terminal operator as an example.
+- **Version Management**: Pin operators to specific versions using OperatorPolicy with `versions` array and `startingCSV`
+- **Controlled Upgrades**: Expand the allowed versions list and switch from `inform` (audit) to `enforce` (active remediation) to trigger upgrades
+- **Fleet Rollout**: Target specific cluster sets with Placement rules to control which clusters receive the operator
 
-### Prerequisites
+## Prerequisites
 
-- **OpenShift Container Platform** with ACM installed
-  - Tested on OCP 4.16.45 and ACM 2.11
-  - e.g. provisioning Red Hat Demo portal - [Using Hosted Control Planes for OpenShift on OpenShift](https://catalog.demo.redhat.com/catalog?search=hcp&item=babylon-catalog-prod%2Fopenshift-cnv.hcp-ocp-virt-cnv.prod)
-- **Managed Cluster**: At least one OCP cluster joined to ACM and configured in the `development` ClusterSet
-  - Policies will be stored in namespace `development-policies`
-- **CLI Access**: `oc` command-line tool configured for your hub cluster
+- **OpenShift Container Platform 4.14+** with ACM installed
+- **OpenShift Virtualization** and **MetalLB** operators installed (for hosted cluster deployment)
+- **CLI tools**: `oc`, `hcp`, `kustomize`
+- A managed cluster joined to ACM (this demo uses a hosted cluster deployed via HyperShift)
 
-OpenShift cluster with ACM installed.
+### Deploy a Hosted Cluster
 
-When on Bare Metal, one could create hosted cluster using:
+The demo targets a managed cluster. If you don't have one already, deploy a hosted cluster using one of the approaches below.
+
+Reference lab environment: [Using Hosted Control Planes for OpenShift on OpenShift](https://catalog.demo.redhat.com/catalog?search=hcp&item=babylon-catalog-prod%2Fopenshift-cnv.hcp-ocp-virt-cnv.prod) from the Red Hat Demo Platform.
+
+#### Option A: GUI (ACM Console)
+
+1. Log into the OpenShift Console and navigate to **Infrastructure -> Clusters**
+2. Verify `local-cluster` is managed and **hypershift-addon** is present under Add-ons
+3. Verify credentials: navigate to **Credentials** and confirm `kubevirt-secret` exists (containing a pull-secret and SSH public key). Create it if missing.
+4. Go to `local-cluster` and create a project named `clusters` (**Home -> Projects -> Create Project**)
+5. Switch back to **All Clusters** view, click **Create cluster**
+6. Select **Red Hat OpenShift Virtualization** -> **Hosted** control plane type
+7. Configure cluster details:
+   - Credential: `kubevirt-secret`
+   - Cluster name: `my-hosted-cluster`
+   - Cluster set: `default`
+   - Release image: OpenShift 4.17.x
+   - Etcd storage class: `ocs-external-storagecluster-ceph-rbd`
+8. **Toggle YAML On** and change the networking section to avoid CIDR conflicts with the hub:
+   ```yaml
+   networking:
+     clusterNetwork:
+       - cidr: 10.136.0.0/14
+     serviceNetwork:
+       - cidr: 172.32.0.0/16
+   ```
+9. Click Next and configure node pool: name: my-node-pool, 2 replicas, 2 cores, 8 GiB memory, auto-repair enabled
+10. Click **Create** and wait ~15-20 minutes for deployment
+
+#### Option B: CLI (hcp)
 
 ```bash
-oc get secret -n openshift-config pull-secret -o template='{{index .data ".dockerconfigjson"}}' | base64 --decode > ~/pull-secret.json
+# Extract pull secret from the hub cluster
+oc get secret -n openshift-config pull-secret \
+  -o template='{{index .data ".dockerconfigjson"}}' | base64 --decode > /tmp/pull-secret.json
+
+# Create the clusters namespace
+oc create namespace clusters
+
+# Deploy the hosted cluster
 hcp create cluster kubevirt \
---name cluster1 \
---release-image quay.io/openshift-release-dev/ocp-release:4.16.15-x86_64 \
---node-pool-replicas 3 \
---pull-secret ~/pull-secret.json \
---memory 6Gi \
---cores 2
+  --name my-hosted-cluster \
+  --release-image quay.io/openshift-release-dev/ocp-release:4.17.14-x86_64 \
+  --node-pool-replicas 2 \
+  --pull-secret /tmp/pull-secret.json \
+  --memory 8Gi \
+  --cores 2 \
+  --etcd-storage-class ocs-external-storagecluster-ceph-rbd \
+  --namespace clusters \
+  --cluster-cidr 10.136.0.0/14 \
+  --service-cidr 172.32.0.0/16
 ```
 
-Verify the pods being created:
+### Verify the Hosted Cluster
+
+Wait for the cluster to become available (~15-20 minutes):
 
 ```bash
-watch oc get pod -n clusters-cluster1
+watch oc get hostedclusters -n clusters
+# Wait for PROGRESS=Completed and AVAILABLE=True
 
-watch oc get --namespace clusters hostedclusters
+# Verify the cluster is registered as a managed cluster
+oc get managedclusters
+# Should show my-hosted-cluster with AVAILABLE=True
 ```
 
-Create **ClusterSet** with created cluster and binding to namespace `development-policies` via Console.
+## Setup: ClusterSet and Policy Namespace
 
-### Overview
-
-This demonstration covers:
-
-#### Version Management
-
-- Create policies to install operators at specific versions
-- Lock operators to prevent unwanted upgrades
-- Maintain version consistency across cluster sets
-
-#### Controlled Upgrades
-
-- Discover available operator versions
-- Configure OperatorPolicy for controlled upgrades
-- Monitor rollout progress across managed clusters
-
-#### Possible Management Options
-
-- **Template-based approach**: Update operator versions centrally using ConfigMaps
-- **Custom CatalogSource**: Create curated lists of approved operator versions
-
-### Step-by-Step Implementation
-
-#### 1. Discover Available Operator Versions
-
-First, let's explore what versions of the Web Terminal operator are available in the marketplace:
+Before running the demo, create the namespace, ClusterSet, and bindings:
 
 ```bash
-oc get packagemanifests.packages.operators.coreos.com -n openshift-marketplace web-terminal -o yaml
-```
+# Create the policy namespace
+oc create namespace development-policies
 
-<details>
-<summary>Web Terminal PackageManifest Output (click to expand)</summary>
-
-```yaml
-apiVersion: packages.operators.coreos.com/v1
-kind: PackageManifest
+# Create the development ClusterSet
+cat <<'EOF' | oc apply -f -
+apiVersion: cluster.open-cluster-management.io/v1beta2
+kind: ManagedClusterSet
 metadata:
-  creationTimestamp: "2025-08-14T07:44:11Z"
-  labels:
-    catalog: redhat-operators
-    catalog-namespace: openshift-marketplace
-    hypershift.openshift.io/managed: "true"
-    operatorframework.io/arch.amd64: supported
-    operatorframework.io/os.linux: supported
-    provider: Red Hat
-    provider-url: ""
-  name: web-terminal
-  namespace: openshift-marketplace
-spec: {}
-status:
-  catalogSource: redhat-operators
-  catalogSourceDisplayName: Red Hat Operators
-  catalogSourceNamespace: openshift-marketplace
-  catalogSourcePublisher: Red Hat
-  channels:
-  - currentCSV: web-terminal.v1.11.1-0.1747215995.p
-    currentCSVDesc:
-      annotations:
-        alm-examples: |-
-          [
-          ]
-        capabilities: Basic Install
-        categories: Developer Tools
-        certified: "false"
-        containerImage: registry.redhat.io/web-terminal/web-terminal-rhel9-operator@sha256:0478d14e92df84fdfbf4584384d34dc9a71427a6487c2564d2eb7815ba1ac12b
-        createdAt: "2021-10-26T07:24:32Z"
-        description: Start a web terminal in your browser with common CLI tools for
-          interacting with the cluster
-        features.operators.openshift.io/disconnected: "false"
-        features.operators.openshift.io/fips-compliant: "false"
-        features.operators.openshift.io/proxy-aware: "true"
-        features.operators.openshift.io/tls-profiles: "false"
-        features.operators.openshift.io/token-auth-aws: "false"
-        features.operators.openshift.io/token-auth-azure: "false"
-        features.operators.openshift.io/token-auth-gcp: "true"
-        olm.substitutesFor: web-terminal.v1.11.1
-        operatorframework.io/suggested-namespace: openshift-operators
-        operators.openshift.io/valid-subscription: '["OpenShift Container Platform",
-          "OpenShift Platform Plus"]'
-        repository: https://github.com/redhat-developer/web-terminal-operator/
-        support: Red Hat, Inc.
-      apiservicedefinitions: {}
-      customresourcedefinitions:
-        required:
-        - kind: DevWorkspaceRouting
-          name: devworkspaceroutings.controller.devfile.io
-          version: v1alpha1
-        - kind: DevWorkspace
-          name: devworkspaces.workspace.devfile.io
-          version: v1alpha1
-      description: |
-        Start a web terminal in your browser with common CLI tools for interacting with
-        the cluster.
+  name: development
+spec:
+  clusterSelector:
+    selectorType: ExclusiveClusterSetLabel
+EOF
 
-        **Note:** The Web Terminal Operator integrates with the OpenShift Console in
-        OpenShift 4.5.3 and higher to simplify web terminal instance creation and
-        automate OpenShift login. In earlier versions of OpenShift, the operator can
-        be installed but web terminals will have to be created and accessed manually.
+# Add the hosted cluster to the ClusterSet
+oc label managedcluster my-hosted-cluster \
+  cluster.open-cluster-management.io/clusterset=development --overwrite
 
-        ## Description
-        The Web Terminal Operator leverages the
-        [DevWorkspace Operator](https://github.com/devfile/devworkspace-operator)
-        to provision enviroments which support common cloud CLI tools. When this
-        operator is installed, the DevWorkspace Operator will be installed as a
-        dependency.
+# Bind the ClusterSet to the policy namespace
+cat <<'EOF' | oc apply -f -
+apiVersion: cluster.open-cluster-management.io/v1beta2
+kind: ManagedClusterSetBinding
+metadata:
+  name: development
+  namespace: development-policies
+spec:
+  clusterSet: development
+EOF
 
-        ## How to Install
-        Press the **Install** button, choose the upgrade strategy, and wait for the
-        **Installed** Operator status.
-
-        When the operator is installed, you will see a terminal button appear on the
-        top right of the console after refreshing the OpenShift console window.
-
-        ## How to Uninstall
-        The Web Terminal Operator requires manual steps to fully uninstall the operator.
-        As the Web Terminal Operator is designed as a way to access the OpenShift
-        cluster, web terminal instances store user credentials. To avoid exposing these
-        credentials to unwanted parties, the operator deploys webhooks and finalizers
-        that aren't removed when the operator is uninstalled. See the
-        [uninstall guide](https://docs.openshift.com/container-platform/latest/web_console/web_terminal/uninstalling-web-terminal.html)
-        for more details.
-
-        ## Documentation
-        Documentation for this Operator is available at https://docs.openshift.com/container-platform/latest/web\_console/web\_terminal/installing-web-terminal.html
-      displayName: Web Terminal
-      installModes:
-      - supported: false
-        type: OwnNamespace
-      - supported: false
-        type: SingleNamespace
-      - supported: false
-        type: MultiNamespace
-      - supported: true
-        type: AllNamespaces
-      keywords:
-      - workspace
-      - devtools
-      - developer
-      - ide
-      - terminal
-      links:
-      - name: Web Terminal Repo
-        url: https://github.com/redhat-developer/web-terminal-operator/
-      maintainers:
-      - email: aobuchow@redhat.com
-        name: Andrew Obuchowicz
-      - email: ibuziuk@redhat.com
-        name: Ilya Buziuk
-      maturity: alpha
-      provider:
-        name: Red Hat
-      relatedImages:
-      - registry.redhat.io/web-terminal/web-terminal-exec-rhel9@sha256:cfc8200340655a045f45d02fa327538f87e98d6369bdef2b46cf447053c44426
-      - registry.redhat.io/web-terminal/web-terminal-rhel9-operator@sha256:0478d14e92df84fdfbf4584384d34dc9a71427a6487c2564d2eb7815ba1ac12b
-      - registry.redhat.io/web-terminal/web-terminal-tooling-rhel9@sha256:5c24220f884dcdf1b1e5ac1e20dc6b7c8c4300bb89e8f118c0b11c331a56ab3f
-      version: 1.11.1+0.1747215995.p
-    entries:
-    - name: web-terminal.v1.11.1-0.1747215995.p
-      version: 1.11.1+0.1747215995.p
-    - name: web-terminal.v1.11.1
-      version: 1.11.1
-    - name: web-terminal.v1.11.0
-      version: 1.11.0
-    - name: web-terminal.v1.10.1
-      version: 1.10.1
-    - name: web-terminal.v1.10.1-0.1740684238.p
-      version: 1.10.1+0.1740684238.p
-    - name: web-terminal.v1.10.0-0.1731481377.p
-      version: 1.10.0+0.1731481377.p
-    - name: web-terminal.v1.10.0-0.1732652667.p
-      version: 1.10.0+0.1732652667.p
-    - name: web-terminal.v1.10.0
-      version: 1.10.0
-    - name: web-terminal.v1.10.0-0.1727169028.p
-      version: 1.10.0+0.1727169028.p
-    - name: web-terminal.v1.10.0-0.1720435222.p
-      version: 1.10.0+0.1720435222.p
-    - name: web-terminal.v1.10.0-0.1720402943.p
-      version: 1.10.0+0.1720402943.p
-    - name: web-terminal.v1.9.0-0.1708477317.p
-      version: 1.9.0+0.1708477317.p
-    - name: web-terminal.v1.9.0
-      version: 1.9.0
-    - name: web-terminal.v1.8.0-0.1708477299.p
-      version: 1.8.0+0.1708477299.p
-    - name: web-terminal.v1.8.0-0.1701199376.p
-      version: 1.8.0+0.1701199376.p
-    - name: web-terminal.v1.8.0-0.1692219820.p
-      version: 1.8.0+0.1692219820.p
-    - name: web-terminal.v1.8.0
-      version: 1.8.0
-    - name: web-terminal.v1.7.0-0.1682321121.p
-      version: 1.7.0+0.1682321121.p
-    - name: web-terminal.v1.7.0-0.1692219820.p
-      version: 1.7.0+0.1692219820.p
-    - name: web-terminal.v1.7.0
-      version: 1.7.0
-    - name: web-terminal.v1.7.0-0.1681197295.p
-      version: 1.7.0+0.1681197295.p
-    - name: web-terminal.v1.7.0-0.1708477265.p
-      version: 1.7.0+0.1708477265.p
-    - name: web-terminal.v1.7.0-0.1684429884.p
-      version: 1.7.0+0.1684429884.p
-    - name: web-terminal.v1.6.0
-      version: 1.6.0
-    - name: web-terminal.v1.6.0-0.1692219820.p
-      version: 1.6.0+0.1692219820.p
-    - name: web-terminal.v1.5.1-0.1661829403.p
-      version: 1.5.1+0.1661829403.p
-    - name: web-terminal.v1.5.1
-      version: 1.5.1
-    - name: web-terminal.v1.5.0-0.1657220207.p
-      version: 1.5.0+0.1657220207.p
-    - name: web-terminal.v1.5.0
-      version: 1.5.0
-    - name: web-terminal.v1.4.0
-      version: 1.4.0
-    - name: web-terminal.v1.3.0
-      version: 1.3.0
-    name: fast
-  defaultChannel: fast
-  packageName: web-terminal
-  provider:
-    name: Red Hat
+# Verify
+oc get managedclusterset development
+# Should show "1 ManagedClusters selected"
 ```
 
-</details>
+## Demo Walkthrough
 
-#### 2. Install Initial Operator Version
+### 1. Discover Available Operator Versions
 
-Now let's install Web Terminal at a specific version (`web-terminal.v1.9.0`) using ACM policies.
+List all Web Terminal versions in the `fast` channel:
 
+```bash
+oc get packagemanifests.packages.operators.coreos.com \
+  -n openshift-marketplace web-terminal \
+  -o jsonpath='{range .status.channels[?(@.name=="fast")].entries[*]}- {.name}{"\n"}{end}' \
+  | sort -V
+```
 
-**Option A: Using Kustomize (Recommended)**
+### 2. Install Operator at Pinned Version
+
+The initial overlay deploys the Web Terminal operator pinned to **v1.9.0** using `enforce` mode. The `versions` array contains only `[web-terminal.v1.9.0]`, which prevents any automatic upgrades.
 
 ```bash
 kustomize build operators/web-terminal/overlays/initial/ | oc apply -f -
 ```
 
-**Option B: Using Legacy Files**
+### 3. Verify Installation at v1.9.0
+
+Wait ~60-90 seconds for the operator to install:
 
 ```bash
-oc apply -f ./files/policy-web-terminal-initial.yml
+oc get policy -n development-policies
+# COMPLIANCE STATE should show Compliant — the operator is installed
+# and pinned at v1.9.0.
+
+# View detailed compliance message to confirm v1.9.0 is installed
+oc get policy development-policies.web-terminal -n my-hosted-cluster \
+  -o jsonpath='{.status.details[0].history[0].message}'
+# Should report: "Compliant; ... ClusterServiceVersion (web-terminal.v1.9.0) -
+#   install strategy completed with no errors"
 ```
 
-**Note**: This policy will deploy the Web Terminal operator at version 1.9.0 across all clusters in the target ClusterSet, ensuring consistency.
+The policy uses `complianceConfig.upgradesAvailable: Compliant`, so it reports Compliant as long as the operator is at a version listed in the `versions` array — even when newer versions exist in the catalog. Upgrades outside the allowed list are held (their InstallPlans remain unapproved) but do not trigger a violation.
 
-#### 3. Verify Available Versions
+### 4. Trigger Controlled Upgrade
 
-List all available versions in the `fast` channel to plan your upgrade path:
-
-```bash
-oc get packagemanifests.packages.operators.coreos.com -n openshift-marketplace web-terminal -o jsonpath='{range .status.channels[?(@.name=="fast")].entries[*]}- {.name}{"\n"}{end}' | sort -V
-```
-
-<details>
-<summary>Example list of current versions in channel (click to expand)</summary>
-
-```yaml
-- web-terminal.v1.3.0
-- web-terminal.v1.4.0
-- web-terminal.v1.5.0
-- web-terminal.v1.5.0-0.1657220207.p
-- web-terminal.v1.5.1
-- web-terminal.v1.5.1-0.1661829403.p
-- web-terminal.v1.6.0
-- web-terminal.v1.6.0-0.1692219820.p
-- web-terminal.v1.7.0
-- web-terminal.v1.7.0-0.1681197295.p
-- web-terminal.v1.7.0-0.1682321121.p
-- web-terminal.v1.7.0-0.1684429884.p
-- web-terminal.v1.7.0-0.1692219820.p
-- web-terminal.v1.7.0-0.1708477265.p
-- web-terminal.v1.8.0
-- web-terminal.v1.8.0-0.1692219820.p
-- web-terminal.v1.8.0-0.1701199376.p
-- web-terminal.v1.8.0-0.1708477299.p
-- web-terminal.v1.9.0
-- web-terminal.v1.9.0-0.1708477317.p
-- web-terminal.v1.10.0
-- web-terminal.v1.10.0-0.1720402943.p
-- web-terminal.v1.10.0-0.1720435222.p
-- web-terminal.v1.10.0-0.1727169028.p
-- web-terminal.v1.10.0-0.1731481377.p
-- web-terminal.v1.10.0-0.1732652667.p
-- web-terminal.v1.10.1
-- web-terminal.v1.10.1-0.1740684238.p
-- web-terminal.v1.11.0
-- web-terminal.v1.11.1
-- web-terminal.v1.11.1-0.1747215995.p
-```
-
-</details>
-
-#### 4. Execute Controlled Upgrade
-
-Apply the updated policy to upgrade operators to version 1.10.1 across your cluster set.
-
-**Option A: Using Kustomize (Recommended)**
+The updated overlay expands the `versions` array to include all versions from v1.9.0 through v1.12.1. Since `enforce` mode is active, this triggers the actual upgrade through the version chain.
 
 ```bash
 kustomize build operators/web-terminal/overlays/updated/ | oc apply -f -
 ```
 
-**Option B: Using Legacy Files**
+### 5. Monitor Upgrade and Verify Compliance
+
+Watch the operator upgrade through versions in real-time:
 
 ```bash
-oc apply -f ./files/policy-web-terminal-updated.yml
+# Watch policy compliance
+watch oc get policy -n development-policies
+
+# View detailed progress messages (run repeatedly to see upgrade chain)
+oc get policy development-policies.web-terminal -n my-hosted-cluster \
+  -o jsonpath='{.status.details[0].history[0].message}'
 ```
 
-#### 5. Monitor Upgrade Progress
+The operator automatically upgrades through the version chain: **v1.9.0 -> v1.10.x -> v1.11.x -> v1.12.1**. The full upgrade takes approximately 3-5 minutes.
 
-Watch the operator upgrade process in real-time:
+> **Note:** The policy may briefly show **NonCompliant** during the upgrade while OLM processes InstallPlans and resolves the upgrade path. This is expected during active upgrades.
+
+When complete, the policy will show **Compliant** with message: `ClusterServiceVersion (web-terminal.v1.12.1-...) - install strategy completed with no errors`.
+
+### 6. Remove Operator via Policy
+
+The removed overlay changes `complianceType` from `musthave` to `mustnothave`, which instructs the policy to delete the operator from managed clusters. The `removalBehavior` controls what gets cleaned up: Subscription and CSV are deleted, CRDs are kept, and the OperatorGroup is deleted only if no other operator uses it.
 
 ```bash
-watch oc get csv -n openshift-operators
+kustomize build operators/web-terminal/overlays/removed/ | oc apply -f -
 ```
 
-**What to look for**:
+Wait ~30-60 seconds for the operator to be removed:
 
-- ClusterServiceVersion (CSV) transitions from old to new version
-- Operator pod restarts and becomes ready
-- No failed installations or conflicts
+```bash
+oc get policy -n development-policies
+# COMPLIANCE STATE should show Compliant — the operator has been removed.
 
-### Policy Files Overview
+# Confirm the operator is gone on the managed cluster
+oc get policy development-policies.web-terminal -n my-hosted-cluster \
+  -o jsonpath='{.status.details[0].history[0].message}'
+# Should report: "Compliant; the policy spec is valid, the Subscription was deleted, ..."
+```
 
-This demo includes two main policy files:
+## Cleanup
 
-#### `policy-web-terminal-initial.yml`
+```bash
+# Remove the policy, placement, and binding
+kustomize build operators/web-terminal/overlays/removed/ | oc delete -f -
 
-- Installs Web Terminal operator at version **1.9.0**
-- Uses `musthave` compliance to ensure installation
-- Targets the `development` ClusterSet
-- Sets `startingCSV` to lock the initial version
+# Optionally, remove the ClusterSet setup
+oc delete managedclustersetbinding development -n development-policies
+oc delete managedclusterset development
+oc delete namespace development-policies
 
-#### `policy-web-terminal-updated.yml`
+# Optionally, destroy the hosted cluster
+hcp destroy cluster kubevirt --name my-hosted-cluster --namespace clusters
+```
 
-- Allows upgrades from **1.9.0** to **1.10.1**
-- Includes patch versions (e.g., `1.10.0-0.1720402943.p`)
-- Uses `Automatic` upgrade approval for seamless updates
-- Maintains the same targeting and compliance settings
+## Kustomize Structure
 
-**Key Difference**: The updated policy expands the `versions` array to include newer releases, enabling controlled upgrade paths.
-
-### Kustomize Structure (Recommended Approach)
-
-The demo now includes a kustomize-based structure in the `operators/web-terminal/` directory that makes it easier to manage policy variations:
+The recommended approach uses a base/overlay pattern in `operators/web-terminal/`:
 
 ```
 operators/
 └── web-terminal/
     ├── base/                          # Common policy components
-    │   ├── policy.yaml               # Base OperatorPolicy definition
-    │   ├── placement.yaml            # Cluster targeting
+    │   ├── policy.yaml               # OperatorPolicy (v1.9.0, inform)
+    │   ├── placement.yaml            # Targets development ClusterSet
     │   ├── placementbinding.yaml     # Binds policy to placement
     │   └── kustomization.yaml
     └── overlays/
-        ├── initial/                   # v1.9.0 deployment
+        ├── initial/                   # Enforce mode, single version
         │   └── kustomization.yaml
-        └── updated/                   # v1.10.1 upgrade
-            └── kustomization.yaml    # Inline JSON 6902 patches
+        ├── updated/                   # Enforce mode, upgrade path to v1.12.1
+        │   └── kustomization.yaml    # JSON 6902 patches
+        └── removed/                   # Enforce mode, operator removal
+            └── kustomization.yaml    # JSON 6902 patches
 ```
 
-**Benefits of the Kustomize Approach:**
+Overlays use JSON 6902 patches to change only what differs from the base:
+- **updated**: expands `versions` from `[v1.9.0]` to the full upgrade path
+- **removed**: changes `complianceType` to `mustnothave` and adds `removalBehavior` to delete the operator
 
-- **DRY Principle**: Common components defined once in `base/`
-- **Surgical Patches**: JSON 6902 patches modify only what changes (no field duplication)
-- **Version Management**: Easy to create new overlays for different operator versions
-- **Clear Separation**: Deployment state (initial vs updated) clearly separated
-- **Scalability**: Easy to add more operators (e.g., `operators/another-operator/`)
-- **Gitops Ready**: Works seamlessly with ArgoCD and other GitOps tools
+See [operators/README.md](operators/README.md) for details on adding new operators.
 
-**How it Works:**
+## Policy Generator
 
-1. **Base**: Contains the common Policy, Placement, and PlacementBinding
-2. **Initial Overlay**: References base, represents fresh installation at v1.9.0
-3. **Updated Overlay**: Uses JSON 6902 patches to change only `remediationAction` and `versions` array
-
-## Generator policies
-
-To simplify creation of all policy objects, one could use policyGenerator that is included in ACM as kustomize plugin.
-
-The plugin must be installed separately on the laptop.
-See the instructions in [plugins github repo](https://github.com/open-cluster-management-io/policy-generator-plugin).
-
-
-### Generate policies
+ACM includes a PolicyGenerator kustomize plugin for generating policies from templates:
 
 ```bash
+# Install the plugin: https://github.com/open-cluster-management-io/policy-generator-plugin
 kustomize build --enable-alpha-plugins ./policy-generator/configmap/
 ```
 
-## Creating policies with templates
-
-Create policy
+Template-based policies with ConfigMap lookups:
 
 ```bash
 oc apply -f ./policy-generator/configmap-template/policies.yaml
 ```
 
-Create dummy namespaces
-
-```bash
-for i in {01..10}; do oc create ns workload-$i; done
-```
-
 ## Additional Resources
 
-- [Getting Started with OperatorPolicy](https://developers.redhat.com/articles/2024/08/08/getting-started-operatorpolicy#) - Comprehensive guide to OperatorPolicy usage
-- [Policy-based Governance with ACM](https://www.redhat.com/en/blog/comply-to-standards-using-policy-based-governance-of-red-hat-advanced-cluster-management-for-kubernetes) - Best practices for compliance
-- [OpenShift Operator Lifecycle Manager](https://docs.redhat.com/en/documentation/openshift_container_platform/4.16/html/operators/understanding-operators#operator-lifecycle-manager-olm) - Understanding OLM concepts
+- [Getting Started with OperatorPolicy](https://developers.redhat.com/articles/2024/08/08/getting-started-operatorpolicy#)
+- [ACM OperatorPolicy Documentation](https://access.redhat.com/documentation/en-us/red_hat_advanced_cluster_management_for_kubernetes/2.11/html/governance/governance#operator-policy)
+- [Using Hosted Control Planes for OpenShift on OpenShift](https://catalog.demo.redhat.com/catalog?search=hcp&item=babylon-catalog-prod%2Fopenshift-cnv.hcp-ocp-virt-cnv.prod)
+- [Kustomize Documentation](https://kubectl.docs.kubernetes.io/references/kustomize/)
+- [OpenShift Operator Lifecycle Manager](https://docs.redhat.com/en/documentation/openshift_container_platform/4.16/html/operators/understanding-operators#operator-lifecycle-manager-olm)

@@ -6,7 +6,6 @@ namespace: development-policies
 resources:
   - ../../base
 
-# This overlay represents the initial deployment state:
-# - Web Terminal operator v1.9.0
-# - remediationAction: inform (audit mode)
-# - Single version in the versions array
+# This overlay installs the operator pinned to v1.9.0:
+# - remediationAction: enforce (installs the operator)
+# - Single version in the versions array (prevents upgrades)

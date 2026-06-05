@@ -128,7 +128,7 @@ oc get packagemanifests.packages.operators.coreos.com -n openshift-marketplace w
 # Install operator at v1.9.0
 kustomize build operators/web-terminal/overlays/initial/ | oc apply -f -
 
-# Upgrade to v1.10.1
+# Upgrade to v1.12.1
 kustomize build operators/web-terminal/overlays/updated/ | oc apply -f -
 
 # Monitor upgrade

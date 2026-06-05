@@ -9,6 +9,7 @@ metadata:
     policy.open-cluster-management.io/standards: ""
     policy.open-cluster-management.io/controls: ""
 spec:
+  remediationAction: enforce
   disabled: false
   policy-templates:
     - objectDefinition:
@@ -18,8 +19,8 @@ spec:
           name: install-web-terminal
         spec:
           complianceConfig:
-            upgradesAvailable: NonCompliant
-          remediationAction: inform
+            upgradesAvailable: Compliant
+          remediationAction: enforce
           severity: low
           complianceType: musthave
           subscription:
