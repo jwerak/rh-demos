@@ -16,6 +16,8 @@ rules:
       - placements
       - managedclustersets
       - managedclustersetbindings
+      - managedclustersets/bind
+      - managedclustersets/join
     verbs:
       - "*"
   - apiGroups:
