@@ -1,0 +1,14 @@
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: quay-operator-placement
+  namespace: POLICY_NAMESPACE
+placementRef:
+  name: quay-operator-placement
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+subjects:
+  - name: quay-operator
+    apiGroup: policy.open-cluster-management.io
+    kind: Policy

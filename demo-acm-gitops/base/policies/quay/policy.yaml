@@ -1,0 +1,34 @@
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: quay-operator
+  namespace: POLICY_NAMESPACE
+  annotations:
+    policy.open-cluster-management.io/categories: ""
+    policy.open-cluster-management.io/standards: ""
+    policy.open-cluster-management.io/controls: ""
+spec:
+  remediationAction: enforce
+  disabled: false
+  policy-templates:
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1beta1
+        kind: OperatorPolicy
+        metadata:
+          name: install-quay-operator
+        spec:
+          complianceConfig:
+            upgradesAvailable: Compliant
+          remediationAction: enforce
+          severity: low
+          complianceType: musthave
+          subscription:
+            name: quay-operator
+            channel: stable-3.17
+            source: redhat-operators
+            sourceNamespace: openshift-marketplace
+            startingCSV: quay-operator.v3.17.2
+          upgradeApproval: Automatic
+          versions:
+            - quay-operator.v3.17.2

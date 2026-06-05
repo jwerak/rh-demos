@@ -1,0 +1,62 @@
+---
+apiVersion: hypershift.openshift.io/v1beta1
+kind: HostedCluster
+metadata:
+  name: CLUSTER_NAME
+  namespace: clusters
+  labels:
+    cluster.open-cluster-management.io/clusterset: CLUSTER_SET
+spec:
+  autoscaling:
+    maxNodeCount: 5
+    maxPodGracePeriod: 3600
+    maxNodesTotal: 5
+  controllerAvailabilityPolicy: HighlyAvailable
+  dns:
+    baseDomain: apps.cluster-zbtzl.dynamic2.redhatworkshops.io
+  etcd:
+    managementType: Managed
+    managed:
+      storage:
+        persistentVolume:
+          size: 8Gi
+          storageClassName: ocs-external-storagecluster-ceph-rbd
+  fips: false
+  networking:
+    clusterNetwork:
+      - cidr: 10.136.0.0/14
+    serviceNetwork:
+      - cidr: 172.32.0.0/16
+    networkType: OVNKubernetes
+  platform:
+    type: KubeVirt
+    kubevirt:
+      baseDomainPassthrough: true
+  pullSecret:
+    name: pullsecret-cluster-CLUSTER_NAME
+  release:
+    image: quay.io/openshift-release-dev/ocp-release:4.18.43-multi
+  secretEncryption:
+    type: aescbc
+    aescbc:
+      activeKey:
+        name: CLUSTER_NAME-etcd-encryption-key
+  services:
+    - service: APIServer
+      servicePublishingStrategy:
+        type: LoadBalancer
+    - service: OAuthServer
+      servicePublishingStrategy:
+        type: Route
+    - service: OIDC
+      servicePublishingStrategy:
+        type: Route
+    - service: Konnectivity
+      servicePublishingStrategy:
+        type: Route
+    - service: Ignition
+      servicePublishingStrategy:
+        type: Route
+  sshKey:
+    name: sshkey-cluster-CLUSTER_NAME
+  infrastructureAvailabilityPolicy: HighlyAvailable

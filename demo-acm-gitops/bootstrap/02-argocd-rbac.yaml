@@ -1,0 +1,58 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argocd-acm-gitops
+rules:
+  - apiGroups:
+      - policy.open-cluster-management.io
+    resources:
+      - policies
+      - placementbindings
+    verbs:
+      - "*"
+  - apiGroups:
+      - cluster.open-cluster-management.io
+    resources:
+      - placements
+      - managedclustersets
+      - managedclustersetbindings
+    verbs:
+      - "*"
+  - apiGroups:
+      - hypershift.openshift.io
+    resources:
+      - hostedclusters
+      - nodepools
+    verbs:
+      - "*"
+  - apiGroups:
+      - apps.open-cluster-management.io
+    resources:
+      - "*"
+    verbs:
+      - "*"
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argocd-acm-gitops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: argocd-acm-gitops
+subjects:
+  - kind: ServiceAccount
+    name: openshift-gitops-argocd-application-controller
+    namespace: openshift-gitops

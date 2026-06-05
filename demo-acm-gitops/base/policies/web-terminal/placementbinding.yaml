@@ -1,0 +1,14 @@
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: web-terminal-placement
+  namespace: POLICY_NAMESPACE
+placementRef:
+  name: web-terminal-placement
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+subjects:
+  - name: web-terminal
+    apiGroup: policy.open-cluster-management.io
+    kind: Policy

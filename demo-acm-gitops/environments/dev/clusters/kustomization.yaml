@@ -1,0 +1,56 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../../base/clusters
+
+patches:
+  - target:
+      kind: HostedCluster
+      name: CLUSTER_NAME
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: dev-cluster
+      - op: replace
+        path: /metadata/labels/cluster.open-cluster-management.io~1clusterset
+        value: dev
+      - op: replace
+        path: /spec/pullSecret/name
+        value: pullsecret-cluster-dev-cluster
+      - op: replace
+        path: /spec/secretEncryption/aescbc/activeKey/name
+        value: dev-cluster-etcd-encryption-key
+      - op: replace
+        path: /spec/sshKey/name
+        value: sshkey-cluster-dev-cluster
+  - target:
+      kind: NodePool
+      name: CLUSTER_NAME-node-pool
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: dev-node-pool
+      - op: replace
+        path: /spec/clusterName
+        value: dev-cluster
+  - target:
+      kind: ManagedClusterSet
+      name: CLUSTER_SET
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: dev
+  - target:
+      kind: ManagedClusterSetBinding
+      name: CLUSTER_SET
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: dev
+      - op: replace
+        path: /metadata/namespace
+        value: dev-policies
+      - op: replace
+        path: /spec/clusterSet
+        value: dev

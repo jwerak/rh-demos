@@ -7,6 +7,7 @@ Collection of Red Hat technology demos. Each demo is self-contained in its own `
 | Directory | Description |
 |---|---|
 | `demo-acm-policies/` | ACM OperatorPolicy: operator install, upgrade, removal across clusters |
+| `demo-acm-gitops/` | ACM GitOps: ArgoCD-managed operator policies with dev-to-prod promotion |
 | `demo-aiops/` | AIOps: AAP workflow setup + AI ops assistant agent on OpenShift |
 | `demo-containerfile/` | Manifest-driven tar archive file copying into container images |
 | `demo-hybrid-app/` | Hybrid cloud: KubeVirt VM (PostgreSQL) + containers (Frontend, Backend, Redis) |
