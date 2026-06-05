@@ -9,6 +9,9 @@ export DEMO_ID=alice  # unique per user, enables parallel demos
 
 # Bootstrap (shared, once per cluster)
 oc apply -k bootstrap/
+oc get secret pull-secret -n openshift-config -o json \
+  | jq 'del(.metadata.namespace,.metadata.resourceVersion,.metadata.uid,.metadata.creationTimestamp) | .metadata.name = "hcp-pull-secret"' \
+  | oc apply -n clusters -f -
 
 # Create demo branch and deploy ApplicationSet
 git checkout -b "demo/${DEMO_ID}" && git push -u origin "demo/${DEMO_ID}"

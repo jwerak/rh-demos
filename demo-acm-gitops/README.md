@@ -62,6 +62,11 @@ export DEMO_ID=alice   # change this to your name/id
 # Install GitOps operator, RBAC, and namespaces (shared, run once per cluster)
 oc apply -k bootstrap/
 
+# Copy the hub pull secret to the clusters namespace (required for HCP provisioning)
+oc get secret pull-secret -n openshift-config -o json \
+  | jq 'del(.metadata.namespace,.metadata.resourceVersion,.metadata.uid,.metadata.creationTimestamp) | .metadata.name = "hcp-pull-secret"' \
+  | oc apply -n clusters -f -
+
 # Wait for the GitOps operator (~2-3 minutes)
 watch oc get csv -n openshift-gitops
 # Wait for openshift-gitops-operator to reach Succeeded
