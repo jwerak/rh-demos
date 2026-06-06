@@ -1,5 +1,7 @@
 # ACM GitOps: Operator Lifecycle with Dev-to-Prod Promotion
 
+> **[Česká verze / Czech version](README-cs.md)**
+
 Manage operator installation and upgrades across OpenShift clusters using ArgoCD + ACM OperatorPolicy. This demo provisions HCP clusters, deploys operators (Web Terminal, Quay), and demonstrates git-based promotion from dev to prod.
 
 > For the basic demo without GitOps, see [ACM Operator Lifecycle Management](../demo-acm-policies/README-basic.md).
@@ -181,6 +183,36 @@ git add environments/prod/policies/kustomization.yaml
 git commit -m "Promote web-terminal v1.12.1 upgrade to production"
 git push
 ```
+
+## Optional: Install Compliance Operator via ACM Console
+
+You can manually deploy the Compliance Operator to a managed cluster through the ACM console. On HCP (HyperShift) clusters, the operator requires a **nodeSelector override** — by default it targets master nodes, which don't exist as schedulable nodes on HCP clusters.
+
+1. In the ACM console, go to **Governance** → **Create policy**
+2. Fill in the policy details:
+   - **Name**: e.g. `compliance-operator`
+   - **Namespace**: `dev-policies` (or `prod-policies`)
+   - **Remediation**: `enforce`
+3. Add a policy template → **OperatorPolicy** with:
+   - **Operator name**: `compliance-operator`
+   - **Namespace**: `openshift-compliance`
+   - **Source**: `redhat-operators`
+   - **Upgrade approval**: `Automatic`
+4. Switch to the **YAML editor** and add a `config` block under `subscription` to override the nodeSelector:
+   ```yaml
+   subscription:
+     name: compliance-operator
+     namespace: openshift-compliance
+     source: redhat-operators
+     sourceNamespace: openshift-marketplace
+     config:
+       nodeSelector:
+         node-role.kubernetes.io/worker: ""
+   ```
+5. Set the **Placement** to target the appropriate ClusterSet (e.g. `dev` or `prod`)
+6. **Submit**
+
+> **Why the nodeSelector?** The Compliance Operator's default deployment targets `node-role.kubernetes.io/master` nodes. HCP clusters run their control plane on the hub — the managed cluster only has worker nodes. Without this override, the operator pod will never be scheduled and the install will time out with `deployment "compliance-operator" exceeded its progress deadline`.
 
 ## Reset Demo
 
