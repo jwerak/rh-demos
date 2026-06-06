@@ -4,3 +4,4 @@ kind: Kustomization
 resources:
   - 01-gitops-operator.yaml
   - 02-argocd-rbac.yaml
+  - 02-argocd-rbac-patch.yaml

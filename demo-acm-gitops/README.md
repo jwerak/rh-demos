@@ -21,28 +21,28 @@ Manage operator installation and upgrades across OpenShift clusters using ArgoCD
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
+```txt
+┌──────────────────────────────────────────────────────────────────┐
 │  Git Repository                                                  │
 │  branch: demo/<your-id> (created from master)                    │
 │                                                                  │
-│  environments/dev/clusters/    environments/prod/clusters/        │
-│  environments/dev/policies/    environments/prod/policies/        │
+│  environments/dev/clusters/    environments/prod/clusters/       │
+│  environments/dev/policies/    environments/prod/policies/       │
 └──────────────────────┬───────────────────────────────────────────┘
                        │ ArgoCD ApplicationSet
                        │ (git directory generator)
                        ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Hub Cluster (ArgoCD + ACM)                                      │
-│                                                                  │
-│  ┌──────────────┐  ┌───────────────┐                             │
-│  │  dev-cluster  │  │  prod-cluster  │                            │
-│  │  (HCP)        │  │  (HCP)         │                           │
-│  │               │  │                │                            │
-│  │  Policies:    │  │  Policies:     │                            │
-│  │  • Web Term.  │  │  • Web Term.   │                            │
-│  │  • Quay       │  │               │                             │
-│  └──────────────┘  └───────────────┘                             │
+│  Hub Cluster (ArgoCD + ACM)                                     │
+│                                                                 │
+│  ┌──────────────┐  ┌───────────────┐                            │
+│  │  dev-cluster │  │  prod-cluster │                            │
+│  │  (HCP)       │  │  (HCP)        │                            │
+│  │              │  │               │                            │
+│  │  Policies:   │  │  Policies:    │                            │
+│  │  • Web Term. │  │  • Web Term.  │                            │
+│  │  • Quay      │  │               │                            │
+│  └──────────────┘  └───────────────┘                            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -54,12 +54,13 @@ Pick a unique ID for your demo session (e.g., your name or team). This allows mu
 
 ```bash
 export DEMO_ID=alice   # change this to your name/id
+export BASE_DOMAIN=$(oc get ingress.config cluster -o jsonpath='{.spec.domain}')
 ```
 
 ### 2. Bootstrap GitOps
 
 ```bash
-# Install GitOps operator, RBAC, and namespaces (shared, run once per cluster)
+# Install GitOps operator, RBAC, and namespaces (shared, run once per cluster) using Kustomize
 oc apply -k bootstrap/
 
 # Copy the hub pull secret to the clusters namespace (required for HCP provisioning)
@@ -74,11 +75,16 @@ watch oc get csv -n openshift-gitops
 
 ### 3. Create Demo Branch and Deploy ApplicationSet
 
-Each demo session uses its own branch. The ApplicationSet template has `DEMO_BRANCH` and `DEMO_ID` placeholders that get replaced with your values:
+Each demo session uses its own branch. The ApplicationSet template has `DEMO_BRANCH` and `DEMO_ID` placeholders that get replaced with your values. The `BASE_DOMAIN` placeholder in the HostedCluster template is replaced on the branch so ArgoCD picks up the correct hub ingress domain:
 
 ```bash
 # Create your demo branch from master
 git checkout -b "demo/${DEMO_ID}"
+
+# Set the hub cluster's base domain in the HostedCluster template
+sed -i "s|BASE_DOMAIN|${BASE_DOMAIN}|g" base/clusters/hostedcluster.yaml
+git add base/clusters/hostedcluster.yaml
+git commit -m "Set base domain to ${BASE_DOMAIN}"
 git push -u origin "demo/${DEMO_ID}"
 
 # Deploy ApplicationSet with your branch and ID

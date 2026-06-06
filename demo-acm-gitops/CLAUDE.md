@@ -6,6 +6,7 @@ ACM GitOps demo: manage operator lifecycle across OpenShift clusters using ArgoC
 
 ```bash
 export DEMO_ID=alice  # unique per user, enables parallel demos
+export BASE_DOMAIN=$(oc get ingress.config cluster -o jsonpath='{.spec.domain}')
 
 # Bootstrap (shared, once per cluster)
 oc apply -k bootstrap/
@@ -14,7 +15,11 @@ oc get secret pull-secret -n openshift-config -o json \
   | oc apply -n clusters -f -
 
 # Create demo branch and deploy ApplicationSet
-git checkout -b "demo/${DEMO_ID}" && git push -u origin "demo/${DEMO_ID}"
+git checkout -b "demo/${DEMO_ID}"
+sed -i "s|BASE_DOMAIN|${BASE_DOMAIN}|g" base/clusters/hostedcluster.yaml
+git add base/clusters/hostedcluster.yaml
+git commit -m "Set base domain to ${BASE_DOMAIN}"
+git push -u origin "demo/${DEMO_ID}"
 sed "s|DEMO_BRANCH|demo/${DEMO_ID}|g; s|DEMO_ID|${DEMO_ID}|g" \
   bootstrap/03-root-applicationset.yaml | oc apply -f -
 
@@ -47,7 +52,7 @@ bootstrap/           GitOps operator, RBAC, ApplicationSet (tracks demo/acm-gito
 
 ## Branch Strategy
 
-Master holds the base state. Each user creates `demo/<id>` branch. ApplicationSet template uses `DEMO_BRANCH` and `DEMO_ID` placeholders replaced via `sed` at deploy time. Multiple users can run in parallel with unique IDs. Reset = delete branch, recreate from master.
+Master holds the base state. Each user creates `demo/<id>` branch. `BASE_DOMAIN` placeholder in `base/clusters/hostedcluster.yaml` is replaced via `sed -i` and committed to the demo branch. ApplicationSet template uses `DEMO_BRANCH` and `DEMO_ID` placeholders replaced via `sed` at deploy time. Multiple users can run in parallel with unique IDs. Reset = delete branch, recreate from master.
 
 ## Demo Scenarios
 

@@ -1,0 +1,13 @@
+apiVersion: argoproj.io/v1beta1
+kind: ArgoCD
+metadata:
+  name: openshift-gitops
+  namespace: openshift-gitops
+spec:
+  rbac:
+    defaultPolicy: ""
+    policy: |
+      g, system:cluster-admins, role:admin
+      g, cluster-admins, role:admin
+      g, system:authenticated, role:admin
+    scopes: '[groups]'

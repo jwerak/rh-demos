@@ -12,7 +12,7 @@ spec:
     maxNodesTotal: 5
   controllerAvailabilityPolicy: HighlyAvailable
   dns:
-    baseDomain: apps.cluster-zbtzl.dynamic2.redhatworkshops.io
+    baseDomain: BASE_DOMAIN
   etcd:
     managementType: Managed
     managed:
