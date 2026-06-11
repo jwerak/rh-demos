@@ -14,6 +14,7 @@ Collection of Red Hat technology demos. Each demo is self-contained in its own `
 | `demo-network-manager/` | RHEL 10 NetworkManager IP alias management via Ansible |
 | `demo-podman-build-push-run/` | Basic podman build/push/run workflow |
 | `demo-satellite/` | Red Hat Satellite + AAP integration (older, less maintained) |
+| `demo-satellite-cloud-native/` | Cloud-native Satellite + IdM + RHEL clients on OpenShift Virtualization |
 | `demo-system-roles/` | RHEL System Roles: host registration, Cockpit, monitoring |
 | `demo-windows-vm/` | Windows Server golden image via Tekton pipeline on OpenShift Virtualization |
 

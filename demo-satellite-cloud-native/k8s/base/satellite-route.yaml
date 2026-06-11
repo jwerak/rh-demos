@@ -1,0 +1,22 @@
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: satellite-ui
+  namespace: satellite-cloud-native
+  labels:
+    app: satellite
+    app.kubernetes.io/name: satellite
+    app.kubernetes.io/part-of: satellite-cloud-native
+    app.kubernetes.io/component: content-management
+    demo: satellite-cloud-native
+spec:
+  host: __SAT_FQDN__
+  to:
+    kind: Service
+    name: satellite
+    weight: 100
+  port:
+    targetPort: https
+  tls:
+    termination: passthrough

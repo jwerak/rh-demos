@@ -1,0 +1,7 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: satellite-cloud-native
+  labels:
+    demo: satellite-cloud-native

@@ -1,0 +1,22 @@
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: idm-ui
+  namespace: satellite-cloud-native
+  labels:
+    app: idm
+    app.kubernetes.io/name: idm
+    app.kubernetes.io/part-of: satellite-cloud-native
+    app.kubernetes.io/component: identity
+    demo: satellite-cloud-native
+spec:
+  host: __IDM_FQDN__
+  to:
+    kind: Service
+    name: idm
+    weight: 100
+  port:
+    targetPort: https
+  tls:
+    termination: passthrough

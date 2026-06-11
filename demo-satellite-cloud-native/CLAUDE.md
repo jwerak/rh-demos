@@ -1,0 +1,93 @@
+# CLAUDE.md
+
+Cloud-native Satellite + IdM demo: RHEL VMs running on OpenShift Virtualization with automated provisioning, identity management, and content management — all on the default pod network (masquerade mode).
+
+## Components
+
+- **IdM VM** (FreeIPA) - Identity server providing Kerberos/LDAP authentication. Installed via `ansible-freeipa` `ipaserver` role (RPM: `ansible-freeipa`), key vars: `ipaserver_ip_addresses`, `ipaserver_no_reverse: true`, `ipaserver_allow_zone_overlap: true`.
+- **Satellite VM** - Red Hat Satellite 6.18 for content management and host lifecycle.
+- **Client VM** - Single RHEL 9 client that auto-registers to both Satellite and IdM. Uses `ipa-client-install --force-join --force` (the `--force` flag allows CA cert download over HTTP without pre-existing trust).
+- **Client Pool** (VirtualMachinePool) - Elastic pool of RHEL clients for scaling demos
+- **NetworkPolicy** - SDN-based micro-segmentation blocking client-to-client traffic
+
+## Important Notes
+
+- **DNS CNAMEs required:** `IDM_FQDN` and `SAT_FQDN` must be set in `.env`. These DNS names need CNAME records pointing to the OpenShift router wildcard (e.g., `idm.yourdomain.com CNAME idm.apps.<cluster>/`). The deploy script templates these into all manifests.
+- **RHSM credentials secret required:** All VMs need a `rhsm-credentials` Kubernetes Secret mounted as a disk (serial: `rhsm-creds`). Create it with `./scripts/create-rhsm-secret.sh` before deploying.
+- **/etc/hosts mapping:** Each VM's `/etc/hosts` must map its FQDN to the real eth0 IP (10.0.2.2 in masquerade mode), NOT 127.0.0.1. IPA rejects loopback.
+- **Client storage:** Clients need at least 30Gi storage (the RHEL 9 cloud image source PVC is ~30Gi).
+- **Templated manifests:** Cloud-init secrets, routes, and client configs contain `__IDM_FQDN__`, `__SAT_FQDN__`, `__IPA_DOMAIN__`, `__IPA_REALM__` placeholders. Always deploy via `./scripts/deploy.sh` (not raw `oc apply`).
+
+## Directory Structure
+
+- `k8s/base/` - All Kubernetes manifests (VMs, services, cloud-init secrets, PVCs, network policies)
+- `k8s/overlays/demo/` - Demo overlay (adds environment label)
+- `scripts/deploy.sh` - Sequenced deployment (IdM first, then Satellite, then clients)
+- `scripts/verify-registration.sh` - Check Satellite + IdM enrollment status
+- `scripts/demo-scenarios.sh` - Run individual demos 1-5
+
+## Kustomize Layout
+
+```
+k8s/base/           # namespace, IdM (vm + cloudinit + svc), Satellite (vm + cloudinit + svc + route + pvc),
+                     # client (vm + cloudinit + pool), network-policy
+k8s/overlays/demo/   # Adds environment: demo label
+```
+
+## Key Commands
+
+```bash
+# Configure and deploy
+cp .env.sample .env   # Edit with RHSM creds + DNS names
+source .env
+./scripts/create-rhsm-secret.sh
+./scripts/deploy.sh   # Templates FQDNs into manifests and applies
+
+# Monitor IdM install
+oc exec -n satellite-cloud-native vmi/idm -- tail -f /var/log/idm-setup.log
+
+# Monitor Satellite install
+oc exec -n satellite-cloud-native vmi/satellite -- tail -f /var/log/satellite-setup.log
+
+# Deploy single client (Demo 1)
+oc apply -f k8s/base/client-vm.yaml
+
+# Scale client pool (Demo 2)
+oc scale vmpool client-pool -n satellite-cloud-native --replicas=5
+
+# Run demo scenarios
+./scripts/demo-scenarios.sh 1   # Zero-touch provisioning
+./scripts/demo-scenarios.sh 2   # Elastic scaling
+./scripts/demo-scenarios.sh 3   # Self-healing
+./scripts/demo-scenarios.sh 4   # IP-agnostic Kerberos
+./scripts/demo-scenarios.sh 5   # Network micro-segmentation
+
+# Verify registrations
+./scripts/verify-registration.sh
+
+# Access Web UIs
+echo "https://$(oc get route satellite-ui -n satellite-cloud-native -o jsonpath='{.spec.host}')"
+# Satellite: admin / $DEMO_PASSWORD
+echo "https://$(oc get route idm-ui -n satellite-cloud-native -o jsonpath='{.spec.host}')"
+# IdM: admin / $DEMO_PASSWORD
+
+# Cleanup
+oc delete -k k8s/overlays/demo/
+```
+
+## Tools Required
+
+- `oc` - OpenShift CLI (cluster must have OpenShift Virtualization operator)
+- `kustomize` - manifest building (or use `oc apply -k`)
+
+## Default Credentials (Demo Only)
+
+| Service | Username | Password |
+|---------|----------|----------|
+| Satellite UI | admin | `<DEMO_PASSWORD>` |
+| IdM admin | admin | `<DEMO_PASSWORD>` |
+| IdM Directory Manager | - | `<DEMO_PASSWORD>` |
+| IdM demo user | demouser | `<DEMO_PASSWORD>` |
+| VM SSH (all) | cloud-user | `<DEMO_PASSWORD>` |
+
+> All services use the same password. Run `source .env` to load it, or check `.env` for the value.
