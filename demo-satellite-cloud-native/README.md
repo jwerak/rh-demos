@@ -37,6 +37,7 @@ Red Hat Satellite + IdM (FreeIPA) + RHEL clients running entirely as KubeVirt VM
 - RHEL 9 cloud image available via DataImportCron (`rhel9` DataSource)
 - Storage class supporting RWO PVCs (Ceph RBD, ODF, etc.)
 - RHSM credentials (org ID + activation key) for all VMs
+- Satellite subscription manifest ZIP (optional, for RPM content serving) — download from [console.redhat.com](https://console.redhat.com) -> Subscriptions -> Manifests
 - DNS domain where you can create CNAME records (for Web UI access)
 - `oc` CLI authenticated to the cluster
 - `sshpass` installed locally (for SSH access to VMs via `virtctl port-forward`)
@@ -53,11 +54,11 @@ oc get ingress.config cluster -o jsonpath='{.spec.domain}'
 # Example output: apps.cluster-abc.dyn.redhatworkshops.io
 
 # Create these CNAME records in your DNS:
-idm.yourdomain.com        CNAME  idm.apps.cluster-abc.dyn.redhatworkshops.io
-satellite.yourdomain.com  CNAME  satellite.apps.cluster-abc.dyn.redhatworkshops.io
+idm.example.com        CNAME  idm.apps.cluster-abc.dyn.redhatworkshops.io
+satellite.example.com  CNAME  satellite.apps.cluster-abc.dyn.redhatworkshops.io
 ```
 
-The IdM server will be installed with `idm.yourdomain.com` as its FQDN, and the IPA Kerberos realm will be derived from your domain (e.g., `YOURDOMAIN.COM`). Client VMs get hostnames like `client-<id>.yourdomain.com` and are enrolled into this realm.
+The IdM server will be installed with `idm.example.com` as its FQDN, and the IPA Kerberos realm will be derived from your domain (e.g., `YOURDOMAIN.COM`). Client VMs get hostnames like `client-<id>.example.com` and are enrolled into this realm.
 
 ### 2. Configure Environment
 
@@ -73,8 +74,8 @@ export RHSM_ORG=12345678
 export RHSM_ACTIVATION_KEY=your-activation-key
 
 # DNS names matching the CNAMEs you created above
-export IDM_FQDN=idm.yourdomain.com
-export SAT_FQDN=satellite.yourdomain.com
+export IDM_FQDN=idm.example.com
+export SAT_FQDN=satellite.example.com
 ```
 
 ### 3. Create the RHSM Credentials Secret
@@ -83,6 +84,21 @@ export SAT_FQDN=satellite.yourdomain.com
 source .env
 ./scripts/create-rhsm-secret.sh
 ```
+
+### 4. (Optional) Upload the Satellite Subscription Manifest
+
+If you want Satellite to serve RPM packages to clients (required for `dnf install` via Satellite repos), upload a subscription manifest **after Satellite finishes installing** (~20-30 min):
+
+```bash
+export MANIFEST_PATH=/path/to/manifest.zip
+./scripts/upload-manifest.sh
+```
+
+The script uploads the manifest via SCP, imports it, enables RHEL 9 BaseOS + AppStream repos, syncs them, and republishes the content view. Repo sync takes ~10-60 minutes.
+
+Download your manifest from [access.redhat.com](https://access.redhat.com) -> Subscriptions -> Subscription Allocations. Make sure to **add subscriptions** to the allocation before exporting.
+
+Without a manifest, Satellite still handles host lifecycle, REX, and Ansible — it just won't serve RPM content.
 
 ## Quick Start
 
@@ -126,21 +142,18 @@ Both Satellite and IdM expose their web UIs via OpenShift Routes (TLS passthroug
 
 ### SSH Access to VMs
 
-For direct shell access to any VM (useful during demos):
+All VM access uses `virtctl port-forward` + SSH (the `oc exec vmi/` syntax requires a separate kubectl plugin):
 
 ```bash
-# SSH via virtctl port-forward (requires sshpass)
+# SSH via virtctl port-forward (requires sshpass + virtctl)
 sshpass -p "$DEMO_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   -o ProxyCommand="virtctl port-forward --stdio vmi/<vm-name>.satellite-cloud-native 22" \
   cloud-user@localhost
 
-# Examples:
-# IdM server
-sshpass -p "$DEMO_PASSWORD" ssh ... vmi/idm.satellite-cloud-native ...
-# Satellite server
-sshpass -p "$DEMO_PASSWORD" ssh ... vmi/satellite.satellite-cloud-native ...
-# Client VM
-sshpass -p "$DEMO_PASSWORD" ssh ... vmi/client.satellite-cloud-native ...
+# The demo-scenarios.sh script provides a run_on_vm helper:
+#   run_on_vm <vm-name> "<command>"
+#   run_on_vm satellite "sudo hammer host list"
+#   run_on_vm client "sudo systemctl status fapolicyd"
 
 # Or use virtctl console for serial console access (no sshpass needed)
 virtctl console vmi/idm -n satellite-cloud-native
@@ -208,6 +221,56 @@ Demonstrate that VMs inherit Kubernetes NetworkPolicy — client VMs can reach S
 
 The `NetworkPolicy` allows `role: client` → `role: infra` traffic and blocks `role: client` → `role: client`.
 
+### Demo 6: Manual OS Hardening
+
+Step-by-step manual hardening of a single client VM showing the reasoning behind each layer of defense:
+
+- **fapolicyd** — blocks execution of unapproved binaries using SHA-256 integrity checking
+- **AIDE** — file integrity monitoring with daily cron checks
+- **Sudoers** — restricted auditor role that can check security status but cannot install packages (`rpm -i`), remove packages, or disable security services (`systemctl stop fapolicyd`)
+
+The defense-in-depth reasoning: fapolicyd prevents running unapproved binaries, but an attacker with root can disable it. Sudoers restrictions prevent the auditor role from doing so.
+
+```bash
+./scripts/demo-scenarios.sh 6
+
+# Verify:
+oc exec -n satellite-cloud-native vmi/client -- systemctl status fapolicyd
+oc exec -n satellite-cloud-native vmi/client -- aide --check
+oc exec -n satellite-cloud-native vmi/client -- cat /etc/sudoers.d/auditor
+```
+
+### Demo 7: Automated Hardening via Satellite REX
+
+Automates everything from Demo 6 at scale using an Ansible playbook executed through Satellite Remote Execution. Uses RHEL System Roles (`redhat.rhel_system_roles.fapolicyd`, `redhat.rhel_system_roles.aide`) for certified, supported automation.
+
+```bash
+./scripts/demo-scenarios.sh 7
+
+# The playbook is uploaded to Satellite and executed via REX on all clients.
+# View results in Satellite Web UI: Monitor → Jobs → Security Hardening
+```
+
+The playbook is at `playbooks/hardening.yml` and can also be imported manually via the Satellite GUI: **Configure → Job Templates → New Job Template**.
+
+### Demo 8: RPM Package Whitelist Audit
+
+Audits installed RPM packages against an approved whitelist. Detects unauthorized package installations and can optionally remove them.
+
+```bash
+# Audit mode (default) — report only
+./scripts/demo-scenarios.sh 8
+
+# Enforce mode — remove unauthorized packages
+./scripts/demo-scenarios.sh 8 enforce
+```
+
+The approved package list is in `playbooks/files/rpm-whitelist.txt`. To generate a baseline from a clean client:
+
+```bash
+oc exec -n satellite-cloud-native vmi/client -- rpm -qa --qf '%{NAME}\n' | sort -u > playbooks/files/rpm-whitelist.txt
+```
+
 ## Resource Requirements
 
 | VM | vCPUs | RAM | Storage |
@@ -218,7 +281,19 @@ The `NetworkPolicy` allows `role: client` → `role: infra` traffic and blocks `
 
 **Total (infra + 2 clients):** 8 vCPUs, 30 Gi RAM, 340 Gi storage
 
-## Kustomize Structure
+## Project Structure
+
+### Playbooks
+
+```
+playbooks/
+├── hardening.yml              # Demo 7: fapolicyd + AIDE + sudoers (RHEL System Roles)
+├── rpm-whitelist-audit.yml    # Demo 8: RPM package whitelist audit/enforce
+└── files/
+    └── rpm-whitelist.txt      # Approved RPM package list (Golden Image baseline)
+```
+
+### Kustomize
 
 ```
 k8s/

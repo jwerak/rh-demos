@@ -1,0 +1,150 @@
+---
+# Audit a kontrola integrity RPM balicku (Vynuceni povoleneho whitelistu)
+# Spousteno pres Satellite Remote Execution (REX)
+#
+# Porovnava aktualni stav cilovych serveru se seznamem schvalenych balicku
+# a detekuje jakekoli neautorizovane instalace.
+#
+# Rezimy:
+#   audit   — pouze nahlasi neschvalene balicky (vychozi)
+#   enforce — automaticky je odstrani ze systemu
+
+- name: RPM Package Whitelist Audit
+  hosts: all
+  become: true
+  vars:
+    # Rezim behu: 'audit' nebo 'enforce'
+    rpm_audit_mode: "audit"
+
+    # Schvaleny "Golden Image" whitelist balicku
+    # V realnem prostredi se sem vklada kompletni seznam z ciste instalace.
+    allowed_packages:
+      - kernel
+      - kernel-core
+      - kernel-modules
+      - kernel-modules-core
+      - systemd
+      - systemd-libs
+      - systemd-pam
+      - systemd-resolved
+      - systemd-udev
+      - bash
+      - glibc
+      - coreutils
+      - coreutils-common
+      - openssh-server
+      - openssh-clients
+      - openssh
+      - openssl
+      - openssl-libs
+      - aide
+      - fapolicyd
+      - fapolicyd-selinux
+      - rsyslog
+      - sssd
+      - sssd-client
+      - sssd-common
+      - sssd-ipa
+      - sssd-krb5
+      - sssd-ldap
+      - cockpit
+      - cockpit-bridge
+      - cockpit-system
+      - cockpit-ws
+      - subscription-manager
+      - ipa-client
+      - ipa-client-common
+      - python3-ipalib
+      - foreman_ygg_worker
+      - yggdrasil
+      - podman
+      - conmon
+      - crun
+      - slirp4netns
+      - cloud-init
+      - dnf
+      - rpm
+      - sudo
+      - audit
+      - audit-libs
+      - policycoreutils
+      - selinux-policy
+      - selinux-policy-targeted
+      - firewalld
+      - NetworkManager
+      - chrony
+      - cronie
+      - logrotate
+      - vim-minimal
+      - less
+      - tar
+      - gzip
+      - xz
+      - findutils
+      - grep
+      - sed
+      - gawk
+      - curl
+      - wget
+      - ca-certificates
+
+  tasks:
+    - name: Shromazdeni seznamu nainstalovanych balicku
+      ansible.builtin.command: rpm -qa --qf '%{NAME}\n'
+      register: installed_rpms
+      changed_when: false
+
+    - name: Inicializace seznamu nainstalovanych balicku
+      ansible.builtin.set_fact:
+        installed_package_names: "{{ installed_rpms.stdout_lines | unique | sort }}"
+
+    - name: Detekce neschvalenych (nepovolenych) balicku v systemu
+      ansible.builtin.set_fact:
+        unauthorized_packages: "{{ installed_package_names | difference(allowed_packages) | sort }}"
+
+    - name: Zobrazeni vysledku auditu
+      ansible.builtin.debug:
+        msg: |
+          === AUDIT REPORT ===
+          Host: {{ inventory_hostname }}
+          Total installed: {{ installed_package_names | length }}
+          Approved: {{ installed_package_names | intersect(allowed_packages) | length }}
+          Unauthorized: {{ unauthorized_packages | length }}
+          {% if unauthorized_packages | length > 0 %}
+          Unauthorized packages:
+          {% for pkg in unauthorized_packages %}
+            - {{ pkg }}
+          {% endfor %}
+          {% else %}
+          All packages are approved.
+          {% endif %}
+
+    - name: Zapis incidentu do systemoveho logu
+      ansible.builtin.command: >-
+        logger -t SECURITY_AUDIT -p authpriv.warning
+        'Neschvalene balicky detekovany: {{ unauthorized_packages | join(", ") }}'
+      when: unauthorized_packages | length > 0
+      changed_when: false
+
+    - name: Automaticke odstraneni neschvalenych balicku (Rezim Enforce)
+      ansible.builtin.dnf:
+        name: "{{ unauthorized_packages }}"
+        state: absent
+      when:
+        - rpm_audit_mode == 'enforce'
+        - unauthorized_packages | length > 0
+      notify: Aktualizace fapolicyd databaze
+
+    - name: Informovat o enforce rezimu
+      ansible.builtin.debug:
+        msg: >-
+          VAROVANI: Enforce rezim odstranil {{ unauthorized_packages | length }} neschvalenych balicku.
+          Zkontrolujte, zda system funguje spravne.
+      when:
+        - rpm_audit_mode == 'enforce'
+        - unauthorized_packages | length > 0
+
+  handlers:
+    - name: Aktualizace fapolicyd databaze
+      ansible.builtin.command: fapolicyd-cli --update
+      changed_when: true

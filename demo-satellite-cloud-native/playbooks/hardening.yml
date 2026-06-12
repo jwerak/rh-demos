@@ -1,0 +1,113 @@
+---
+# Hardening RHEL 9 dle CIS Level 2 (AIDE, fapolicyd & Auditor Role)
+# Spousteno pres Satellite Remote Execution (REX)
+#
+# Tento playbook automatizuje manualni kroky z Demo 6:
+#   1. fapolicyd — kontrola integrity SHA-256, povoleni kontejnerovych runtime
+#   2. AIDE — monitoring integrity souboroveho systemu
+#   3. Sudoers — omezena prava pro roli auditora (skupina Linux-Auditors)
+#
+# Proč vrstvy:
+#   fapolicyd blokuje spousteni neschvalenych binarnich souboru, ale utocnik
+#   s root pristupem muze fapolicyd vypnout. Proto pridavame sudoers pravidla,
+#   ktera zakazuji rpm -i, dnf install a systemctl stop fapolicyd.
+
+- name: Hardening RHEL 9 - fapolicyd + AIDE + Auditor sudoers
+  hosts: all
+  become: true
+  vars:
+    # 1. Konfigurace parametru pro fapolicyd roli
+    fapolicyd_setup_permissive: false
+    fapolicyd_setup_integrity: sha256
+    fapolicyd_setup_trust: rpmdb,file
+
+    # 2. Konfigurace parametru pro AIDE roli
+    aide_cron_check: true
+    aide_cron_interval: "05 4 * * *"
+
+    # AD/IdM skupina pro auditory
+    ad_auditor_group: "Linux-Auditors"
+
+  tasks:
+    # --- fapolicyd ---
+    - name: Spusteni systemove role pro fapolicyd
+      ansible.builtin.include_role:
+        name: redhat.rhel_system_roles.fapolicyd
+
+    - name: Povoleni filesystem mark ve fapolicyd pro bind mounty
+      ansible.builtin.lineinfile:
+        path: /etc/fapolicyd/fapolicyd.conf
+        regexp: '^allow_filesystem_mark\s*='
+        line: 'allow_filesystem_mark = 1'
+      notify: Restart fapolicyd
+
+    - name: Konfigurace vyjimek pro runc (Podman kontejnery)
+      ansible.builtin.copy:
+        dest: /etc/fapolicyd/rules.d/25-runc.rules
+        content: |
+          allow perm=any pattern=ld_so exe=/usr/bin/runc : all
+          allow perm=any uid=0 pattern=ld_so exe=/runc : trust=1
+        mode: '0640'
+        owner: root
+        group: root
+      notify: Reload fapolicyd rules
+
+    # --- AIDE ---
+    - name: Spusteni systemove role pro nasazeni a inicializaci AIDE
+      ansible.builtin.include_role:
+        name: redhat.rhel_system_roles.aide
+
+    # --- Sudoers pro auditory ---
+    - name: Konfigurace prisneho sudoers profilu pro roli auditora
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/auditor
+        mode: '0440'
+        owner: root
+        group: root
+        validate: 'visudo -cf %s'
+        content: |
+          # Vyhrazena prava pro roli auditora dle CIS L2
+          # Mapovano na IdM/AD skupinu "{{ ad_auditor_group }}"
+
+          Cmnd_Alias AUDIT_RO = /usr/sbin/aide --check, \
+              /usr/bin/fapolicyd-cli --dump-db, \
+              /usr/bin/fapolicyd-cli --list, \
+              /usr/bin/systemctl status fapolicyd, \
+              /usr/bin/systemctl status aide*, \
+              /usr/bin/journalctl -u fapolicyd, \
+              /usr/bin/oscap *, \
+              /usr/bin/journalctl *
+
+          Cmnd_Alias DANGEROUS = /usr/bin/systemctl stop fapolicyd, \
+              /usr/bin/systemctl disable fapolicyd, \
+              /usr/bin/rpm -i*, \
+              /usr/bin/rpm -U*, \
+              /usr/bin/dnf install*, \
+              /usr/bin/dnf remove*
+
+          %{{ ad_auditor_group }} ALL=(root) NOPASSWD: AUDIT_RO, !DANGEROUS
+
+    # --- Overeni ---
+    - name: Overit stav fapolicyd
+      ansible.builtin.command: systemctl is-active fapolicyd
+      changed_when: false
+
+    - name: Overit existenci AIDE databaze
+      ansible.builtin.stat:
+        path: /var/lib/aide/aide.db.gz
+      register: aide_db
+
+    - name: Informovat o stavu AIDE
+      ansible.builtin.debug:
+        msg: >-
+          AIDE databaze {{ 'existuje' if aide_db.stat.exists else 'NEEXISTUJE — spustte aide --init' }}
+
+  handlers:
+    - name: Reload fapolicyd rules
+      ansible.builtin.command: fagenrules --load
+      changed_when: true
+
+    - name: Restart fapolicyd
+      ansible.builtin.systemd:
+        name: fapolicyd
+        state: restarted

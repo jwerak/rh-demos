@@ -1,0 +1,186 @@
+# Schvaleny seznam RPM balicku pro RHEL 9 klienty (Golden Image whitelist)
+#
+# Tento soubor je referencni — v realnem prostredi generujte ze ciste instalace:
+#   oc exec -n satellite-cloud-native vmi/client -- rpm -qa --qf '%{NAME}\n' | sort -u > rpm-whitelist.txt
+#
+# Radky zacinajici # jsou komentare, prazdne radky se ignoruji.
+
+# --- Zakladni system ---
+kernel
+kernel-core
+kernel-modules
+kernel-modules-core
+systemd
+systemd-libs
+systemd-pam
+systemd-resolved
+systemd-udev
+bash
+glibc
+glibc-common
+glibc-minimal-langpack
+coreutils
+coreutils-common
+util-linux
+util-linux-core
+shadow-utils
+pam
+setup
+filesystem
+basesystem
+
+# --- Balickovy system ---
+dnf
+dnf-data
+rpm
+rpm-libs
+rpm-build-libs
+rpm-sign-libs
+libdnf
+librepo
+libsolv
+
+# --- Sifrovani a certifikaty ---
+openssl
+openssl-libs
+ca-certificates
+p11-kit
+p11-kit-trust
+crypto-policies
+gnutls
+
+# --- SSH ---
+openssh
+openssh-server
+openssh-clients
+
+# --- Sitovani ---
+NetworkManager
+NetworkManager-libnm
+firewalld
+firewalld-filesystem
+nftables
+iproute
+iputils
+curl
+wget
+
+# --- Bezpecnost a audit ---
+aide
+fapolicyd
+fapolicyd-selinux
+audit
+audit-libs
+policycoreutils
+policycoreutils-python-utils
+selinux-policy
+selinux-policy-targeted
+libselinux
+libselinux-utils
+libsemanage
+libsepol
+sudo
+shadow-utils
+
+# --- Logovani ---
+rsyslog
+logrotate
+systemd-journal-remote
+
+# --- Casova synchronizace ---
+chrony
+
+# --- Planovani uloh ---
+cronie
+cronie-anacron
+crontabs
+
+# --- IdM / Kerberos / SSSD ---
+ipa-client
+ipa-client-common
+python3-ipalib
+python3-ipaclient
+sssd
+sssd-client
+sssd-common
+sssd-ipa
+sssd-krb5
+sssd-krb5-common
+sssd-ldap
+sssd-ad
+sssd-common-pac
+krb5-libs
+krb5-workstation
+certmonger
+oddjob
+oddjob-mkhomedir
+
+# --- Red Hat Subscription Manager ---
+subscription-manager
+subscription-manager-rhsm-certificates
+
+# --- Satellite klient (REX pull mode) ---
+foreman_ygg_worker
+yggdrasil
+katello-host-tools
+katello-host-tools-tracer
+
+# --- Kontejnerovy runtime ---
+podman
+conmon
+crun
+slirp4netns
+containers-common
+container-selinux
+skopeo
+buildah
+
+# --- Cockpit ---
+cockpit
+cockpit-bridge
+cockpit-system
+cockpit-ws
+
+# --- Cloud-init ---
+cloud-init
+cloud-utils-growpart
+
+# --- Zakladni nastroje ---
+vim-minimal
+less
+tar
+gzip
+xz
+xz-libs
+bzip2
+findutils
+grep
+sed
+gawk
+diffutils
+which
+file
+man-db
+procps-ng
+psmisc
+lsof
+strace
+
+# --- Python (systemove zavislosti) ---
+python3
+python3-libs
+platform-python
+python3-dnf
+python3-rpm
+
+# --- Dalsie knihovny a zavislosti ---
+ncurses
+ncurses-libs
+readline
+zlib
+libxml2
+libxslt
+sqlite-libs
+json-c
+libyaml
+pcre2

@@ -9,11 +9,13 @@ Cloud-native Satellite + IdM demo: RHEL VMs running on OpenShift Virtualization 
 - **Client VM** - Single RHEL 9 client that auto-registers to both Satellite and IdM. Uses `ipa-client-install --force-join --force` (the `--force` flag allows CA cert download over HTTP without pre-existing trust).
 - **Client Pool** (VirtualMachinePool) - Elastic pool of RHEL clients for scaling demos
 - **NetworkPolicy** - SDN-based micro-segmentation blocking client-to-client traffic
+- **Security Playbooks** - Ansible playbooks for OS hardening (fapolicyd, AIDE, sudoers) and RPM whitelist auditing, executed via Satellite REX
 
 ## Important Notes
 
-- **DNS CNAMEs required:** `IDM_FQDN` and `SAT_FQDN` must be set in `.env`. These DNS names need CNAME records pointing to the OpenShift router wildcard (e.g., `idm.yourdomain.com CNAME idm.apps.<cluster>/`). The deploy script templates these into all manifests.
+- **DNS CNAMEs required:** `IDM_FQDN` and `SAT_FQDN` must be set in `.env`. These DNS names need CNAME records pointing to the OpenShift router wildcard (e.g., `idm.example.com CNAME idm.apps.<cluster>/`). The deploy script templates these into all manifests.
 - **RHSM credentials secret required:** All VMs need a `rhsm-credentials` Kubernetes Secret mounted as a disk (serial: `rhsm-creds`). Create it with `./scripts/create-rhsm-secret.sh` before deploying.
+- **Satellite manifest (optional):** For RPM content serving, upload a subscription manifest after Satellite installs via `./scripts/upload-manifest.sh`. Download from access.redhat.com -> Subscription Allocations (must have subscriptions attached). Without it, Satellite works for REX/lifecycle but won't serve packages. Repo sync takes ~10-60 min.
 - **/etc/hosts mapping:** Each VM's `/etc/hosts` must map its FQDN to the real eth0 IP (10.0.2.2 in masquerade mode), NOT 127.0.0.1. IPA rejects loopback.
 - **Client storage:** Clients need at least 30Gi storage (the RHEL 9 cloud image source PVC is ~30Gi).
 - **Templated manifests:** Cloud-init secrets, routes, and client configs contain `__IDM_FQDN__`, `__SAT_FQDN__`, `__IPA_DOMAIN__`, `__IPA_REALM__` placeholders. Always deploy via `./scripts/deploy.sh` (not raw `oc apply`).
@@ -24,7 +26,10 @@ Cloud-native Satellite + IdM demo: RHEL VMs running on OpenShift Virtualization 
 - `k8s/overlays/demo/` - Demo overlay (adds environment label)
 - `scripts/deploy.sh` - Sequenced deployment (IdM first, then Satellite, then clients)
 - `scripts/verify-registration.sh` - Check Satellite + IdM enrollment status
-- `scripts/demo-scenarios.sh` - Run individual demos 1-5
+- `scripts/demo-scenarios.sh` - Run individual demos 1-8
+- `playbooks/hardening.yml` - Ansible playbook: fapolicyd + AIDE + sudoers (RHEL System Roles)
+- `playbooks/rpm-whitelist-audit.yml` - Ansible playbook: RPM package whitelist audit/enforce
+- `playbooks/files/rpm-whitelist.txt` - Approved RPM package list (Golden Image baseline)
 
 ## Kustomize Layout
 
@@ -41,13 +46,14 @@ k8s/overlays/demo/   # Adds environment: demo label
 cp .env.sample .env   # Edit with RHSM creds + DNS names
 source .env
 ./scripts/create-rhsm-secret.sh
+./scripts/upload-manifest.sh         # Optional: enables RPM content serving (run after Satellite installs)
 ./scripts/deploy.sh   # Templates FQDNs into manifests and applies
 
 # Monitor IdM install
-oc exec -n satellite-cloud-native vmi/idm -- tail -f /var/log/idm-setup.log
+sshpass -p "$DEMO_PASSWORD" ssh -o StrictHostKeyChecking=no -o ProxyCommand="virtctl port-forward --stdio vmi/idm.satellite-cloud-native 22" cloud-user@localhost "sudo tail -f /var/log/idm-setup.log"
 
 # Monitor Satellite install
-oc exec -n satellite-cloud-native vmi/satellite -- tail -f /var/log/satellite-setup.log
+sshpass -p "$DEMO_PASSWORD" ssh -o StrictHostKeyChecking=no -o ProxyCommand="virtctl port-forward --stdio vmi/satellite.satellite-cloud-native 22" cloud-user@localhost "sudo tail -f /var/log/satellite-setup.log"
 
 # Deploy single client (Demo 1)
 oc apply -f k8s/base/client-vm.yaml
@@ -61,6 +67,10 @@ oc scale vmpool client-pool -n satellite-cloud-native --replicas=5
 ./scripts/demo-scenarios.sh 3   # Self-healing
 ./scripts/demo-scenarios.sh 4   # IP-agnostic Kerberos
 ./scripts/demo-scenarios.sh 5   # Network micro-segmentation
+./scripts/demo-scenarios.sh 6   # Manual OS hardening (fapolicyd + AIDE + sudoers)
+./scripts/demo-scenarios.sh 7   # Automated hardening via Satellite REX
+./scripts/demo-scenarios.sh 8   # RPM whitelist audit (audit mode)
+./scripts/demo-scenarios.sh 8 enforce  # RPM whitelist audit (enforce mode)
 
 # Verify registrations
 ./scripts/verify-registration.sh
