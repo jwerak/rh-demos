@@ -46,8 +46,9 @@ k8s/overlays/demo/   # Adds environment: demo label
 cp .env.sample .env   # Edit with RHSM creds + DNS names
 source .env
 ./scripts/create-rhsm-secret.sh
-./scripts/upload-manifest.sh         # Optional: enables RPM content serving (run after Satellite installs)
-./scripts/deploy.sh   # Templates FQDNs into manifests and applies
+./scripts/deploy.sh                  # Templates FQDNs into manifests and applies
+                                     # If MANIFEST_PATH is set, waits for Satellite and uploads it automatically
+./scripts/upload-manifest.sh         # Or upload manifest manually after Satellite installs (~20-30 min)
 
 # Monitor IdM install
 sshpass -p "$DEMO_PASSWORD" ssh -o StrictHostKeyChecking=no -o ProxyCommand="virtctl port-forward --stdio vmi/idm.satellite-cloud-native 22" cloud-user@localhost "sudo tail -f /var/log/idm-setup.log"

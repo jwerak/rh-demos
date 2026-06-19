@@ -119,6 +119,47 @@ apply_templated "${BASE_DIR}/client-pool.yaml"
 echo "Client pool deployed with 0 replicas (scale when infra is ready)."
 echo ""
 
+# Phase 5: Upload subscription manifest (optional, requires MANIFEST_PATH)
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+MANIFEST_UPLOADED=false
+if [ -n "${MANIFEST_PATH:-}" ]; then
+  echo "--- Phase 5: Uploading Subscription Manifest ---"
+  echo "MANIFEST_PATH is set. Will upload after Satellite installation completes."
+  echo "This typically takes 20-30 minutes."
+  echo ""
+
+  echo "Waiting for Satellite installation to complete..."
+  while true; do
+    if sshpass -p "${DEMO_PASSWORD}" ssh ${SSH_OPTS} \
+         -o ProxyCommand="virtctl port-forward --stdio vmi/satellite.${NAMESPACE} 22" \
+         cloud-user@localhost \
+         "sudo grep -q 'Satellite Configuration Complete' /var/log/satellite-setup.log" 2>/dev/null; then
+      echo "Satellite installation complete!"
+      break
+    fi
+    echo "  Still installing... ($(date +%H:%M:%S), checking every 60s)"
+    sleep 60
+  done
+  echo ""
+
+  echo "Waiting for background tasks to finish before manifest upload..."
+  for i in $(seq 1 30); do
+    if ! sshpass -p "${DEMO_PASSWORD}" ssh ${SSH_OPTS} \
+         -o ProxyCommand="virtctl port-forward --stdio vmi/satellite.${NAMESPACE} 22" \
+         cloud-user@localhost \
+         "sudo hammer task list --search 'state = running' --per-page 100 2>/dev/null | grep -q running" 2>/dev/null; then
+      break
+    fi
+    echo "  Tasks still running... ($(date +%H:%M:%S), checking every 30s)"
+    sleep 30
+  done
+  echo ""
+
+  echo "Uploading manifest..."
+  "${SCRIPT_DIR}/upload-manifest.sh" && MANIFEST_UPLOADED=true
+  echo ""
+fi
+
 echo "=== Deployment Complete ==="
 echo ""
 echo "Next steps:"
@@ -132,11 +173,15 @@ echo "     sshpass -p '${DEMO_PASSWORD}' ssh -o StrictHostKeyChecking=no -o User
 echo "       -o ProxyCommand=\"virtctl port-forward --stdio vmi/satellite.${NAMESPACE} 22\" \\"
 echo "       cloud-user@localhost 'tail -f /var/log/satellite-setup.log'"
 echo ""
+if [ "${MANIFEST_UPLOADED}" = true ]; then
+echo "  3. Manifest uploaded successfully."
+else
 echo "  3. Upload subscription manifest (once Satellite is installed):"
 echo "     export MANIFEST_PATH=/path/to/manifest.zip"
 echo "     ./scripts/upload-manifest.sh"
+fi
 echo ""
-echo "  4. Scale client pool (once infra + manifest are ready):"
+echo "  4. Scale client pool (once infra is ready):"
 echo "     oc scale vmpool client-pool -n ${NAMESPACE} --replicas=2"
 echo ""
 echo "  5. Access Web UIs:"

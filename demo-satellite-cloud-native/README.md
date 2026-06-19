@@ -85,21 +85,6 @@ source .env
 ./scripts/create-rhsm-secret.sh
 ```
 
-### 4. (Optional) Upload the Satellite Subscription Manifest
-
-If you want Satellite to serve RPM packages to clients (required for `dnf install` via Satellite repos), upload a subscription manifest **after Satellite finishes installing** (~20-30 min):
-
-```bash
-export MANIFEST_PATH=/path/to/manifest.zip
-./scripts/upload-manifest.sh
-```
-
-The script uploads the manifest via SCP, imports it, enables RHEL 9 BaseOS + AppStream repos, syncs them, and republishes the content view. Repo sync takes ~10-60 minutes.
-
-Download your manifest from [access.redhat.com](https://access.redhat.com) -> Subscriptions -> Subscription Allocations. Make sure to **add subscriptions** to the allocation before exporting.
-
-Without a manifest, Satellite still handles host lifecycle, REX, and Ansible — it just won't serve RPM content.
-
 ## Quick Start
 
 ```bash
@@ -115,6 +100,21 @@ oc scale vmpool client-pool -n satellite-cloud-native --replicas=2
 ```
 
 The deploy script validates DNS resolution, checks for the RHSM secret, and substitutes your FQDNs into all manifests before applying them.
+
+### (Optional) Satellite Subscription Manifest
+
+If you want Satellite to serve RPM packages to clients (required for `dnf install` via Satellite repos), set `MANIFEST_PATH` in `.env` before running `deploy.sh`. The deploy script will wait for Satellite to finish installing (~20-30 min) and upload the manifest automatically.
+
+If you didn't set `MANIFEST_PATH` before deploying, you can upload it later manually:
+
+```bash
+export MANIFEST_PATH=/path/to/manifest.zip
+./scripts/upload-manifest.sh
+```
+
+Download your manifest from [access.redhat.com](https://access.redhat.com) -> Subscriptions -> Subscription Allocations. Make sure to **add subscriptions** to the allocation before exporting.
+
+Without a manifest, Satellite still handles host lifecycle, REX, and Ansible — it just won't serve RPM content.
 
 ## Web UI Access
 
@@ -341,6 +341,19 @@ oc console vmi/<name> -n satellite-cloud-native
 # Login: cloud-user / see DEMO_PASSWORD in .env
 # Check: cat /var/log/cloud-init-output.log
 ```
+
+### Redeploying Satellite
+
+Cloud-init only runs on first boot. To redeploy Satellite with updated cloud-init (e.g., after fixing the cloud-init secret), delete the VM and its storage, then re-run `deploy.sh`:
+
+```bash
+oc delete vm/satellite -n satellite-cloud-native
+oc delete pvc/satellite-rootdisk satellite-pulp-data -n satellite-cloud-native
+source .env
+./scripts/deploy.sh
+```
+
+The deploy script uses `oc apply`, so it only recreates deleted resources — IdM, network policy, and client config are unaffected.
 
 ### Satellite installer failing
 ```bash

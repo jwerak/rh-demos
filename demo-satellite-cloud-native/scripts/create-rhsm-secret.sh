@@ -2,6 +2,7 @@
 set -euo pipefail
 
 NAMESPACE="satellite-cloud-native"
+oc new-project "${NAMESPACE}"
 
 if [ -z "${RHSM_ORG:-}" ] || [ -z "${RHSM_ACTIVATION_KEY:-}" ]; then
   echo "Error: RHSM_ORG and RHSM_ACTIVATION_KEY must be set."

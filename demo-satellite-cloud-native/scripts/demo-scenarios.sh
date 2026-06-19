@@ -424,7 +424,7 @@ demo7() {
   echo "In the GUI: Configure → Ansible → Roles → Import"
   echo ""
   run_on_vm satellite "sudo bash -c '
-    rpm -q rhel-system-roles > /dev/null 2>&1 || dnf install -y rhel-system-roles
+    rpm -q rhel-system-roles > /dev/null 2>&1 || satellite-maintain packages install -y rhel-system-roles
     echo \"Syncing Ansible roles into Satellite...\"
     hammer ansible roles sync --proxy-id 1 2>/dev/null || true
     echo \"Available Ansible roles:\"
