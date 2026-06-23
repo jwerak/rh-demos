@@ -1,0 +1,83 @@
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: lc-client
+  namespace: satellite-cloud-native
+  labels:
+    app: lc-client
+    app.kubernetes.io/name: lc-client
+    app.kubernetes.io/part-of: satellite-cloud-native
+    app.kubernetes.io/component: managed-host
+    app.openshift.io/runtime: redhat
+    role: client
+    demo-section: lifecycle
+    demo: satellite-cloud-native
+  annotations:
+    app.openshift.io/connects-to: '[
+      {"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"satellite"},
+      {"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"idm"}
+    ]'
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: lc-client
+        app: lc-client
+        app.kubernetes.io/name: lc-client
+        app.kubernetes.io/part-of: satellite-cloud-native
+        app.kubernetes.io/component: managed-host
+        role: client
+        demo-section: lifecycle
+        demo: satellite-cloud-native
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            - name: rhsm-creds
+              disk:
+                bus: virtio
+              serial: rhsm-creds
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: lc-client-rootdisk
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            secretRef:
+              name: lc-client-cloudinit
+        - name: rhsm-creds
+          secret:
+            secretName: rhsm-credentials
+  dataVolumeTemplates:
+    - metadata:
+        name: lc-client-rootdisk
+      spec:
+        sourceRef:
+          kind: DataSource
+          name: rhel9
+          namespace: openshift-virtualization-os-images
+        storage:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 30Gi

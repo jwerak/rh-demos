@@ -13,7 +13,7 @@ if [ -z "${DEMO_PASSWORD:-}" ] && [ -f "${SCRIPT_DIR}/../.env" ]; then
 fi
 : "${DEMO_PASSWORD:?DEMO_PASSWORD not set. Run: source .env}"
 
-SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
 
 # Run a command on a VM via virtctl port-forward + sshpass SSH
 run_on_vm() {
@@ -123,11 +123,11 @@ usage() {
   echo "  b8  Compliance Verification     - Scan compliant image, compare scores"
   echo "  b   Run all Compliance demos"
   echo ""
-  echo "  Section C: Lifecycle (VMs: lc-client-dev, lc-client-prod)"
-  echo "  c1  Lifecycle Environments      - Create Dev → QA → Prod pipeline"
-  echo "  c2  Content View Promotion      - Publish, promote, show version differences"
-  echo "  c3  Composite Content Views     - Combine multiple content views"
-  echo "      (not yet implemented)"
+  echo "  Section C: Lifecycle (VMs: lc-dev, lc-qa, lc-prod)"
+  echo "  c1  Lifecycle Pipeline          - Dev → QA → Prod with 3 clients"
+  echo "  c2  Package Upgrade Rollout     - demo-app v1.0 → v2.0 through environments"
+  echo "  c3  Composite Content Views     - Add new packages, verify isolation"
+  echo "  c   Run all Lifecycle demos"
   echo ""
   echo "  Utilities:"
   echo "  all    Run sections A + B in sequence"
@@ -1333,6 +1333,770 @@ SUDOERS
   echo "=== Manual hardening complete on ${target} ==="
 }
 
+# =============================================================================
+# Section C: Lifecycle Environment Demos
+# =============================================================================
+
+# Deploy a lifecycle VM for a specific environment.
+# Templates cloud-init and VM manifests from lc-client-* templates.
+deploy_lc_vm() {
+  local env_name="$1"
+  local reg_script="register-lc-${env_name}.sh"
+  local vm_name="lc-${env_name}"
+
+  if oc get vmi "${vm_name}" -n "${NAMESPACE}" > /dev/null 2>&1; then
+    echo "  ${vm_name} already running"
+    return 0
+  fi
+
+  local IPA_DOMAIN
+  IPA_DOMAIN=$(echo "${IDM_FQDN}" | cut -d. -f2-)
+  local IPA_REALM
+  IPA_REALM=$(echo "${IPA_DOMAIN}" | tr '[:lower:]' '[:upper:]')
+
+  sed -e "s|__LC_REG_URL__|http://${SAT_FQDN}/pub/${reg_script}|g" \
+      -e "s|lc-client-cloudinit|lc-${env_name}-cloudinit|g" \
+      -e "s|app: lc-client|app: lc-${env_name}|g" \
+      -e "s|__IDM_FQDN__|${IDM_FQDN}|g" \
+      -e "s|__SAT_FQDN__|${SAT_FQDN}|g" \
+      -e "s|__IPA_DOMAIN__|${IPA_DOMAIN}|g" \
+      -e "s|__IPA_REALM__|${IPA_REALM}|g" \
+      -e "s|__DEMO_PASSWORD__|${DEMO_PASSWORD}|g" \
+      "${BASE_DIR}/lc-client-cloudinit-secret.yaml" | oc apply -f -
+
+  sed -e "s|lc-client|lc-${env_name}|g" \
+      "${BASE_DIR}/lc-client-vm.yaml" | oc apply -f -
+
+  echo "  ${vm_name} deployed (provisioning...)"
+}
+
+# Wait for a lifecycle VM to be ready (Running + SSH accessible)
+wait_lc_vm() {
+  local vm_name="$1"
+  # Wait for DV clone
+  local dv_name="${vm_name}-rootdisk"
+  for i in $(seq 1 60); do
+    local phase
+    phase=$(oc get dv "${dv_name}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null)
+    [ "${phase}" = "Succeeded" ] && break
+    [ "${phase}" = "" ] && break
+    sleep 10
+  done
+  oc wait vmi/"${vm_name}" -n "${NAMESPACE}" --for=jsonpath='{.status.phase}'=Running --timeout=300s 2>/dev/null || true
+  for i in $(seq 1 60); do
+    run_on_vm "${vm_name}" "grep -qE '(Onboarding Finished|registration init script)' /var/log/client-setup.log 2>/dev/null" 2>/dev/null && break
+    sleep 15
+  done
+}
+
+# Build an RPM on the Satellite VM and upload it to the custom repo
+build_and_upload_rpm() {
+  local pkg_name="$1"
+  local pkg_version="$2"
+  local pkg_description="$3"
+
+  run_on_vm satellite "sudo bash -c '
+    REPO_ID=\$(hammer --csv repository list --product Demo-App --organization Demo_Org 2>/dev/null | tail -1 | cut -d, -f1)
+
+    mkdir -p /tmp/${pkg_name}-rpm/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+    cat > /tmp/${pkg_name}-rpm/SPECS/${pkg_name}.spec <<SPEC
+Name:    ${pkg_name}
+Version: ${pkg_version}
+Release: 1%{?dist}
+Summary: ${pkg_description}
+License: MIT
+BuildArch: noarch
+
+%description
+${pkg_description}
+
+%install
+mkdir -p %{buildroot}/usr/bin
+cat > %{buildroot}/usr/bin/${pkg_name} <<SCRIPT
+#!/bin/bash
+echo \"${pkg_description} v${pkg_version} — managed via Red Hat Satellite\"
+SCRIPT
+chmod 755 %{buildroot}/usr/bin/${pkg_name}
+
+%files
+/usr/bin/${pkg_name}
+SPEC
+    rpmbuild --define \"_topdir /tmp/${pkg_name}-rpm\" -bb /tmp/${pkg_name}-rpm/SPECS/${pkg_name}.spec 2>&1 | tail -3
+
+    RPM_FILE=\$(find /tmp/${pkg_name}-rpm/RPMS -name \"*.rpm\" | head -1)
+    if [ -n \"\${RPM_FILE}\" ]; then
+      echo \"Uploading \${RPM_FILE}...\"
+      hammer repository upload-content \
+        --id \"\${REPO_ID}\" \
+        --path \"\${RPM_FILE}\" \
+        --organization \"Demo_Org\" 2>&1 | tail -3
+    fi
+    rm -rf /tmp/${pkg_name}-rpm
+  '"
+}
+
+# Section C: Lifecycle Management Demos
+# These functions are sourced by demo-scenarios.sh. They rely on helpers
+# defined there: run_on_vm, run_on_vm_sudo, upload_to_vm, deploy_lc_vm,
+# wait_lc_vm, build_and_upload_rpm, and variables NAMESPACE, SAT_FQDN,
+# IDM_FQDN, DEMO_PASSWORD, BASE_DIR, SCRIPT_DIR, SSH_OPTS.
+
+demo_c1() {
+  echo "=========================================================="
+  echo "  Demo C1: Lifecycle Environments Pipeline"
+  echo "  (Dev -> QA -> Prod with composite CV + 3 clients)"
+  echo "=========================================================="
+  echo ""
+  echo "This demo builds a complete content pipeline:"
+  echo "  - Dev -> QA -> Prod lifecycle environments"
+  echo "  - RHEL base + custom app composite content view"
+  echo "  - Activation keys per environment"
+  echo "  - 3 client VMs, one per environment"
+  echo ""
+
+  echo "--- Step 1: Creating lifecycle environments (Library -> Dev -> QA -> Prod) ---"
+  echo ""
+  echo "In the GUI: Content -> Lifecycle Environments -> Create Environment Path"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    for ENV_NAME in Dev QA Prod; do
+      if hammer --csv lifecycle-environment list --organization Demo_Org 2>/dev/null | grep -q \"\${ENV_NAME}\"; then
+        echo \"  \${ENV_NAME} already exists\"
+      else
+        case \${ENV_NAME} in
+          Dev)  PRIOR=Library ;;
+          QA)   PRIOR=Dev ;;
+          Prod) PRIOR=QA ;;
+        esac
+        hammer lifecycle-environment create \
+          --name \"\${ENV_NAME}\" \
+          --prior \"\${PRIOR}\" \
+          --organization \"Demo_Org\" 2>/dev/null || true
+        echo \"  Created: \${ENV_NAME} (prior: \${PRIOR})\"
+      fi
+    done
+    echo \"\"
+    echo \"Lifecycle environment chain:\"
+    hammer lifecycle-environment list --organization Demo_Org 2>/dev/null
+  '"
+  echo ""
+
+  echo "--- Step 2: Creating RHEL9-Lifecycle content view ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> Create Content View"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    if hammer --csv content-view list --organization Demo_Org 2>/dev/null | grep -q RHEL9-Lifecycle; then
+      echo \"Content view RHEL9-Lifecycle already exists, skipping\"
+    else
+      hammer content-view create \
+        --name \"RHEL9-Lifecycle\" \
+        --organization \"Demo_Org\" 2>/dev/null
+      hammer content-view add-repository \
+        --organization \"Demo_Org\" \
+        --name \"RHEL9-Lifecycle\" \
+        --repository-id 1 2>/dev/null || true
+      hammer content-view add-repository \
+        --organization \"Demo_Org\" \
+        --name \"RHEL9-Lifecycle\" \
+        --repository-id 2 2>/dev/null || true
+      echo \"Content view RHEL9-Lifecycle created with BaseOS (id:1) + AppStream (id:2)\"
+    fi
+  '"
+  echo ""
+
+  echo "--- Step 3: Creating Demo-App product and repository ---"
+  echo ""
+  echo "In the GUI: Content -> Products -> Create Product"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    if hammer --csv product list --organization Demo_Org 2>/dev/null | grep -q Demo-App; then
+      echo \"Product Demo-App already exists\"
+    else
+      hammer product create \
+        --name \"Demo-App\" \
+        --description \"Demo application packages\" \
+        --organization \"Demo_Org\" 2>/dev/null
+      echo \"Product Demo-App created\"
+    fi
+
+    if hammer --csv repository list --product Demo-App --organization Demo_Org 2>/dev/null | grep -q demo-app-rpms; then
+      echo \"Repository demo-app-rpms already exists\"
+    else
+      hammer repository create \
+        --name \"demo-app-rpms\" \
+        --content-type yum \
+        --product \"Demo-App\" \
+        --organization \"Demo_Org\" 2>/dev/null
+      echo \"Repository demo-app-rpms created\"
+    fi
+  '"
+  echo ""
+
+  echo "--- Step 4: Building demo-app v1.0 RPM ---"
+  echo ""
+  build_and_upload_rpm "demo-app" "1.0" "Demo Application"
+  echo ""
+
+  echo "--- Step 5: Creating Demo-App-CV content view ---"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    if hammer --csv content-view list --organization Demo_Org 2>/dev/null | grep -q Demo-App-CV; then
+      echo \"Content view Demo-App-CV already exists, skipping\"
+    else
+      REPO_ID=\$(hammer --csv repository list --product Demo-App --organization Demo_Org 2>/dev/null | tail -1 | cut -d, -f1)
+      hammer content-view create \
+        --name \"Demo-App-CV\" \
+        --organization \"Demo_Org\" 2>/dev/null
+      hammer content-view add-repository \
+        --name \"Demo-App-CV\" \
+        --repository-id \"\${REPO_ID}\" \
+        --organization \"Demo_Org\" 2>/dev/null
+      echo \"Content view Demo-App-CV created with demo-app-rpms repo\"
+    fi
+  '"
+  echo ""
+
+  echo "--- Step 6: Publishing RHEL9-Lifecycle and Demo-App-CV ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> Select -> Publish New Version"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    echo \"Publishing RHEL9-Lifecycle...\"
+    hammer content-view publish \
+      --name \"RHEL9-Lifecycle\" \
+      --organization \"Demo_Org\" 2>&1 | tail -3
+
+    echo \"Publishing Demo-App-CV...\"
+    hammer content-view publish \
+      --name \"Demo-App-CV\" \
+      --organization \"Demo_Org\" 2>&1 | tail -3
+  '"
+  echo ""
+
+  echo "--- Step 7: Creating RHEL9-FullStack composite content view ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> Create Content View -> Composite"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    if hammer --csv content-view list --organization Demo_Org 2>/dev/null | grep -q RHEL9-FullStack; then
+      echo \"Composite CV RHEL9-FullStack already exists, skipping\"
+    else
+      hammer content-view create \
+        --composite \
+        --name \"RHEL9-FullStack\" \
+        --organization \"Demo_Org\" 2>/dev/null
+      echo \"Composite content view RHEL9-FullStack created\"
+
+      echo \"Adding component: RHEL9-Lifecycle (latest)...\"
+      LC_CV_ID=\$(hammer --csv content-view list --organization Demo_Org 2>/dev/null | grep RHEL9-Lifecycle | head -1 | cut -d, -f1)
+      hammer content-view component add \
+        --composite-content-view \"RHEL9-FullStack\" \
+        --component-content-view-id \"\${LC_CV_ID}\" \
+        --latest \
+        --organization \"Demo_Org\" 2>/dev/null || true
+
+      echo \"Adding component: Demo-App-CV (latest)...\"
+      APP_CV_ID=\$(hammer --csv content-view list --organization Demo_Org 2>/dev/null | grep Demo-App-CV | head -1 | cut -d, -f1)
+      hammer content-view component add \
+        --composite-content-view \"RHEL9-FullStack\" \
+        --component-content-view-id \"\${APP_CV_ID}\" \
+        --latest \
+        --organization \"Demo_Org\" 2>/dev/null || true
+    fi
+  '"
+  echo ""
+
+  echo "--- Step 8: Publishing RHEL9-FullStack composite ---"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    echo \"Publishing RHEL9-FullStack...\"
+    hammer content-view publish \
+      --name \"RHEL9-FullStack\" \
+      --organization \"Demo_Org\" 2>&1 | tail -3
+    echo \"\"
+    echo \"Composite content view versions:\"
+    hammer content-view version list \
+      --content-view RHEL9-FullStack \
+      --organization Demo_Org 2>/dev/null
+  '"
+  echo ""
+
+  echo "--- Step 9: Promoting RHEL9-FullStack to Dev, QA, Prod ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> RHEL9-FullStack -> Versions -> Promote"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    LATEST_VER=\$(hammer --csv content-view version list \
+      --content-view RHEL9-FullStack \
+      --organization Demo_Org \
+      --order \"version DESC\" 2>/dev/null | head -2 | tail -1 | cut -d, -f3)
+    echo \"Promoting version \${LATEST_VER}...\"
+    for ENV in Dev QA Prod; do
+      echo \"  -> \${ENV}\"
+      hammer content-view version promote \
+        --content-view \"RHEL9-FullStack\" \
+        --version \"\${LATEST_VER}\" \
+        --to-lifecycle-environment \"\${ENV}\" \
+        --organization \"Demo_Org\" 2>&1 | tail -2
+    done
+    echo \"\"
+    echo \"Version distribution:\"
+    hammer content-view version list \
+      --content-view RHEL9-FullStack \
+      --organization Demo_Org 2>/dev/null
+  '"
+  echo ""
+
+  echo "--- Step 10: Creating activation keys per environment ---"
+  echo ""
+  echo "In the GUI: Content -> Activation Keys -> Create Activation Key"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    for ENV in dev qa prod; do
+      AK_NAME=\"rhel9-lc-\${ENV}\"
+      ENV_UPPER=\$(echo \"\${ENV}\" | sed \"s/dev/Dev/;s/qa/QA/;s/prod/Prod/\")
+      if hammer --csv activation-key list --organization Demo_Org 2>/dev/null | grep -q \"\${AK_NAME}\"; then
+        echo \"  \${AK_NAME} already exists\"
+      else
+        hammer activation-key create \
+          --name \"\${AK_NAME}\" \
+          --organization \"Demo_Org\" \
+          --lifecycle-environment \"\${ENV_UPPER}\" \
+          --content-view \"RHEL9-FullStack\" \
+          --unlimited-hosts 2>/dev/null
+        echo \"  Created: \${AK_NAME} (env: \${ENV_UPPER}, CV: RHEL9-FullStack)\"
+      fi
+    done
+    echo \"\"
+    echo \"Activation keys:\"
+    hammer activation-key list --organization Demo_Org 2>/dev/null
+  '"
+  echo ""
+
+  echo "--- Step 11: Enabling custom repo override on activation keys ---"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    for ENV in dev qa prod; do
+      AK_NAME=\"rhel9-lc-\${ENV}\"
+      echo \"  Enabling Demo-App repo on \${AK_NAME}...\"
+      hammer activation-key content-override \
+        --name \"\${AK_NAME}\" \
+        --content-label Demo_Org_Demo-App_demo-app-rpms \
+        --override-name enabled \
+        --value 1 \
+        --organization \"Demo_Org\" 2>/dev/null || true
+    done
+    echo \"Done.\"
+  '"
+  echo ""
+
+  echo "--- Step 12: Generating per-environment registration scripts ---"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    for ENV in dev qa prod; do
+      AK_NAME=\"rhel9-lc-\${ENV}\"
+      echo \"  Generating registration script for \${AK_NAME}...\"
+      REG_CMD=\$(hammer host-registration generate-command \
+        --activation-keys \"\${AK_NAME}\" \
+        --force true \
+        --insecure true \
+        --setup-remote-execution-pull true \
+        --jwt-expiration 0 2>/dev/null)
+      echo \"\${REG_CMD}\" > /var/www/html/pub/register-lc-\${ENV}.sh
+      chmod 644 /var/www/html/pub/register-lc-\${ENV}.sh
+      echo \"    Saved to /pub/register-lc-\${ENV}.sh\"
+    done
+  '"
+  echo ""
+
+  echo "--- Step 13: Deploying 3 lifecycle client VMs ---"
+  echo ""
+  deploy_lc_vm dev
+  deploy_lc_vm qa
+  deploy_lc_vm prod
+  echo ""
+
+  echo "--- Step 14: Waiting for VMs to register (this takes several minutes) ---"
+  echo ""
+  wait_lc_vm lc-dev
+  echo "  lc-dev is ready."
+  wait_lc_vm lc-qa
+  echo "  lc-qa is ready."
+  wait_lc_vm lc-prod
+  echo "  lc-prod is ready."
+  echo ""
+
+  echo "--- Step 15: Verifying Satellite registration ---"
+  echo ""
+  echo "In the GUI: Hosts -> All Hosts (filter: name ~ lc-)"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    echo \"Lifecycle hosts:\"
+    hammer host list --search \"name ~ lc-\" --organization Demo_Org 2>/dev/null || true
+  '"
+  echo ""
+
+  echo "--- Step 16: Installing and running demo-app on all environments ---"
+  echo ""
+  for ENV in dev qa prod; do
+    echo "  [lc-${ENV}] Installing demo-app..."
+    run_on_vm_sudo "lc-${ENV}" "dnf install -y demo-app 2>&1 | tail -3" || true
+    echo "  [lc-${ENV}] Running demo-app:"
+    run_on_vm "lc-${ENV}" "demo-app 2>&1" || true
+    echo ""
+  done
+
+  echo "--- Step 17: Satellite UI ---"
+  echo ""
+  SAT_URL=$(oc get route satellite-ui -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null) || SAT_URL="${SAT_FQDN}"
+  echo "=== Lifecycle pipeline complete ==="
+  echo ""
+  echo "Satellite UI: https://${SAT_URL}"
+  echo "  Content -> Lifecycle Environments     (Dev -> QA -> Prod chain)"
+  echo "  Content -> Content Views              (RHEL9-Lifecycle, Demo-App-CV, RHEL9-FullStack)"
+  echo "  Content -> Activation Keys            (rhel9-lc-dev, rhel9-lc-qa, rhel9-lc-prod)"
+  echo "  Hosts -> All Hosts                    (lc-dev, lc-qa, lc-prod)"
+}
+
+demo_c2() {
+  echo "=========================================================="
+  echo "  Demo C2: Content View Versioning & Promotion"
+  echo "  (Controlled rollout of demo-app v2.0)"
+  echo "=========================================================="
+  echo ""
+  echo "This demo shows controlled content rollout across environments:"
+  echo "  - Build a new version of demo-app (v2.0)"
+  echo "  - Promote to Dev first, verify, then QA, then Prod"
+  echo "  - Each environment only sees the version promoted to it"
+  echo ""
+
+  echo "--- Step 1: Building demo-app v2.0 ---"
+  echo ""
+  build_and_upload_rpm "demo-app" "2.0" "Demo Application"
+  echo ""
+
+  echo "--- Step 2: Publishing new Demo-App-CV version ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> Demo-App-CV -> Publish New Version"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    echo \"Publishing Demo-App-CV with demo-app v2.0...\"
+    hammer content-view publish \
+      --name \"Demo-App-CV\" \
+      --organization \"Demo_Org\" 2>&1 | tail -3
+    echo \"\"
+    echo \"Demo-App-CV versions:\"
+    hammer content-view version list \
+      --content-view Demo-App-CV \
+      --organization Demo_Org 2>/dev/null
+  '"
+  echo ""
+
+  echo "--- Step 3: Publishing new RHEL9-FullStack composite version ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> RHEL9-FullStack -> Publish"
+  echo "(Composite auto-pulls latest component versions)"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    echo \"Publishing RHEL9-FullStack (pulls latest Demo-App-CV)...\"
+    hammer content-view publish \
+      --name \"RHEL9-FullStack\" \
+      --organization \"Demo_Org\" 2>&1 | tail -3
+  '"
+  echo ""
+
+  echo "--- Step 4: Promoting new RHEL9-FullStack to Dev ONLY ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> RHEL9-FullStack -> Versions -> Promote to Dev"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    LATEST_VER=\$(hammer --csv content-view version list \
+      --content-view RHEL9-FullStack \
+      --organization Demo_Org \
+      --order \"version DESC\" 2>/dev/null | head -2 | tail -1 | cut -d, -f3)
+    echo \"Promoting version \${LATEST_VER} to Dev only...\"
+    hammer content-view version promote \
+      --content-view \"RHEL9-FullStack\" \
+      --version \"\${LATEST_VER}\" \
+      --to-lifecycle-environment \"Dev\" \
+      --organization \"Demo_Org\" 2>&1 | tail -2
+  '"
+  echo ""
+
+  echo "--- Step 5: Version distribution across environments ---"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    echo \"RHEL9-FullStack versions and their environments:\"
+    hammer content-view version list \
+      --content-view RHEL9-FullStack \
+      --organization Demo_Org 2>/dev/null
+  '"
+  echo ""
+
+  echo "--- Step 6: Verifying Dev sees v2.0 ---"
+  echo ""
+  echo "In the GUI: Hosts -> All Hosts -> lc-dev -> Content -> Packages"
+  echo ""
+  run_on_vm_sudo lc-dev "dnf clean all > /dev/null 2>&1" || true
+  echo "  [lc-dev] Checking for updates:"
+  run_on_vm_sudo lc-dev "dnf check-update demo-app 2>&1" || true
+  echo ""
+  echo "  [lc-dev] Upgrading to v2.0:"
+  run_on_vm_sudo lc-dev "dnf update -y demo-app 2>&1 | tail -5" || true
+  echo "  [lc-dev] Running demo-app:"
+  run_on_vm lc-dev "demo-app 2>&1" || true
+  echo ""
+
+  echo "--- Step 7: Verifying Prod still has v1.0 ---"
+  echo ""
+  run_on_vm_sudo lc-prod "dnf clean all > /dev/null 2>&1" || true
+  echo "  [lc-prod] Checking for updates (should show nothing):"
+  run_on_vm_sudo lc-prod "dnf check-update demo-app 2>&1" || true
+  echo "  [lc-prod] Current version:"
+  run_on_vm lc-prod "demo-app 2>&1" || true
+  echo ""
+
+  echo "--- Step 8: Promoting to QA ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> RHEL9-FullStack -> Versions -> Promote to QA"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    LATEST_VER=\$(hammer --csv content-view version list \
+      --content-view RHEL9-FullStack \
+      --organization Demo_Org \
+      --order \"version DESC\" 2>/dev/null | head -2 | tail -1 | cut -d, -f3)
+    echo \"Promoting version \${LATEST_VER} to QA...\"
+    hammer content-view version promote \
+      --content-view \"RHEL9-FullStack\" \
+      --version \"\${LATEST_VER}\" \
+      --to-lifecycle-environment \"QA\" \
+      --organization \"Demo_Org\" 2>&1 | tail -2
+  '"
+  echo ""
+
+  echo "--- Step 9: Verifying QA sees v2.0 ---"
+  echo ""
+  run_on_vm_sudo lc-qa "dnf clean all > /dev/null 2>&1" || true
+  echo "  [lc-qa] Upgrading to v2.0:"
+  run_on_vm_sudo lc-qa "dnf update -y demo-app 2>&1 | tail -5" || true
+  echo "  [lc-qa] Running demo-app:"
+  run_on_vm lc-qa "demo-app 2>&1" || true
+  echo ""
+
+  echo "--- Step 10: Promoting to Prod ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> RHEL9-FullStack -> Versions -> Promote to Prod"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    LATEST_VER=\$(hammer --csv content-view version list \
+      --content-view RHEL9-FullStack \
+      --organization Demo_Org \
+      --order \"version DESC\" 2>/dev/null | head -2 | tail -1 | cut -d, -f3)
+    echo \"Promoting version \${LATEST_VER} to Prod...\"
+    hammer content-view version promote \
+      --content-view \"RHEL9-FullStack\" \
+      --version \"\${LATEST_VER}\" \
+      --to-lifecycle-environment \"Prod\" \
+      --organization \"Demo_Org\" 2>&1 | tail -2
+  '"
+  echo ""
+
+  echo "--- Step 11: Verifying Prod now has v2.0 ---"
+  echo ""
+  run_on_vm_sudo lc-prod "dnf clean all > /dev/null 2>&1" || true
+  echo "  [lc-prod] Upgrading to v2.0:"
+  run_on_vm_sudo lc-prod "dnf update -y demo-app 2>&1 | tail -5" || true
+  echo "  [lc-prod] Running demo-app:"
+  run_on_vm lc-prod "demo-app 2>&1" || true
+  echo ""
+
+  echo "--- Step 12: Final version comparison ---"
+  echo ""
+  DEV_VER=$(run_on_vm lc-dev "demo-app 2>&1" 2>/dev/null) || DEV_VER="(unavailable)"
+  QA_VER=$(run_on_vm lc-qa "demo-app 2>&1" 2>/dev/null) || QA_VER="(unavailable)"
+  PROD_VER=$(run_on_vm lc-prod "demo-app 2>&1" 2>/dev/null) || PROD_VER="(unavailable)"
+
+  echo "+-------------+------------------------------------------+"
+  echo "| Environment | demo-app output                          |"
+  echo "+-------------+------------------------------------------+"
+  printf "| %-11s | %-40s |\n" "Dev"  "${DEV_VER}"
+  printf "| %-11s | %-40s |\n" "QA"   "${QA_VER}"
+  printf "| %-11s | %-40s |\n" "Prod" "${PROD_VER}"
+  echo "+-------------+------------------------------------------+"
+  echo ""
+  echo "All 3 environments now run demo-app v2.0."
+  echo ""
+
+  echo "--- Step 13: Satellite UI ---"
+  echo ""
+  SAT_URL=$(oc get route satellite-ui -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null) || SAT_URL="${SAT_FQDN}"
+  echo "=== Content view versioning & promotion complete ==="
+  echo ""
+  echo "Satellite UI: https://${SAT_URL}"
+  echo "  Content -> Content Views -> RHEL9-FullStack -> Versions"
+  echo "    (see which version is in each environment)"
+  echo "  Hosts -> All Hosts -> lc-dev / lc-qa / lc-prod"
+  echo "    (see installed packages per host)"
+}
+
+demo_c3() {
+  echo "=========================================================="
+  echo "  Demo C3: Composite Content Views Deep Dive"
+  echo "  (Add new content to a component, watch it flow)"
+  echo "=========================================================="
+  echo ""
+  echo "This demo shows how adding new packages to a component CV"
+  echo "flows through the composite to environments when published"
+  echo "and promoted."
+  echo ""
+
+  echo "--- Step 1: Showing composite structure ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> RHEL9-FullStack -> Content Views tab"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    echo \"RHEL9-FullStack composite structure:\"
+    hammer content-view info \
+      --name \"RHEL9-FullStack\" \
+      --organization \"Demo_Org\" 2>/dev/null
+  '"
+  echo ""
+
+  echo "--- Step 2: Showing repos currently available on lc-dev ---"
+  echo ""
+  echo "In the GUI: Hosts -> All Hosts -> lc-dev -> Content -> Repository Sets"
+  echo ""
+  run_on_vm lc-dev "sudo dnf repolist 2>&1" || true
+  echo ""
+
+  echo "--- Step 3: Building demo-lib v1.0 RPM ---"
+  echo ""
+  echo "Adding a new package to the existing Demo-App repository."
+  echo "This simulates a team adding a new library to the app stack."
+  echo ""
+  build_and_upload_rpm "demo-lib" "1.0" "Demo Library"
+  echo ""
+
+  echo "--- Step 4: Publishing new Demo-App-CV version ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> Demo-App-CV -> Publish New Version"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    echo \"Publishing Demo-App-CV (now includes demo-lib)...\"
+    hammer content-view publish \
+      --name \"Demo-App-CV\" \
+      --organization \"Demo_Org\" 2>&1 | tail -3
+    echo \"\"
+    echo \"Demo-App-CV versions:\"
+    hammer content-view version list \
+      --content-view Demo-App-CV \
+      --organization Demo_Org 2>/dev/null
+  '"
+  echo ""
+
+  echo "--- Step 5: Publishing new RHEL9-FullStack composite ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> RHEL9-FullStack -> Publish"
+  echo "(Composite auto-pulls the latest Demo-App-CV with demo-lib)"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    echo \"Publishing RHEL9-FullStack (pulls latest Demo-App-CV)...\"
+    hammer content-view publish \
+      --name \"RHEL9-FullStack\" \
+      --organization \"Demo_Org\" 2>&1 | tail -3
+  '"
+  echo ""
+
+  echo "--- Step 6: Promoting to Dev only ---"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    LATEST_VER=\$(hammer --csv content-view version list \
+      --content-view RHEL9-FullStack \
+      --organization Demo_Org \
+      --order \"version DESC\" 2>/dev/null | head -2 | tail -1 | cut -d, -f3)
+    echo \"Promoting version \${LATEST_VER} to Dev only...\"
+    hammer content-view version promote \
+      --content-view \"RHEL9-FullStack\" \
+      --version \"\${LATEST_VER}\" \
+      --to-lifecycle-environment \"Dev\" \
+      --organization \"Demo_Org\" 2>&1 | tail -2
+  '"
+  echo ""
+
+  echo "--- Step 7: Installing demo-lib on lc-dev (should succeed) ---"
+  echo ""
+  echo "Dev has the new composite version with demo-lib available."
+  echo ""
+  run_on_vm_sudo lc-dev "dnf clean all > /dev/null 2>&1" || true
+  echo "  [lc-dev] Installing demo-lib:"
+  run_on_vm_sudo lc-dev "dnf install -y demo-lib 2>&1 | tail -5" || true
+  echo "  [lc-dev] Running demo-lib:"
+  run_on_vm lc-dev "demo-lib 2>&1" || true
+  echo ""
+
+  echo "--- Step 8: Attempting demo-lib install on lc-prod (should fail) ---"
+  echo ""
+  echo "Prod still has the old composite version without demo-lib."
+  echo ""
+  run_on_vm_sudo lc-prod "dnf clean all > /dev/null 2>&1" || true
+  echo "  [lc-prod] Attempting to install demo-lib:"
+  run_on_vm_sudo lc-prod "dnf install -y demo-lib 2>&1 | tail -5" || true
+  echo ""
+  echo "  Expected: \"No match for argument: demo-lib\" -- package not yet promoted to Prod."
+  echo ""
+
+  echo "--- Step 9: Promoting to QA and Prod ---"
+  echo ""
+  echo "In the GUI: Content -> Content Views -> RHEL9-FullStack -> Versions -> Promote"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    LATEST_VER=\$(hammer --csv content-view version list \
+      --content-view RHEL9-FullStack \
+      --organization Demo_Org \
+      --order \"version DESC\" 2>/dev/null | head -2 | tail -1 | cut -d, -f3)
+    for ENV in QA Prod; do
+      echo \"Promoting version \${LATEST_VER} to \${ENV}...\"
+      hammer content-view version promote \
+        --content-view \"RHEL9-FullStack\" \
+        --version \"\${LATEST_VER}\" \
+        --to-lifecycle-environment \"\${ENV}\" \
+        --organization \"Demo_Org\" 2>&1 | tail -2
+    done
+    echo \"\"
+    echo \"Final version distribution:\"
+    hammer content-view version list \
+      --content-view RHEL9-FullStack \
+      --organization Demo_Org 2>/dev/null
+  '"
+  echo ""
+
+  echo "--- Step 10: Installing demo-lib on lc-prod (should succeed now) ---"
+  echo ""
+  run_on_vm_sudo lc-prod "dnf clean all > /dev/null 2>&1" || true
+  echo "  [lc-prod] Installing demo-lib:"
+  run_on_vm_sudo lc-prod "dnf install -y demo-lib 2>&1 | tail -5" || true
+  echo "  [lc-prod] Running demo-lib:"
+  run_on_vm lc-prod "demo-lib 2>&1" || true
+  echo ""
+
+  echo "--- Step 11: Satellite UI ---"
+  echo ""
+  SAT_URL=$(oc get route satellite-ui -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null) || SAT_URL="${SAT_FQDN}"
+  echo "=== Composite content views deep dive complete ==="
+  echo ""
+  echo "Key takeaway: adding a package to a component CV (Demo-App-CV)"
+  echo "only reaches client VMs when the composite (RHEL9-FullStack) is"
+  echo "re-published and promoted to that environment."
+  echo ""
+  echo "Satellite UI: https://${SAT_URL}"
+  echo "  Content -> Content Views -> RHEL9-FullStack (composite)"
+  echo "    -> Content Views tab (see component CVs)"
+  echo "    -> Versions tab (see environment distribution)"
+  echo "  Hosts -> All Hosts -> lc-dev / lc-prod"
+  echo "    -> Content -> Packages (compare installed packages)"
+}
+
 # --- Section A wrappers: ensure platform VMs exist ---
 demo_a1() { demo1; }
 demo_a2() { demo2; }
@@ -1347,6 +2111,12 @@ run_section_a() {
   demo_a3; echo ""; echo "---"; echo ""
   demo_a4; echo ""; echo "---"; echo ""
   demo_a5
+}
+
+run_section_c() {
+  demo_c1; echo ""; echo "---"; echo ""
+  demo_c2; echo ""; echo "---"; echo ""
+  demo_c3
 }
 
 run_section_b() {
@@ -1381,6 +2151,12 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     b7|12) demo_b7 ;;
     b8|13) demo_b8 ;;
     b) run_section_b ;;
+
+    # Section C: Lifecycle
+    c1) demo_c1 ;;
+    c2) demo_c2 ;;
+    c3) demo_c3 ;;
+    c) run_section_c ;;
 
     # All sections
     all)

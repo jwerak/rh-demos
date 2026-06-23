@@ -96,6 +96,12 @@ oc scale vmpool client-pool -n satellite-cloud-native --replicas=5
 ./scripts/demo-scenarios.sh b8   # Compliance verification (vanilla vs CIS image)
 ./scripts/demo-scenarios.sh b    # Run all Compliance demos
 
+# Section C: Lifecycle (VMs: lc-client)
+./scripts/demo-scenarios.sh c1   # Lifecycle environments pipeline (Dev → QA → Prod)
+./scripts/demo-scenarios.sh c2   # Content view versioning & promotion
+./scripts/demo-scenarios.sh c3   # Composite content views (RHEL + custom app)
+./scripts/demo-scenarios.sh c    # Run all Lifecycle demos
+
 # Old numeric IDs (1-13) still work as aliases
 
 # Verify registrations

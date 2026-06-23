@@ -2,6 +2,58 @@
 
 Red Hat Satellite + IdM (FreeIPA) + RHEL clients running entirely as KubeVirt VMs on the OpenShift pod network. Zero Layer 2 networking, zero PXE — everything is cloud-init driven.
 
+- [Cloud-Native RHEL Infrastructure on OpenShift Virtualization](#cloud-native-rhel-infrastructure-on-openshift-virtualization)
+  - [Architecture](#architecture)
+  - [Prerequisites](#prerequisites)
+  - [Setup](#setup)
+    - [1. Create DNS CNAME Records](#1-create-dns-cname-records)
+    - [2. Configure Environment](#2-configure-environment)
+    - [3. Create the RHSM Credentials Secret](#3-create-the-rhsm-credentials-secret)
+  - [Quick Start](#quick-start)
+    - [(Optional) Satellite Subscription Manifest](#optional-satellite-subscription-manifest)
+  - [Web UI Access](#web-ui-access)
+    - [URLs](#urls)
+    - [Satellite Web UI](#satellite-web-ui)
+    - [IdM (FreeIPA) Web UI](#idm-freeipa-web-ui)
+    - [SSH Access to VMs](#ssh-access-to-vms)
+  - [Demo Scenarios](#demo-scenarios)
+    - [Section A: Platform (VMs: client, client-pool)](#section-a-platform-vms-client-client-pool)
+      - [Demo a1: Zero-Touch Provisioning](#demo-a1-zero-touch-provisioning)
+      - [Demo a2: Elastic Scaling](#demo-a2-elastic-scaling)
+      - [Demo a3: Self-Healing](#demo-a3-self-healing)
+      - [Demo a4: IP-Agnostic Kerberos](#demo-a4-ip-agnostic-kerberos)
+      - [Demo a5: Network Micro-Segmentation](#demo-a5-network-micro-segmentation)
+    - [Section B: Compliance (VMs: sec-client, compliant-client)](#section-b-compliance-vms-sec-client-compliant-client)
+      - [Demo b1: Manual OS Hardening](#demo-b1-manual-os-hardening)
+      - [Demo b2: Automated Hardening via Satellite REX](#demo-b2-automated-hardening-via-satellite-rex)
+      - [Demo b3: RPM Package Whitelist Audit](#demo-b3-rpm-package-whitelist-audit)
+      - [Demo b4: CLI OpenSCAP Compliance Scan](#demo-b4-cli-openscap-compliance-scan)
+      - [Demo b5: Satellite SCAP Compliance Dashboard](#demo-b5-satellite-scap-compliance-dashboard)
+      - [Demo b6: CIS Level 2 Remediation](#demo-b6-cis-level-2-remediation)
+      - [Demo b7: Deploy CIS-Hardened VM Image](#demo-b7-deploy-cis-hardened-vm-image)
+      - [Demo b8: Compliance Verification](#demo-b8-compliance-verification)
+    - [Section C: Lifecycle (VMs: lc-client)](#section-c-lifecycle-vms-lc-client)
+      - [Demo c1: Lifecycle Environments Pipeline](#demo-c1-lifecycle-environments-pipeline)
+      - [Demo c2: Content View Versioning \& Promotion](#demo-c2-content-view-versioning--promotion)
+      - [Demo c3: Composite Content Views](#demo-c3-composite-content-views)
+  - [Resource Requirements](#resource-requirements)
+  - [Project Structure](#project-structure)
+    - [Playbooks](#playbooks)
+    - [Kustomize](#kustomize)
+  - [Networking](#networking)
+  - [Troubleshooting](#troubleshooting)
+    - [VM not starting](#vm-not-starting)
+    - [Cloud-init not running](#cloud-init-not-running)
+    - [Redeploying Satellite](#redeploying-satellite)
+    - [Satellite installer failing](#satellite-installer-failing)
+    - [IdM installer failing](#idm-installer-failing)
+    - [Client not registering](#client-not-registering)
+    - [DataVolume stuck importing](#datavolume-stuck-importing)
+  - [Clean Up](#clean-up)
+  - [Default Credentials](#default-credentials)
+  - [References](#references)
+
+
 ## Architecture
 
 ```
@@ -374,16 +426,57 @@ Scans both the vanilla client and the CIS-hardened VM, uploads results to Satell
 #   Satellite UI → Hosts → Compliance → Reports
 ```
 
+### Section C: Lifecycle (VMs: lc-client)
+
+#### Demo c1: Lifecycle Environments Pipeline
+
+Creates a Dev → QA → Prod lifecycle pipeline in Satellite, creates a dedicated content view and activation key, and deploys a client into the Dev environment.
+
+```bash
+./scripts/demo-scenarios.sh c1
+
+# View in Satellite UI:
+#   Content → Lifecycle Environments (see Dev → QA → Prod chain)
+#   Content → Content Views → RHEL9-Lifecycle
+```
+
+#### Demo c2: Content View Versioning & Promotion
+
+Demonstrates how different lifecycle environments serve different content view versions. Creates an errata exclude filter, publishes a new version, and promotes it selectively through environments while moving the client between them.
+
+```bash
+./scripts/demo-scenarios.sh c2
+
+# View in Satellite UI:
+#   Content → Content Views → RHEL9-Lifecycle → Versions
+#   Shows which version is active in each environment
+```
+
+#### Demo c3: Composite Content Views
+
+Creates a custom product with a sample RPM (`demo-app`), bundles it with RHEL base content in a composite content view (`RHEL9-FullStack`), and installs the custom package on the client.
+
+```bash
+./scripts/demo-scenarios.sh c3
+
+# View in Satellite UI:
+#   Content → Content Views → RHEL9-FullStack (composite)
+#   Content → Products → Demo-App
+```
+
+> **Note:** Custom product repositories are not auto-enabled on clients. The demo enables them via `subscription-manager repos --enable`.
+
 ## Resource Requirements
 
-| VM | vCPUs | RAM | Storage |
-|----|-------|-----|---------|
-| IdM | 2 | 4 Gi | 30 Gi |
-| Satellite | 4 | 22 Gi | 100 Gi root + 150 Gi data |
-| Client (each) | 1 | 2 Gi | 30 Gi |
-| Compliant Client | 1 | 2 Gi | 30 Gi |
+| VM               | vCPUs | RAM   | Storage                   |
+| ---------------- | ----- | ----- | ------------------------- |
+| IdM              | 2     | 4 Gi  | 30 Gi                     |
+| Satellite        | 4     | 22 Gi | 100 Gi root + 150 Gi data |
+| Client (each)    | 1     | 2 Gi  | 30 Gi                     |
+| Compliant Client | 1     | 2 Gi  | 30 Gi                     |
+| LC Client        | 1     | 2 Gi  | 30 Gi                     |
 
-**Total (infra + 2 clients + compliant):** 9 vCPUs, 32 Gi RAM, 370 Gi storage
+**Total (infra + all clients):** 10 vCPUs, 34 Gi RAM, 400 Gi storage
 
 ## Project Structure
 
@@ -509,13 +602,13 @@ oc delete vm/client -n satellite-cloud-native
 
 ## Default Credentials
 
-| Service | Username | Password |
-|---------|----------|----------|
-| Satellite Web UI | admin | `<DEMO_PASSWORD>` |
-| IdM admin | admin | `<DEMO_PASSWORD>` |
-| IdM Directory Manager | - | `<DEMO_PASSWORD>` |
-| Demo user (IdM) | demouser | `<DEMO_PASSWORD>` |
-| VM SSH (all VMs) | cloud-user | `<DEMO_PASSWORD>` |
+| Service               | Username   | Password          |
+| --------------------- | ---------- | ----------------- |
+| Satellite Web UI      | admin      | `<DEMO_PASSWORD>` |
+| IdM admin             | admin      | `<DEMO_PASSWORD>` |
+| IdM Directory Manager | -          | `<DEMO_PASSWORD>` |
+| Demo user (IdM)       | demouser   | `<DEMO_PASSWORD>` |
+| VM SSH (all VMs)      | cloud-user | `<DEMO_PASSWORD>` |
 
 > All services use the same password. Run `source .env` to load it, or check `.env` for the value.
 >

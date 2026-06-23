@@ -26,6 +26,9 @@ resources:
   - sec-client-vm.yaml
   # CIS-hardened Client (Demo b7/b8)
   - compliant-client-vm.yaml
+  # Lifecycle Client templates (Section C — deployed dynamically by demo_c1)
+  # lc-client-cloudinit-secret.yaml and lc-client-vm.yaml are templates,
+  # applied via sed substitution in demo-scenarios.sh, not directly.
   # Network segmentation
   - network-policy.yaml
 

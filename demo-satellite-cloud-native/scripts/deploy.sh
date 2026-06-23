@@ -116,6 +116,7 @@ echo ""
 echo "--- Phase 4: Deploying Client Configuration ---"
 apply_templated "${BASE_DIR}/client-cloudinit-secret.yaml"
 apply_templated "${BASE_DIR}/client-pool.yaml"
+apply_templated "${BASE_DIR}/lc-client-cloudinit-secret.yaml"
 echo "Client pool deployed with 0 replicas (scale when infra is ready)."
 echo ""
 
