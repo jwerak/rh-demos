@@ -34,7 +34,7 @@ Red Hat Satellite + IdM (FreeIPA) + RHEL clients running entirely as KubeVirt VM
       - [Demo b8: Compliance Verification](#demo-b8-compliance-verification)
     - [Section C: Lifecycle (VMs: lc-client)](#section-c-lifecycle-vms-lc-client)
       - [Demo c1: Lifecycle Environments Pipeline](#demo-c1-lifecycle-environments-pipeline)
-      - [Demo c2: Content View Versioning \& Promotion](#demo-c2-content-view-versioning--promotion)
+      - [Demo c2: Content View Versioning  Promotion](#demo-c2-content-view-versioning--promotion)
       - [Demo c3: Composite Content Views](#demo-c3-composite-content-views)
   - [Resource Requirements](#resource-requirements)
   - [Project Structure](#project-structure)
@@ -52,7 +52,6 @@ Red Hat Satellite + IdM (FreeIPA) + RHEL clients running entirely as KubeVirt VM
   - [Clean Up](#clean-up)
   - [Default Credentials](#default-credentials)
   - [References](#references)
-
 
 ## Architecture
 
@@ -416,7 +415,7 @@ Deploys a RHEL 9 VM from a qcow2 image pre-hardened with CIS Level 2 profile usi
 
 #### Demo b8: Compliance Verification
 
-Scans both the vanilla client and the CIS-hardened VM, uploads results to Satellite, and prints a side-by-side comparison table. Demonstrates the dramatic difference between post-remediation compliance (~60%) and a purpose-built CIS image (~95%).
+Scans both the vanilla client and the CIS-hardened VM, uploads results to Satellite, and prints a side-by-side comparison table. Demonstrates the dramatic difference between post-remediation compliance (~~60%) and a purpose-built CIS image (~~95%).
 
 ```bash
 ./scripts/demo-scenarios.sh b8
@@ -426,47 +425,114 @@ Scans both the vanilla client and the CIS-hardened VM, uploads results to Satell
 #   Satellite UI → Hosts → Compliance → Reports
 ```
 
-### Section C: Lifecycle (VMs: lc-client)
+### Section C: Lifecycle (VMs: lc-dev, lc-qa, lc-prod)
+
+```
+Section C Architecture:
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                      Satellite                          │
+  │                                                         │
+  │  Lifecycle:  Library ──► Dev ──► QA ──► Prod            │
+  │                                                         │
+  │  Content Views:                                         │
+  │    RHEL9-Lifecycle  ─┐  (BaseOS + AppStream)            │
+  │                      ├──► RHEL9-FullStack (composite)   │
+  │    Demo-App-CV  ─────┘  (demo-app custom RPM)           │
+  │                           │                             │
+  │                     promoted to Dev, QA, Prod            │
+  │                                                         │
+  │  Activation Keys:                                       │
+  │    rhel9-lc-dev  ──► Dev  / RHEL9-FullStack             │
+  │    rhel9-lc-qa   ──► QA   / RHEL9-FullStack             │
+  │    rhel9-lc-prod ──► Prod / RHEL9-FullStack             │
+  └──────────┬──────────────────┬───────────────┬───────────┘
+             │                  │               │
+             ▼                  ▼               ▼
+        ┌─────────┐       ┌─────────┐     ┌──────────┐
+        │ lc-dev  │       │  lc-qa  │     │ lc-prod  │
+        │ Dev env │       │ QA env  │     │ Prod env │
+        └─────────┘       └─────────┘     └──────────┘
+```
 
 #### Demo c1: Lifecycle Environments Pipeline
 
-Creates a Dev → QA → Prod lifecycle pipeline in Satellite, creates a dedicated content view and activation key, and deploys a client into the Dev environment.
+Creates a Dev → QA → Prod lifecycle pipeline, builds a composite content view bundling RHEL base packages with a custom `demo-app` RPM, deploys 3 client VMs (one per environment), and verifies all 3 can install `demo-app v1.0`.
 
 ```bash
 ./scripts/demo-scenarios.sh c1
 
 # View in Satellite UI:
 #   Content → Lifecycle Environments (see Dev → QA → Prod chain)
-#   Content → Content Views → RHEL9-Lifecycle
+#   Content → Content Views → RHEL9-FullStack (composite)
+#   Content → Activation Keys (rhel9-lc-dev, rhel9-lc-qa, rhel9-lc-prod)
+#   Hosts → All Hosts (lc-dev, lc-qa, lc-prod each in its environment)
 ```
 
 #### Demo c2: Content View Versioning & Promotion
 
-Demonstrates how different lifecycle environments serve different content view versions. Creates an errata exclude filter, publishes a new version, and promotes it selectively through environments while moving the client between them.
+Builds `demo-app v2.0`, publishes and promotes it to Dev first — showing that Dev gets the update while Prod stays on v1.0. Then promotes through QA → Prod, verifying each environment gets the update only after explicit promotion.
+
+```
+Demo c2 — Controlled package rollout:
+
+  1. Upload demo-app v2.0, publish new CV version
+  2. Promote to Dev only:
+
+     Dev:   RHEL9-FullStack v3.0  ──► demo-app 2.0 available  ✓
+     QA:    RHEL9-FullStack v2.0  ──► demo-app 1.0 (unchanged) ✗
+     Prod:  RHEL9-FullStack v2.0  ──► demo-app 1.0 (unchanged) ✗
+
+  3. Promote to QA:   lc-qa  can now update to v2.0  ✓
+  4. Promote to Prod:  lc-prod can now update to v2.0  ✓
+```
 
 ```bash
 ./scripts/demo-scenarios.sh c2
 
 # View in Satellite UI:
-#   Content → Content Views → RHEL9-Lifecycle → Versions
-#   Shows which version is active in each environment
+#   Content → Content Views → RHEL9-FullStack → Versions
+#   (shows which version is active in Dev / QA / Prod)
 ```
 
 #### Demo c3: Composite Content Views
 
-Creates a custom product with a sample RPM (`demo-app`), bundles it with RHEL base content in a composite content view (`RHEL9-FullStack`), and installs the custom package on the client.
+Demonstrates how adding a new package (`demo-lib`) to a component content view flows through the composite. The package is available on `lc-dev` (promoted) but NOT on `lc-prod` (not yet promoted), proving content isolation across lifecycle environments.
+
+```
+Demo c3 — Composite content flow:
+
+  ┌────────────────────────────────────────┐
+  │       RHEL9-FullStack (composite)      │
+  │                                        │
+  │  ┌────────────────┐ ┌───────────────┐  │
+  │  │ RHEL9-Lifecycle │ │ Demo-App-CV   │  │
+  │  │ (BaseOS +      │ │ (demo-app +   │  │
+  │  │  AppStream)    │ │  demo-lib) ◄──┼──┼── new package added here
+  │  └────────────────┘ └───────────────┘  │
+  └────────────────────────────────────────┘
+           │                     │
+     republish composite    promote to Dev
+           │                     │
+           ▼                     ▼
+      lc-dev: dnf install demo-lib  ✓  (promoted)
+      lc-prod: dnf install demo-lib ✗  (not yet promoted)
+```
 
 ```bash
 ./scripts/demo-scenarios.sh c3
 
 # View in Satellite UI:
 #   Content → Content Views → RHEL9-FullStack (composite)
-#   Content → Products → Demo-App
+#     → Content Views tab (component CVs)
+#     → Versions tab (environment distribution)
+#   Content → Products → Demo-App (custom repo with demo-app + demo-lib)
 ```
 
-> **Note:** Custom product repositories are not auto-enabled on clients. The demo enables them via `subscription-manager repos --enable`.
+> **Note:** Custom product repositories are not auto-enabled on clients. The demo enables them via `subscription-manager repos --enable` on the activation key.
 
 ## Resource Requirements
+
 
 | VM               | vCPUs | RAM   | Storage                   |
 | ---------------- | ----- | ----- | ------------------------- |
@@ -475,6 +541,7 @@ Creates a custom product with a sample RPM (`demo-app`), bundles it with RHEL ba
 | Client (each)    | 1     | 2 Gi  | 30 Gi                     |
 | Compliant Client | 1     | 2 Gi  | 30 Gi                     |
 | LC Client        | 1     | 2 Gi  | 30 Gi                     |
+
 
 **Total (infra + all clients):** 10 vCPUs, 34 Gi RAM, 400 Gi storage
 
@@ -539,12 +606,14 @@ All VMs use **masquerade mode** on the default pod network (OVN-Kubernetes):
 ## Troubleshooting
 
 ### VM not starting
+
 ```bash
 oc describe vm/<name> -n satellite-cloud-native
 oc get events -n satellite-cloud-native --sort-by='.lastTimestamp'
 ```
 
 ### Cloud-init not running
+
 ```bash
 oc console vmi/<name> -n satellite-cloud-native
 # Login: cloud-user / see DEMO_PASSWORD in .env
@@ -565,18 +634,21 @@ source .env
 The deploy script uses `oc apply`, so it only recreates deleted resources — IdM, network policy, and client config are unaffected.
 
 ### Satellite installer failing
+
 ```bash
 oc exec -n satellite-cloud-native vmi/satellite -- cat /var/log/satellite-setup.log
 oc exec -n satellite-cloud-native vmi/satellite -- cat /var/log/foreman-installer/satellite.log
 ```
 
 ### IdM installer failing
+
 ```bash
 oc exec -n satellite-cloud-native vmi/satellite -- cat /var/log/idm-setup.log
 oc exec -n satellite-cloud-native vmi/idm -- cat /var/log/ipaserver-install.log
 ```
 
 ### Client not registering
+
 ```bash
 oc exec -n satellite-cloud-native vmi/client -- cat /var/log/client-setup.log
 oc exec -n satellite-cloud-native vmi/client -- subscription-manager status
@@ -584,6 +656,7 @@ oc exec -n satellite-cloud-native vmi/client -- ipa-client-install --uninstall  
 ```
 
 ### DataVolume stuck importing
+
 ```bash
 oc get dv -n satellite-cloud-native
 oc describe dv/<name> -n satellite-cloud-native
@@ -602,6 +675,7 @@ oc delete vm/client -n satellite-cloud-native
 
 ## Default Credentials
 
+
 | Service               | Username   | Password          |
 | --------------------- | ---------- | ----------------- |
 | Satellite Web UI      | admin      | `<DEMO_PASSWORD>` |
@@ -609,6 +683,7 @@ oc delete vm/client -n satellite-cloud-native
 | IdM Directory Manager | -          | `<DEMO_PASSWORD>` |
 | Demo user (IdM)       | demouser   | `<DEMO_PASSWORD>` |
 | VM SSH (all VMs)      | cloud-user | `<DEMO_PASSWORD>` |
+
 
 > All services use the same password. Run `source .env` to load it, or check `.env` for the value.
 >
@@ -621,3 +696,4 @@ oc delete vm/client -n satellite-cloud-native
 - [Red Hat IdM Installation Guide](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/installing_identity_management)
 - [KubeVirt VirtualMachinePool](https://kubevirt.io/user-guide/virtual_machines/pool/)
 - [Kubernetes NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
+
