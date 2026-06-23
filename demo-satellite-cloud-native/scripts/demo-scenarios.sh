@@ -52,31 +52,85 @@ upload_to_vm() {
     cloud-user@localhost "sudo bash -c 'cat > ${dest_path}'"
 }
 
+# Ensure a VM exists and is running. Deploys it if missing, waits for SSH.
+# Usage: ensure_vm <vm-name> <yaml-file>
+ensure_vm() {
+  local vm_name="$1"
+  local yaml_file="$2"
+  if oc get vmi "${vm_name}" -n "${NAMESPACE}" > /dev/null 2>&1; then
+    return 0
+  fi
+  echo "  Deploying ${vm_name}..."
+  oc apply -f "${yaml_file}"
+  echo "  Waiting for ${vm_name} to start..."
+  # Wait for DV clone if needed
+  local dv_name="${vm_name}-rootdisk"
+  if oc get dv "${dv_name}" -n "${NAMESPACE}" > /dev/null 2>&1; then
+    for i in $(seq 1 60); do
+      local phase
+      phase=$(oc get dv "${dv_name}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null)
+      [ "${phase}" = "Succeeded" ] && break
+      sleep 10
+    done
+  fi
+  oc wait vmi/"${vm_name}" -n "${NAMESPACE}" --for=jsonpath='{.status.phase}'=Running --timeout=300s 2>/dev/null || true
+  echo "  Waiting for ${vm_name} cloud-init to complete..."
+  for i in $(seq 1 60); do
+    run_on_vm "${vm_name}" "grep -qE '(Onboarding Finished|Satellite Registration Complete|registration init script)' /var/log/client-setup.log 2>/dev/null" 2>/dev/null && break
+    sleep 15
+  done
+  echo "  ${vm_name} is ready."
+}
+
+# Ensure pool has at least N replicas
+ensure_pool() {
+  local pool_name="$1"
+  local min_replicas="$2"
+  local current
+  current=$(oc get vmpool "${pool_name}" -n "${NAMESPACE}" -o jsonpath='{.spec.replicas}' 2>/dev/null) || current=0
+  if [ "${current}" -lt "${min_replicas}" ]; then
+    echo "  Scaling ${pool_name} to ${min_replicas} replicas..."
+    oc scale vmpool "${pool_name}" -n "${NAMESPACE}" --replicas="${min_replicas}"
+    sleep 5
+    for vm in $(oc get vmi -n "${NAMESPACE}" -l "kubevirt.io/vmpool=${pool_name}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+      oc wait vmi/"${vm}" -n "${NAMESPACE}" --for=jsonpath='{.status.phase}'=Running --timeout=300s 2>/dev/null || true
+    done
+  fi
+}
+
 usage() {
-  echo "Usage: $0 <demo-number>"
+  echo "Usage: $0 <demo-id>"
   echo ""
-  echo "Demos:"
-  echo "  1  Zero-Touch Provisioning     - Deploy a single client, watch it auto-register"
-  echo "  2  Elastic Scaling             - Scale client pool from 0 to 5"
-  echo "  3  Self-Healing                - Kill a VM, watch it auto-recover"
-  echo "  4  IP-Agnostic Kerberos        - Prove Kerberos works with duplicate IPs"
-  echo "  5  Network Micro-Segmentation  - Verify SDN isolation between clients"
+  echo "Each section is independent — runs its own client VMs."
   echo ""
-  echo "  Security demos:"
-  echo "  6  Manual OS Hardening         - fapolicyd + AIDE + auditor sudoers"
-  echo "  7  Automated Hardening (REX)   - Ansible playbook via Satellite"
-  echo "  8  RPM Whitelist Audit         - Package compliance check via Satellite"
-  echo "     Usage: $0 8 [audit|enforce]  (default: audit)"
+  echo "  Section A: Platform (VMs: client, client-pool)"
+  echo "  a1  Zero-Touch Provisioning     - Deploy a single client, watch it auto-register"
+  echo "  a2  Elastic Scaling             - Scale client pool from 0 to 5"
+  echo "  a3  Self-Healing                - Kill a VM, watch it auto-recover"
+  echo "  a4  IP-Agnostic Kerberos        - Prove Kerberos works with duplicate IPs"
+  echo "  a5  Network Micro-Segmentation  - Verify SDN isolation between clients"
+  echo "  a   Run all Platform demos"
   echo ""
+  echo "  Section B: Compliance (VMs: sec-client, compliant-client)"
+  echo "  b1  Manual OS Hardening         - fapolicyd + AIDE + auditor sudoers"
+  echo "  b2  Automated Hardening (REX)   - Ansible playbook via Satellite"
+  echo "  b3  RPM Whitelist Audit         - Package compliance check via Satellite"
+  echo "      Usage: $0 b3 [audit|enforce]  (default: audit)"
+  echo "  b4  CLI OpenSCAP Scan           - CIS L2 scan, download HTML report"
+  echo "  b5  Satellite SCAP Dashboard    - Configure Satellite SCAP, view in UI"
+  echo "  b6  CIS Remediation             - Apply CIS L2 fixes via Satellite REX"
+  echo "  b7  Deploy Compliant Image      - Boot VM from CIS-hardened qcow2"
+  echo "  b8  Compliance Verification     - Scan compliant image, compare scores"
+  echo "  b   Run all Compliance demos"
   echo ""
-  echo "  Compliance demos:"
-  echo "  9   CLI OpenSCAP Scan         - CIS L2 scan, download HTML report"
-  echo "  10  Satellite SCAP Dashboard  - Configure Satellite SCAP, view in UI"
-  echo "  11  CIS Remediation           - Apply CIS L2 fixes via Satellite REX"
-  echo "  12  Deploy Compliant Image    - Boot VM from CIS-hardened qcow2"
-  echo "  13  Compliance Verification   - Scan compliant image, compare scores"
+  echo "  Section C: Lifecycle (VMs: lc-client-dev, lc-client-prod)"
+  echo "  c1  Lifecycle Environments      - Create Dev → QA → Prod pipeline"
+  echo "  c2  Content View Promotion      - Publish, promote, show version differences"
+  echo "  c3  Composite Content Views     - Combine multiple content views"
+  echo "      (not yet implemented)"
   echo ""
-  echo "  all  Run all demos in sequence"
+  echo "  Utilities:"
+  echo "  all    Run sections A + B in sequence"
   exit 1
 }
 
@@ -1118,8 +1172,14 @@ SCAPCFG
 
     echo ""
     echo "Uploading vanilla client scan to Satellite..."
-    if oc get vmi/client -n "${NAMESPACE}" > /dev/null 2>&1; then
-      run_on_vm_sudo client "foreman_scap_client ${POLICY_ID}" || true
+    local vanilla_vm=""
+    if oc get vmi/sec-client -n "${NAMESPACE}" > /dev/null 2>&1; then
+      vanilla_vm="sec-client"
+    elif oc get vmi/client -n "${NAMESPACE}" > /dev/null 2>&1; then
+      vanilla_vm="client"
+    fi
+    if [ -n "${vanilla_vm}" ]; then
+      run_on_vm_sudo "${vanilla_vm}" "foreman_scap_client ${POLICY_ID}" || true
     fi
     echo ""
   else
@@ -1133,8 +1193,14 @@ SCAPCFG
   VANILLA_PASS="N/A"
   VANILLA_FAIL="N/A"
   VANILLA_PCT="N/A"
-  if oc get vmi/client -n "${NAMESPACE}" > /dev/null 2>&1; then
-    SCAN_VANILLA=$(run_on_vm_sudo client "
+  local vanilla_vm=""
+  if oc get vmi/sec-client -n "${NAMESPACE}" > /dev/null 2>&1; then
+    vanilla_vm="sec-client"
+  elif oc get vmi/client -n "${NAMESPACE}" > /dev/null 2>&1; then
+    vanilla_vm="client"
+  fi
+  if [ -n "${vanilla_vm}" ]; then
+    SCAN_VANILLA=$(run_on_vm_sudo "${vanilla_vm}" "
       rpm -q openscap-scanner > /dev/null 2>&1 || dnf install -y openscap-scanner scap-security-guide > /dev/null 2>&1
       oscap xccdf eval \
         --profile ${SCAP_PROFILE} \
@@ -1150,7 +1216,7 @@ SCAPCFG
     VANILLA_PASS="${VANILLA_PASS}"
     VANILLA_FAIL="${VANILLA_FAIL}"
   else
-    echo "(Vanilla client VM not running — showing CIS image results only)"
+    echo "(No vanilla client VM running — showing CIS image results only)"
     echo ""
   fi
 
@@ -1182,35 +1248,145 @@ SCAPCFG
   echo "  Navigate to: Hosts → Compliance → Reports"
 }
 
+# --- Section B wrappers: ensure sec-client exists before compliance demos ---
+# Demos b1-b6 use sec-client; b7 deploys compliant-client; b8 needs both.
+# The original demo functions (demo6-demo13) reference "client" by name.
+# We override TARGET_VM where supported, or deploy sec-client and let the
+# function run against it.
+
+ensure_sec_client() {
+  ensure_vm sec-client "${BASE_DIR}/sec-client-vm.yaml"
+}
+
+# Section B uses sec-client as the target VM name for demos that accept it.
+# For demos that hardcode "client", sec-client works because it has role:client.
+
+demo_b1() { ensure_sec_client; SEC_VM=sec-client demo6_on sec-client; }
+demo_b2() { ensure_sec_client; demo7; }
+demo_b3() { ensure_sec_client; demo8 "$@"; }
+demo_b4() { ensure_sec_client; demo9 "" sec-client; }
+demo_b5() { ensure_sec_client; demo10; }
+demo_b6() { ensure_sec_client; demo11; }
+demo_b7() { demo12; }
+demo_b8() { ensure_sec_client; demo13; }
+
+# demo6 variant that targets a specific VM
+demo6_on() {
+  local target="${1:-client}"
+  echo "============================================"
+  echo "  Demo B1: Manual OS Hardening"
+  echo "  (fapolicyd + AIDE + Auditor sudoers)"
+  echo "============================================"
+  echo ""
+  echo "Target VM: ${target}"
+  echo ""
+
+  if ! oc get vmi/"${target}" -n "${NAMESPACE}" > /dev/null 2>&1; then
+    echo "ERROR: ${target} VM not found."
+    return 1
+  fi
+
+  echo "This demo shows manual security hardening on a single client VM."
+  echo ""
+  echo "Defense-in-depth reasoning:"
+  echo "  - fapolicyd blocks execution of unapproved binaries (SHA-256 integrity)"
+  echo "  - BUT an attacker with root access can simply disable fapolicyd"
+  echo "  - So we also restrict privileges via sudoers: block rpm -i, dnf install,"
+  echo "    systemctl stop fapolicyd for the auditor role."
+  echo ""
+
+  # Reuse demo6's logic but with the target VM
+  echo "--- Layer 1: fapolicyd ---"
+  echo ""
+  run_on_vm_sudo "${target}" "
+    dnf install -y fapolicyd 2>/dev/null || true
+    systemctl enable --now fapolicyd
+    sed -i 's/^integrity.*/integrity = sha256/' /etc/fapolicyd/fapolicyd.conf 2>/dev/null || true
+    systemctl restart fapolicyd
+    echo 'fapolicyd status:' && systemctl is-active fapolicyd
+  " || true
+  echo ""
+
+  echo "--- Layer 2: AIDE ---"
+  echo ""
+  run_on_vm_sudo "${target}" "
+    dnf install -y aide 2>/dev/null || true
+    aide --init 2>/dev/null && mv -f /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz 2>/dev/null || true
+    echo '05 4 * * * root /usr/sbin/aide --check' > /etc/cron.d/aide-check
+    echo 'AIDE initialized, daily check at 04:05'
+  " || true
+  echo ""
+
+  echo "--- Layer 3: Auditor sudoers ---"
+  echo ""
+  run_on_vm_sudo "${target}" "
+    cat > /etc/sudoers.d/auditor <<'SUDOERS'
+Cmnd_Alias AUDIT_RO = /usr/sbin/aide --check, /usr/bin/fapolicyd-cli --dump-db, /usr/bin/fapolicyd-cli --list, /usr/bin/systemctl status fapolicyd, /usr/bin/oscap *, /usr/bin/journalctl *
+Cmnd_Alias DANGEROUS = /usr/bin/systemctl stop fapolicyd, /usr/bin/systemctl disable fapolicyd, /usr/bin/rpm -i*, /usr/bin/rpm -U*, /usr/bin/dnf install*, /usr/bin/dnf remove*
+%Linux-Auditors ALL=(root) NOPASSWD: AUDIT_RO, !DANGEROUS
+SUDOERS
+    chmod 0440 /etc/sudoers.d/auditor
+    visudo -cf /etc/sudoers.d/auditor && echo 'sudoers validated OK'
+  " || true
+  echo ""
+
+  echo "=== Manual hardening complete on ${target} ==="
+}
+
+# --- Section A wrappers: ensure platform VMs exist ---
+demo_a1() { demo1; }
+demo_a2() { demo2; }
+demo_a3() { ensure_vm client "${BASE_DIR}/client-vm.yaml"; demo3; }
+demo_a4() { ensure_pool client-pool 2; demo4; }
+demo_a5() { ensure_pool client-pool 2; demo5; }
+
+# --- Section runners ---
+run_section_a() {
+  demo_a1; echo ""; echo "---"; echo ""
+  demo_a2; echo ""; echo "---"; echo ""
+  demo_a3; echo ""; echo "---"; echo ""
+  demo_a4; echo ""; echo "---"; echo ""
+  demo_a5
+}
+
+run_section_b() {
+  demo_b1; echo ""; echo "---"; echo ""
+  demo_b2; echo ""; echo "---"; echo ""
+  demo_b3; echo ""; echo "---"; echo ""
+  demo_b4; echo ""; echo "---"; echo ""
+  demo_b5; echo ""; echo "---"; echo ""
+  demo_b6; echo ""; echo "---"; echo ""
+  demo_b7; echo ""; echo "---"; echo ""
+  demo_b8
+}
+
 # Only execute the menu/demos automatically if the script is run directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   case "${1:-}" in
-    1) demo1 ;;
-    2) demo2 ;;
-    3) demo3 ;;
-    4) demo4 ;;
-    5) demo5 ;;
-    6) demo6 ;;
-    7) demo7 ;;
-    8) demo8 "$@" ;;
-    9) demo9 "$@" ;;
-    10) demo10 ;;
-    11) demo11 ;;
-    12) demo12 ;;
-    13) demo13 ;;
+    # Section A: Platform
+    a1|1) demo_a1 ;;
+    a2|2) demo_a2 ;;
+    a3|3) demo_a3 ;;
+    a4|4) demo_a4 ;;
+    a5|5) demo_a5 ;;
+    a) run_section_a ;;
+
+    # Section B: Compliance
+    b1|6) demo_b1 ;;
+    b2|7) demo_b2 ;;
+    b3|8) demo_b3 "$@" ;;
+    b4|9) demo_b4 ;;
+    b5|10) demo_b5 ;;
+    b6|11) demo_b6 ;;
+    b7|12) demo_b7 ;;
+    b8|13) demo_b8 ;;
+    b) run_section_b ;;
+
+    # All sections
     all)
-    demo1; echo ""; echo "---"; echo ""
-    demo2; echo ""; echo "---"; echo ""
-    demo3; echo ""; echo "---"; echo ""
-    demo4; echo ""; echo "---"; echo ""
-    demo5; echo ""; echo "---"; echo ""
-    demo6; echo ""; echo "---"; echo ""
-    demo7; echo ""; echo "---"; echo ""
-    demo8; echo ""; echo "---"; echo ""
-    demo9; echo ""; echo "---"; echo ""
-    demo10; echo ""; echo "---"; echo ""
-    demo11
-    ;;
-  *) usage ;;
+      run_section_a; echo ""; echo "==="; echo ""
+      run_section_b
+      ;;
+    *) usage ;;
   esac
 fi

@@ -171,24 +171,36 @@ virtctl console vmi/idm -n satellite-cloud-native
 
 ## Demo Scenarios
 
-### Demo 1: Zero-Touch Provisioning
+Each section is independent — it deploys and manages its own client VMs. Old numeric IDs (1-13) still work as aliases.
+
+```bash
+./scripts/demo-scenarios.sh a1    # Platform: Zero-Touch Provisioning
+./scripts/demo-scenarios.sh b4    # Compliance: CLI OpenSCAP Scan
+./scripts/demo-scenarios.sh a     # Run all Platform demos
+./scripts/demo-scenarios.sh b     # Run all Compliance demos
+./scripts/reset-clients.sh        # Delete all clients, deregister from Satellite + IdM
+```
+
+### Section A: Platform (VMs: client, client-pool)
+
+#### Demo a1: Zero-Touch Provisioning
 
 Deploy a RHEL client that automatically registers to Satellite and enrolls in IdM — no manual configuration.
 
 ```bash
-./scripts/demo-scenarios.sh 1
+./scripts/demo-scenarios.sh a1
 
 # Verify (after ~5 min):
 oc exec -n satellite-cloud-native vmi/client -- subscription-manager identity
 oc exec -n satellite-cloud-native vmi/idm -- bash -c "echo '$DEMO_PASSWORD' | kinit admin && ipa host-find"
 ```
 
-### Demo 2: Elastic Scaling
+#### Demo a2: Elastic Scaling
 
 Scale a pool of RHEL clients from 0 to 5 with a single command. Each VM auto-registers independently.
 
 ```bash
-./scripts/demo-scenarios.sh 2
+./scripts/demo-scenarios.sh a2
 
 # Or manually:
 oc scale vmpool client-pool -n satellite-cloud-native --replicas=5
@@ -197,12 +209,12 @@ oc scale vmpool client-pool -n satellite-cloud-native --replicas=5
 oc exec -n satellite-cloud-native vmi/satellite -- hammer host list --organization 'Demo_Org'
 ```
 
-### Demo 3: Self-Healing
+#### Demo a3: Self-Healing
 
 Delete a running VMI and watch OpenShift automatically recreate it, demonstrating platform resilience.
 
 ```bash
-./scripts/demo-scenarios.sh 3
+./scripts/demo-scenarios.sh a3
 
 # Or manually:
 oc delete vmi/client -n satellite-cloud-native
@@ -210,27 +222,29 @@ oc delete vmi/client -n satellite-cloud-native
 oc get vmi -n satellite-cloud-native -w
 ```
 
-### Demo 4: IP-Agnostic Kerberos
+#### Demo a4: IP-Agnostic Kerberos
 
 Prove that multiple VMs with identical internal NAT IPs (`10.0.2.x`) can each hold valid, independent Kerberos tickets.
 
 ```bash
-./scripts/demo-scenarios.sh 4
+./scripts/demo-scenarios.sh a4
 ```
 
 The `noaddresses = true` setting in `/etc/krb5.conf` prevents Kerberos from binding tickets to the internal masquerade IP.
 
-### Demo 5: Network Micro-Segmentation
+#### Demo a5: Network Micro-Segmentation
 
 Demonstrate that VMs inherit Kubernetes NetworkPolicy — client VMs can reach Satellite and IdM but cannot communicate with each other.
 
 ```bash
-./scripts/demo-scenarios.sh 5
+./scripts/demo-scenarios.sh a5
 ```
 
 The `NetworkPolicy` allows `role: client` → `role: infra` traffic and blocks `role: client` → `role: client`.
 
-### Demo 6: Manual OS Hardening
+### Section B: Compliance (VMs: sec-client, compliant-client)
+
+#### Demo b1: Manual OS Hardening
 
 Step-by-step manual hardening of a single client VM showing the reasoning behind each layer of defense:
 
@@ -241,7 +255,7 @@ Step-by-step manual hardening of a single client VM showing the reasoning behind
 The defense-in-depth reasoning: fapolicyd prevents running unapproved binaries, but an attacker with root can disable it. Sudoers restrictions prevent the auditor role from doing so.
 
 ```bash
-./scripts/demo-scenarios.sh 6
+./scripts/demo-scenarios.sh b1
 
 # Verify:
 oc exec -n satellite-cloud-native vmi/client -- systemctl status fapolicyd
@@ -249,12 +263,12 @@ oc exec -n satellite-cloud-native vmi/client -- aide --check
 oc exec -n satellite-cloud-native vmi/client -- cat /etc/sudoers.d/auditor
 ```
 
-### Demo 7: Automated Hardening via Satellite REX
+#### Demo b2: Automated Hardening via Satellite REX
 
 Automates everything from Demo 6 at scale using an Ansible playbook executed through Satellite Remote Execution. Uses RHEL System Roles (`redhat.rhel_system_roles.fapolicyd`, `redhat.rhel_system_roles.aide`) for certified, supported automation.
 
 ```bash
-./scripts/demo-scenarios.sh 7
+./scripts/demo-scenarios.sh b2
 
 # The playbook is uploaded to Satellite and executed via REX on all clients.
 # View results in Satellite Web UI: Monitor → Jobs → Security Hardening
@@ -262,16 +276,16 @@ Automates everything from Demo 6 at scale using an Ansible playbook executed thr
 
 The playbook is at `playbooks/hardening.yml` and can also be imported manually via the Satellite GUI: **Configure → Job Templates → New Job Template**.
 
-### Demo 8: RPM Package Whitelist Audit
+#### Demo b3: RPM Package Whitelist Audit
 
 Audits installed RPM packages against an approved whitelist. Detects unauthorized package installations and can optionally remove them.
 
 ```bash
 # Audit mode (default) — report only
-./scripts/demo-scenarios.sh 8
+./scripts/demo-scenarios.sh b3
 
 # Enforce mode — remove unauthorized packages
-./scripts/demo-scenarios.sh 8 enforce
+./scripts/demo-scenarios.sh b3 enforce
 ```
 
 The approved package list is in `playbooks/files/rpm-whitelist.txt`. To generate a baseline from a clean client:
@@ -280,26 +294,26 @@ The approved package list is in `playbooks/files/rpm-whitelist.txt`. To generate
 oc exec -n satellite-cloud-native vmi/client -- rpm -qa --qf '%{NAME}\n' | sort -u > playbooks/files/rpm-whitelist.txt
 ```
 
-### Demo 9: CLI OpenSCAP Compliance Scan
+#### Demo b4: CLI OpenSCAP Compliance Scan
 
 Runs an OpenSCAP CIS Level 2 scan on a client VM and generates an interactive HTML report. The scan runs directly on the VM via SSH; the HTML report can be downloaded via SCP and viewed in a browser.
 
 ```bash
-./scripts/demo-scenarios.sh 9
+./scripts/demo-scenarios.sh b4
 
 # The script prints an SCP command to download the HTML report
 # Open in a browser for a detailed, color-coded compliance breakdown
 # Expected baseline: ~45% compliance on a vanilla RHEL 9 cloud image
 ```
 
-### Demo 10: Satellite SCAP Compliance Dashboard
+#### Demo b5: Satellite SCAP Compliance Dashboard
 
 Configures Satellite's OpenSCAP integration end-to-end: imports SCAP content, creates a CIS Level 2 compliance policy, deploys the `foreman_scap_client` on all client VMs, and triggers a scan. Results are uploaded to Satellite and viewed in the Web UI.
 
 The demo also creates a **"CIS L2 Compliance Scan"** Script-type job template (provider: `script`, category: Compliance). This template uses **pull-mqtt** (yggdrasil), so it can be triggered from the Satellite GUI even in this masquerade-networking architecture where Satellite cannot SSH to clients.
 
 ```bash
-./scripts/demo-scenarios.sh 10
+./scripts/demo-scenarios.sh b5
 
 # View results in Satellite Web UI:
 #   Hosts → Compliance → Policies  (see the CIS Level 2 Server policy)
@@ -313,26 +327,26 @@ The demo also creates a **"CIS L2 Compliance Scan"** Script-type job template (p
 
 > **Architecture note:** Ansible-type REX jobs use SSH push, which doesn't work in this masquerade-networking setup (Satellite can't resolve client FQDNs). All compliance job templates use the **Script provider** instead, which delivers jobs via **pull-mqtt** (yggdrasil) — the client pulls and executes the job locally, then uploads results back to Satellite.
 
-### Demo 11: CIS Level 2 Remediation
+#### Demo b6: CIS Level 2 Remediation
 
 Applies ~25 curated CIS Level 2 fixes to all client VMs: file permissions, auditd rules, sysctl network hardening, SSH hardening, password policy (pam_pwquality), core dump restrictions, login banners, cron hardening, and disabling unused services.
 
 The demo creates a **"CIS L2 Remediation"** Script-type job template in Satellite, so the same remediation can be triggered from the GUI via pull-mqtt.
 
 ```bash
-./scripts/demo-scenarios.sh 11
+./scripts/demo-scenarios.sh b6
 
 # Can also be triggered from Satellite UI:
 #   Hosts → All Hosts → select host(s) → Schedule Remote Job
 #   Job category: Compliance
 #   Job template: CIS L2 Remediation
 
-# Re-run Demo 9 or 10 after remediation to see improved compliance score (~45% → ~60%)
+# Re-run b4 or b5 after remediation to see improved compliance score (~45% → ~60%)
 ```
 
 The remediation script is at `scripts/cis-remediate.sh`. It intentionally applies only safe, non-disruptive fixes to avoid breaking SSH access or VM connectivity in the demo environment.
 
-### Demo 12: Deploy CIS-Hardened VM Image
+#### Demo b7: Deploy CIS-Hardened VM Image
 
 Deploys a RHEL 9 VM from a qcow2 image pre-hardened with CIS Level 2 profile using Image Builder. The VM uses the same cloud-init as regular clients, so it auto-registers to Satellite and IdM.
 
@@ -341,19 +355,19 @@ Deploys a RHEL 9 VM from a qcow2 image pre-hardened with CIS Level 2 profile usi
 ./scripts/upload-cis-image.sh /path/to/cis-rhel9.qcow2
 
 # Deploy the VM:
-./scripts/demo-scenarios.sh 12
+./scripts/demo-scenarios.sh b7
 
 # Watch in OpenShift Console: Virtualization → VirtualMachines
 # Check registration in Satellite UI: Hosts → All Hosts
 # Check IdM enrollment: IdM UI → Identity → Hosts
 ```
 
-### Demo 13: Compliance Verification
+#### Demo b8: Compliance Verification
 
 Scans both the vanilla client and the CIS-hardened VM, uploads results to Satellite, and prints a side-by-side comparison table. Demonstrates the dramatic difference between post-remediation compliance (~60%) and a purpose-built CIS image (~95%).
 
 ```bash
-./scripts/demo-scenarios.sh 13
+./scripts/demo-scenarios.sh b8
 
 # Outputs a comparison table and SCP commands for both HTML reports
 # Both scans are uploaded to Satellite — view side-by-side:

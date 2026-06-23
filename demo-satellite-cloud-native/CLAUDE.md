@@ -76,20 +76,27 @@ oc apply -f k8s/base/client-vm.yaml
 oc scale vmpool client-pool -n satellite-cloud-native --replicas=5
 
 # Run demo scenarios
-./scripts/demo-scenarios.sh 1   # Zero-touch provisioning
-./scripts/demo-scenarios.sh 2   # Elastic scaling
-./scripts/demo-scenarios.sh 3   # Self-healing
-./scripts/demo-scenarios.sh 4   # IP-agnostic Kerberos
-./scripts/demo-scenarios.sh 5   # Network micro-segmentation
-./scripts/demo-scenarios.sh 6   # Manual OS hardening (fapolicyd + AIDE + sudoers)
-./scripts/demo-scenarios.sh 7   # Automated hardening via Satellite REX
-./scripts/demo-scenarios.sh 8   # RPM whitelist audit (audit mode)
-./scripts/demo-scenarios.sh 8 enforce  # RPM whitelist audit (enforce mode)
-./scripts/demo-scenarios.sh 9   # CLI OpenSCAP CIS L2 scan + HTML report
-./scripts/demo-scenarios.sh 10  # Satellite SCAP compliance dashboard
-./scripts/demo-scenarios.sh 11  # CIS Level 2 remediation via Satellite REX
-./scripts/demo-scenarios.sh 12  # Deploy CIS-hardened VM from qcow2 image
-./scripts/demo-scenarios.sh 13  # Compliance verification (vanilla vs CIS image)
+# Section A: Platform (VMs: client, client-pool)
+./scripts/demo-scenarios.sh a1   # Zero-touch provisioning
+./scripts/demo-scenarios.sh a2   # Elastic scaling
+./scripts/demo-scenarios.sh a3   # Self-healing
+./scripts/demo-scenarios.sh a4   # IP-agnostic Kerberos
+./scripts/demo-scenarios.sh a5   # Network micro-segmentation
+./scripts/demo-scenarios.sh a    # Run all Platform demos
+
+# Section B: Compliance (VMs: sec-client, compliant-client)
+./scripts/demo-scenarios.sh b1   # Manual OS hardening (fapolicyd + AIDE + sudoers)
+./scripts/demo-scenarios.sh b2   # Automated hardening via Satellite REX
+./scripts/demo-scenarios.sh b3   # RPM whitelist audit (audit mode)
+./scripts/demo-scenarios.sh b3 enforce  # RPM whitelist audit (enforce mode)
+./scripts/demo-scenarios.sh b4   # CLI OpenSCAP CIS L2 scan + HTML report
+./scripts/demo-scenarios.sh b5   # Satellite SCAP compliance dashboard
+./scripts/demo-scenarios.sh b6   # CIS Level 2 remediation
+./scripts/demo-scenarios.sh b7   # Deploy CIS-hardened VM from qcow2 image
+./scripts/demo-scenarios.sh b8   # Compliance verification (vanilla vs CIS image)
+./scripts/demo-scenarios.sh b    # Run all Compliance demos
+
+# Old numeric IDs (1-13) still work as aliases
 
 # Verify registrations
 ./scripts/verify-registration.sh
