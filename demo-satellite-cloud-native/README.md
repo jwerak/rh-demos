@@ -150,10 +150,19 @@ sshpass -p "$DEMO_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFil
   -o ProxyCommand="virtctl port-forward --stdio vmi/<vm-name>.satellite-cloud-native 22" \
   cloud-user@localhost
 
-# The demo-scenarios.sh script provides a run_on_vm helper:
-#   run_on_vm <vm-name> "<command>"
-#   run_on_vm satellite "sudo hammer host list"
-#   run_on_vm client "sudo systemctl status fapolicyd"
+# The demo-scenarios.sh script provides helper functions you can source and use ad-hoc:
+source scripts/demo-scenarios.sh
+
+# ssh_exec <vm-name>           — open interactive SSH session to a VM
+ssh_exec satellite
+ssh_exec client
+
+# run_on_vm <vm-name> "<cmd>"  — run a command and return output
+run_on_vm satellite "sudo hammer host list"
+run_on_vm client "sudo systemctl status fapolicyd"
+
+# run_on_vm_sudo <vm-name> "<cmd>" — run as root
+run_on_vm_sudo client "oscap xccdf eval --profile cis ..."
 
 # Or use virtctl console for serial console access (no sshpass needed)
 virtctl console vmi/idm -n satellite-cloud-native
@@ -271,6 +280,86 @@ The approved package list is in `playbooks/files/rpm-whitelist.txt`. To generate
 oc exec -n satellite-cloud-native vmi/client -- rpm -qa --qf '%{NAME}\n' | sort -u > playbooks/files/rpm-whitelist.txt
 ```
 
+### Demo 9: CLI OpenSCAP Compliance Scan
+
+Runs an OpenSCAP CIS Level 2 scan on a client VM and generates an interactive HTML report. The scan runs directly on the VM via SSH; the HTML report can be downloaded via SCP and viewed in a browser.
+
+```bash
+./scripts/demo-scenarios.sh 9
+
+# The script prints an SCP command to download the HTML report
+# Open in a browser for a detailed, color-coded compliance breakdown
+# Expected baseline: ~45% compliance on a vanilla RHEL 9 cloud image
+```
+
+### Demo 10: Satellite SCAP Compliance Dashboard
+
+Configures Satellite's OpenSCAP integration end-to-end: imports SCAP content, creates a CIS Level 2 compliance policy, deploys the `foreman_scap_client` on all client VMs, and triggers a scan. Results are uploaded to Satellite and viewed in the Web UI.
+
+The demo also creates a **"CIS L2 Compliance Scan"** Script-type job template (provider: `script`, category: Compliance). This template uses **pull-mqtt** (yggdrasil), so it can be triggered from the Satellite GUI even in this masquerade-networking architecture where Satellite cannot SSH to clients.
+
+```bash
+./scripts/demo-scenarios.sh 10
+
+# View results in Satellite Web UI:
+#   Hosts → Compliance → Policies  (see the CIS Level 2 Server policy)
+#   Hosts → Compliance → Reports   (per-host scan results, rule-by-rule breakdown)
+
+# To re-scan from the GUI:
+#   Hosts → All Hosts → select host(s) → Schedule Remote Job
+#   Job category: Compliance
+#   Job template: CIS L2 Compliance Scan
+```
+
+> **Architecture note:** Ansible-type REX jobs use SSH push, which doesn't work in this masquerade-networking setup (Satellite can't resolve client FQDNs). All compliance job templates use the **Script provider** instead, which delivers jobs via **pull-mqtt** (yggdrasil) — the client pulls and executes the job locally, then uploads results back to Satellite.
+
+### Demo 11: CIS Level 2 Remediation
+
+Applies ~25 curated CIS Level 2 fixes to all client VMs: file permissions, auditd rules, sysctl network hardening, SSH hardening, password policy (pam_pwquality), core dump restrictions, login banners, cron hardening, and disabling unused services.
+
+The demo creates a **"CIS L2 Remediation"** Script-type job template in Satellite, so the same remediation can be triggered from the GUI via pull-mqtt.
+
+```bash
+./scripts/demo-scenarios.sh 11
+
+# Can also be triggered from Satellite UI:
+#   Hosts → All Hosts → select host(s) → Schedule Remote Job
+#   Job category: Compliance
+#   Job template: CIS L2 Remediation
+
+# Re-run Demo 9 or 10 after remediation to see improved compliance score (~45% → ~60%)
+```
+
+The remediation script is at `scripts/cis-remediate.sh`. It intentionally applies only safe, non-disruptive fixes to avoid breaking SSH access or VM connectivity in the demo environment.
+
+### Demo 12: Deploy CIS-Hardened VM Image
+
+Deploys a RHEL 9 VM from a qcow2 image pre-hardened with CIS Level 2 profile using Image Builder. The VM uses the same cloud-init as regular clients, so it auto-registers to Satellite and IdM.
+
+```bash
+# First, upload the CIS-hardened image (one-time):
+./scripts/upload-cis-image.sh /path/to/cis-rhel9.qcow2
+
+# Deploy the VM:
+./scripts/demo-scenarios.sh 12
+
+# Watch in OpenShift Console: Virtualization → VirtualMachines
+# Check registration in Satellite UI: Hosts → All Hosts
+# Check IdM enrollment: IdM UI → Identity → Hosts
+```
+
+### Demo 13: Compliance Verification
+
+Scans both the vanilla client and the CIS-hardened VM, uploads results to Satellite, and prints a side-by-side comparison table. Demonstrates the dramatic difference between post-remediation compliance (~60%) and a purpose-built CIS image (~95%).
+
+```bash
+./scripts/demo-scenarios.sh 13
+
+# Outputs a comparison table and SCP commands for both HTML reports
+# Both scans are uploaded to Satellite — view side-by-side:
+#   Satellite UI → Hosts → Compliance → Reports
+```
+
 ## Resource Requirements
 
 | VM | vCPUs | RAM | Storage |
@@ -278,8 +367,9 @@ oc exec -n satellite-cloud-native vmi/client -- rpm -qa --qf '%{NAME}\n' | sort 
 | IdM | 2 | 4 Gi | 30 Gi |
 | Satellite | 4 | 22 Gi | 100 Gi root + 150 Gi data |
 | Client (each) | 1 | 2 Gi | 30 Gi |
+| Compliant Client | 1 | 2 Gi | 30 Gi |
 
-**Total (infra + 2 clients):** 8 vCPUs, 30 Gi RAM, 340 Gi storage
+**Total (infra + 2 clients + compliant):** 9 vCPUs, 32 Gi RAM, 370 Gi storage
 
 ## Project Structure
 
@@ -289,8 +379,19 @@ oc exec -n satellite-cloud-native vmi/client -- rpm -qa --qf '%{NAME}\n' | sort 
 playbooks/
 ├── hardening.yml              # Demo 7: fapolicyd + AIDE + sudoers (RHEL System Roles)
 ├── rpm-whitelist-audit.yml    # Demo 8: RPM package whitelist audit/enforce
+├── oscap-scan.yml             # Demo 9: OpenSCAP CIS Level 2 scan (Ansible playbook)
+├── oscap-remediate.yml        # Demo 11: CIS Level 2 remediation (Ansible playbook, reference)
 └── files/
     └── rpm-whitelist.txt      # Approved RPM package list (Golden Image baseline)
+
+scripts/
+├── deploy.sh                  # Main deployment orchestrator
+├── demo-scenarios.sh          # All demo scenarios (1-13)
+├── upload-manifest.sh         # Satellite subscription manifest uploader
+├── upload-cis-image.sh        # Upload CIS-hardened qcow2 image (Demo 12)
+├── cis-remediate.sh           # CIS Level 2 remediation bash script (Demo 11)
+├── verify-registration.sh     # Registration status checker
+└── create-rhsm-secret.sh     # RHSM credentials secret creation
 ```
 
 ### Kustomize
@@ -312,6 +413,7 @@ k8s/
 │   ├── client-vm.yaml                   # Single RHEL client
 │   ├── client-cloudinit-secret.yaml     # Client cloud-init (register + enroll)
 │   ├── client-pool.yaml                 # VirtualMachinePool (starts at 0)
+│   ├── compliant-client-vm.yaml         # CIS-hardened client VM (Demo 12)
 │   └── network-policy.yaml              # Client isolation
 └── overlays/
     └── demo/

@@ -22,6 +22,8 @@ resources:
   - client-vm.yaml
   # RHEL Client Pool (elastic scaling)
   - client-pool.yaml
+  # CIS-hardened Client (Demo 12)
+  - compliant-client-vm.yaml
   # Network segmentation
   - network-policy.yaml
 

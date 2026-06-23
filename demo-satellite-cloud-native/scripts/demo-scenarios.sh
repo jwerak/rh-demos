@@ -1,9 +1,13 @@
 #!/bin/bash
-set -euo pipefail
+
+# Only apply strict exit-on-error if the script is run directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  set -euo pipefail
+fi
 
 NAMESPACE="satellite-cloud-native"
-BASE_DIR="$(cd "$(dirname "$0")/../k8s/base" && pwd)"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../k8s/base" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -z "${DEMO_PASSWORD:-}" ] && [ -f "${SCRIPT_DIR}/../.env" ]; then
   source "${SCRIPT_DIR}/../.env"
 fi
@@ -20,11 +24,16 @@ run_on_vm() {
     cloud-user@localhost "$@"
 }
 
-# Print a copyable SSH command for the user to run outside the script
+# Print a copya ble SSH command for the user to run outside the script
 ssh_hint() {
   local vmi_name="$1"
   local cmd="$2"
   echo "  sshpass -p \"\$DEMO_PASSWORD\" ssh ${SSH_OPTS} -o ProxyCommand=\"virtctl port-forward --stdio vmi/${vmi_name}.${NAMESPACE} 22\" cloud-user@localhost \"${cmd}\""
+}
+
+ssh_exec() {
+  local vmi_name="$1"
+  sshpass -p "${DEMO_PASSWORD}" ssh ${SSH_OPTS} -o ProxyCommand="virtctl port-forward --stdio vmi/${vmi_name}.${NAMESPACE} 22" cloud-user@localhost "${cmd}"
 }
 
 # Run a command as root on a VM
@@ -58,6 +67,14 @@ usage() {
   echo "  7  Automated Hardening (REX)   - Ansible playbook via Satellite"
   echo "  8  RPM Whitelist Audit         - Package compliance check via Satellite"
   echo "     Usage: $0 8 [audit|enforce]  (default: audit)"
+  echo ""
+  echo ""
+  echo "  Compliance demos:"
+  echo "  9   CLI OpenSCAP Scan         - CIS L2 scan, download HTML report"
+  echo "  10  Satellite SCAP Dashboard  - Configure Satellite SCAP, view in UI"
+  echo "  11  CIS Remediation           - Apply CIS L2 fixes via Satellite REX"
+  echo "  12  Deploy Compliant Image    - Boot VM from CIS-hardened qcow2"
+  echo "  13  Compliance Verification   - Scan compliant image, compare scores"
   echo ""
   echo "  all  Run all demos in sequence"
   exit 1
@@ -633,16 +650,555 @@ demo8() {
   fi
 }
 
-case "${1:-}" in
-  1) demo1 ;;
-  2) demo2 ;;
-  3) demo3 ;;
-  4) demo4 ;;
-  5) demo5 ;;
-  6) demo6 ;;
-  7) demo7 ;;
-  8) demo8 "$@" ;;
-  all)
+demo9() {
+  echo "=========================================================="
+  echo "  Demo 9: CLI OpenSCAP Compliance Scan (CIS Level 2)"
+  echo "  (Scan a RHEL client, download HTML report)"
+  echo "=========================================================="
+  echo ""
+  echo "This demo runs an OpenSCAP CIS Level 2 scan on a client VM"
+  echo "and produces an interactive HTML report for browser viewing."
+  echo ""
+
+  local TARGET_VM="${2:-client}"
+
+  echo "--- Step 1: Verifying SCAP tools on ${TARGET_VM} ---"
+  echo ""
+  run_on_vm_sudo "${TARGET_VM}" "
+    rpm -q openscap-scanner scap-security-guide > /dev/null 2>&1 || \
+      dnf install -y openscap-scanner scap-security-guide
+    echo 'OpenSCAP version:' && oscap --version | head -1
+  "
+  echo ""
+
+  echo "--- Step 2: Available CIS profiles ---"
+  echo ""
+  run_on_vm_sudo "${TARGET_VM}" "
+    oscap info --profiles /usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml 2>/dev/null | grep -i cis || true
+  "
+  echo ""
+
+  SCAP_PROFILE="xccdf_org.ssgproject.content_profile_cis"
+  SCAP_DS="/usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml"
+
+  echo "--- Step 3: Running CIS Level 2 scan ---"
+  echo ""
+  echo "Profile: ${SCAP_PROFILE}"
+  echo "This takes 2-5 minutes..."
+  echo ""
+
+  SCAN_OUTPUT=$(run_on_vm_sudo "${TARGET_VM}" "
+    oscap xccdf eval \
+      --profile ${SCAP_PROFILE} \
+      --report /tmp/cis-report-\$(hostname -s).html \
+      --results-arf /tmp/cis-results-\$(hostname -s)-arf.xml \
+      ${SCAP_DS} 2>&1 ; echo \"OSCAP_EXIT=\$?\"
+  " 2>&1) || true
+
+  OSCAP_RC=$(echo "${SCAN_OUTPUT}" | grep -oP 'OSCAP_EXIT=\K\d+' | tail -1)
+  OSCAP_RC="${OSCAP_RC:-2}"
+
+  if [ "${OSCAP_RC}" = "1" ]; then
+    echo "ERROR: OpenSCAP scan failed with an internal error."
+    echo "${SCAN_OUTPUT}" | tail -20
+    return 1
+  fi
+
+  echo "${SCAN_OUTPUT}" | grep -E '(Rule|Pass|Fail|Title)' | tail -30
+  echo ""
+
+  PASS_COUNT=$(echo "${SCAN_OUTPUT}" | grep -c 'pass$' || true)
+  FAIL_COUNT=$(echo "${SCAN_OUTPUT}" | grep -c 'fail$' || true)
+  TOTAL=$((PASS_COUNT + FAIL_COUNT))
+  if [ "${TOTAL}" -gt 0 ]; then
+    PCT=$((PASS_COUNT * 100 / TOTAL))
+    echo "=== Scan Summary ==="
+    echo "  Passed: ${PASS_COUNT}"
+    echo "  Failed: ${FAIL_COUNT}"
+    echo "  Compliance: ${PCT}%"
+  fi
+  echo ""
+
+  echo "--- Step 4: Download the HTML report ---"
+  echo ""
+  VM_HOSTNAME=$(run_on_vm "${TARGET_VM}" "hostname -s" 2>/dev/null) || VM_HOSTNAME="${TARGET_VM}"
+  echo "Run this command to download the report:"
+  echo ""
+  echo "  sshpass -p \"\$DEMO_PASSWORD\" scp ${SSH_OPTS} \\"
+  echo "    -o ProxyCommand=\"virtctl port-forward --stdio vmi/${TARGET_VM}.${NAMESPACE} 22\" \\"
+  echo "    cloud-user@localhost:/tmp/cis-report-${VM_HOSTNAME}.html ./cis-report-${VM_HOSTNAME}.html"
+  echo ""
+  echo "Then open cis-report-${VM_HOSTNAME}.html in a browser."
+  echo ""
+  echo "=== CLI OpenSCAP scan complete ==="
+}
+
+demo10() {
+  echo "=========================================================="
+  echo "  Demo 10: Satellite SCAP Compliance Dashboard"
+  echo "  (Configure Satellite OpenSCAP, view reports in UI)"
+  echo "=========================================================="
+  echo ""
+  echo "This demo configures Satellite's OpenSCAP integration,"
+  echo "creates a CIS Level 2 compliance policy, runs a scan,"
+  echo "and displays results in the Satellite Web UI."
+  echo ""
+
+  echo "--- Step 1: Uploading SCAP content to Satellite ---"
+  echo ""
+  echo "In the GUI: Hosts → Compliance → SCAP Contents"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    echo \"Loading default SCAP Security Guide content...\"
+    hammer scap-content bulk-upload --type default 2>/dev/null || true
+    echo \"\"
+    echo \"Available SCAP content:\"
+    hammer scap-content list 2>/dev/null || true
+  '"
+  echo ""
+
+  echo "--- Step 2: Importing SCAP client Ansible role ---"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    hammer ansible roles import --proxy-id 1 --role-names theforeman.foreman_scap_client 2>/dev/null || true
+    hammer ansible variables import --proxy-id 1 2>/dev/null | tail -3
+    echo \"SCAP client Ansible role imported.\"
+  '" || true
+  echo ""
+
+  echo "--- Step 3: Creating CIS Level 2 compliance policy ---"
+  echo ""
+  echo "In the GUI: Hosts → Compliance → Policies → New Policy"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    SCAP_ID=\$(hammer --csv scap-content list 2>/dev/null | grep \"rhel9\" | head -1 | cut -d, -f1)
+    if [ -z \"\${SCAP_ID}\" ]; then
+      echo \"ERROR: No RHEL 9 SCAP content found. Trying all content...\"
+      SCAP_ID=\$(hammer --csv scap-content list 2>/dev/null | tail -1 | cut -d, -f1)
+    fi
+    echo \"SCAP Content ID: \${SCAP_ID}\"
+
+    if [ -n \"\${SCAP_ID}\" ]; then
+      echo \"Available CIS profiles for RHEL 9:\"
+      hammer --csv scap-content-profile list --per-page 200 2>/dev/null | grep \"rhel9 default\" | grep -i cis || true
+      echo \"\"
+
+      PROFILE_ID=\$(hammer --csv scap-content-profile list --per-page 200 2>/dev/null | grep \"rhel9 default\" | grep \"Level 2 - Server\" | head -1 | cut -d, -f1)
+      echo \"CIS Profile ID: \${PROFILE_ID}\"
+
+      if [ -n \"\${PROFILE_ID}\" ]; then
+        if hammer --csv policy list 2>/dev/null | grep -q \"CIS Level 2 Server\"; then
+          echo \"Policy already exists, updating...\"
+        else
+          hammer policy create \
+            --name \"CIS Level 2 Server\" \
+            --deploy-by ansible \
+            --scap-content-id \"\${SCAP_ID}\" \
+            --scap-content-profile-id \"\${PROFILE_ID}\" \
+            --period weekly \
+            --weekday monday \
+            --organizations \"Demo_Org\" \
+            --locations \"Cloud\" 2>/dev/null || true
+          echo \"Policy created.\"
+        fi
+      else
+        echo \"WARNING: CIS profile not found in SCAP content.\"
+      fi
+    fi
+    echo \"\"
+    echo \"Compliance policies:\"
+    hammer policy list --organization \"Demo_Org\" 2>/dev/null || true
+
+    echo \"\"
+    echo \"Creating Script-type scan template for GUI (pull-mqtt)...\"
+    POLICY_ID=\$(hammer --csv policy list --organization \"Demo_Org\" 2>/dev/null | grep \"CIS Level 2\" | head -1 | cut -d, -f1)
+    cat > /tmp/scap-scan.sh <<SCANSCRIPT
+#!/bin/bash
+foreman_scap_client \${POLICY_ID}
+SCANSCRIPT
+    if ! hammer job-template list --search '\"'\"'name=\"CIS L2 Compliance Scan\"'\"'\"' 2>/dev/null | grep -q \"CIS L2\"; then
+      hammer job-template create \
+        --name \"CIS L2 Compliance Scan\" \
+        --job-category \"Compliance\" \
+        --provider-type script \
+        --file /tmp/scap-scan.sh \
+        --organizations \"Demo_Org\" \
+        --locations \"Cloud\" 2>/dev/null || true
+    else
+      SCAN_TMPL_ID=\$(hammer job-template list --search '\"'\"'name=\"CIS L2 Compliance Scan\"'\"'\"' 2>/dev/null | grep -oP \"^\\s*\\K\\d+\" | head -1)
+      hammer job-template update --id \"\${SCAN_TMPL_ID}\" --file /tmp/scap-scan.sh 2>/dev/null || true
+    fi
+    echo \"Compliance job templates:\"
+    hammer job-template list --search '\"'\"'job_category=\"Compliance\"'\"'\"' 2>/dev/null || true
+  '"
+  echo ""
+
+  echo "--- Step 4: Configuring SCAP client on clients ---"
+  echo ""
+  run_on_vm satellite "sudo bash -c '
+    POLICY_ID=\$(hammer --csv policy list --organization \"Demo_Org\" 2>/dev/null | grep \"CIS Level 2\" | head -1 | cut -d, -f1)
+    echo \"Policy ID: \${POLICY_ID}\"
+    SAT_FQDN=\$(hostname -f)
+    echo \"Satellite FQDN: \${SAT_FQDN}\"
+
+    CLIENT_HOSTS=\$(hammer host list --search \"name ~ client\" --per-page 100 2>/dev/null | grep -oP \"[\\w.-]+client[\\w.-]+\" || true)
+    for HOST in \${CLIENT_HOSTS}; do
+      echo \"Assigning policy to \${HOST}...\"
+      hammer policy update \
+        --name \"CIS Level 2 Server\" \
+        --hosts \"\${HOST}\" 2>/dev/null || true
+      hammer host update \
+        --name \"\${HOST}\" \
+        --openscap-proxy-id 1 2>/dev/null || true
+    done
+  '" || true
+  echo ""
+
+  echo "--- Step 5: Configuring foreman_scap_client on all clients ---"
+  echo ""
+  POLICY_ID=$(run_on_vm satellite "sudo hammer --csv policy list --organization Demo_Org 2>/dev/null | grep 'CIS Level 2' | head -1 | cut -d, -f1" 2>/dev/null) || POLICY_ID=""
+  SAT_HOST=$(run_on_vm satellite "hostname -f" 2>/dev/null) || SAT_HOST="${SAT_FQDN:-satellite}"
+  echo "Policy ID: ${POLICY_ID}, Satellite: ${SAT_HOST}"
+  echo ""
+
+  if [ -n "${POLICY_ID}" ]; then
+    for CLIENT_HOST in $(oc get vmi -n "${NAMESPACE}" -l role=client -o name 2>/dev/null | sed 's|virtualmachineinstance.kubevirt.io/||'); do
+      echo "  Configuring ${CLIENT_HOST}..."
+      run_on_vm_sudo "${CLIENT_HOST}" "
+        rpm -q rubygem-foreman_scap_client > /dev/null 2>&1 || dnf install -y rubygem-foreman_scap_client 2>/dev/null || true
+        mkdir -p /etc/foreman_scap_client
+        cat > /etc/foreman_scap_client/config.yaml <<SCAPCFG
+:server: '${SAT_HOST}'
+:port: 9090
+:ca_file: '/etc/rhsm/ca/katello-server-ca.pem'
+:host_certificate: '/etc/pki/consumer/cert.pem'
+:host_private_key: '/etc/pki/consumer/key.pem'
+${POLICY_ID}:
+  :profile: xccdf_org.ssgproject.content_profile_cis
+  :content_path: /usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml
+  :download_path: /compliance/policies/${POLICY_ID}/content
+SCAPCFG
+        echo 'configured.'
+      " || true
+    done
+    echo ""
+
+    echo "--- Step 6: Running compliance scan on all clients ---"
+    echo ""
+    for CLIENT_HOST in $(oc get vmi -n "${NAMESPACE}" -l role=client -o name 2>/dev/null | sed 's|virtualmachineinstance.kubevirt.io/||'); do
+      echo "  Scanning ${CLIENT_HOST} (2-5 minutes)..."
+      run_on_vm_sudo "${CLIENT_HOST}" "foreman_scap_client ${POLICY_ID}" || true
+      echo ""
+    done
+  else
+    echo "WARNING: Could not determine policy ID. Manual configuration needed."
+    echo ""
+  fi
+
+  echo "=== Satellite SCAP integration configured ==="
+  echo ""
+  echo "View compliance reports in the Satellite Web UI:"
+  SAT_URL=$(oc get route satellite-ui -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null) || SAT_URL="${SAT_FQDN}"
+  echo "  https://${SAT_URL}"
+  echo ""
+  echo "Navigate to:"
+  echo "  Hosts → Compliance → Policies   (see the CIS Level 2 Server policy)"
+  echo "  Hosts → Compliance → Reports    (see per-host scan results)"
+  echo "  Click a report → rule-by-rule breakdown with pass/fail/severity"
+}
+
+demo11() {
+  echo "=========================================================="
+  echo "  Demo 11: CIS Level 2 Remediation via Satellite REX"
+  echo "  (Ansible playbook: curated CIS fixes)"
+  echo "=========================================================="
+  echo ""
+  echo "This demo applies a curated set of CIS Level 2 fixes using"
+  echo "an Ansible playbook executed through Satellite Remote Execution."
+  echo ""
+  echo "Fixes include: file permissions, auditd rules, sysctl hardening,"
+  echo "SSH hardening, password policy, core dump restrictions, and more."
+  echo ""
+
+  REMEDIATE_SCRIPT="${SCRIPT_DIR}/cis-remediate.sh"
+  if [ ! -f "${REMEDIATE_SCRIPT}" ]; then
+    echo "ERROR: Remediation script not found at ${REMEDIATE_SCRIPT}"
+    return 1
+  fi
+
+  echo "--- Step 1: Creating REX job template + distributing script ---"
+  echo ""
+  upload_to_vm satellite /tmp/cis-remediate.sh < "${REMEDIATE_SCRIPT}" 2>/dev/null || true
+  run_on_vm satellite "sudo bash -c '
+    if ! hammer job-template list --search '\"'\"'name=\"CIS L2 Remediation\"'\"'\"' 2>/dev/null | grep -q \"CIS L2\"; then
+      hammer job-template create \
+        --name \"CIS L2 Remediation\" \
+        --job-category \"Compliance\" \
+        --provider-type script \
+        --file /tmp/cis-remediate.sh \
+        --organizations \"Demo_Org\" \
+        --locations \"Cloud\" 2>/dev/null || true
+      echo \"Job template created.\"
+    else
+      TMPL_ID=\$(hammer job-template list --search '\"'\"'name=\"CIS L2 Remediation\"'\"'\"' 2>/dev/null | grep -oP \"^\\s*\\K\\d+\" | head -1)
+      hammer job-template update --id \"\${TMPL_ID}\" --file /tmp/cis-remediate.sh 2>/dev/null || true
+      echo \"Job template updated.\"
+    fi
+    hammer job-template list --search '\"'\"'job_category=\"Compliance\"'\"'\"' 2>/dev/null || true
+  '" || true
+  echo ""
+  echo "In the GUI: Hosts → All Hosts → Select → Schedule Remote Job"
+  echo "  Job category: Compliance"
+  echo "  Job template: CIS L2 Remediation"
+  echo ""
+  for CLIENT_HOST in $(oc get vmi -n "${NAMESPACE}" -l role=client -o name 2>/dev/null | sed 's|virtualmachineinstance.kubevirt.io/||'); do
+    upload_to_vm "${CLIENT_HOST}" /tmp/cis-remediate.sh < "${REMEDIATE_SCRIPT}" 2>/dev/null || true
+    run_on_vm "${CLIENT_HOST}" "sudo chmod +x /tmp/cis-remediate.sh" 2>/dev/null || true
+    echo "  Uploaded to ${CLIENT_HOST}"
+  done
+  echo ""
+
+  echo "--- Step 2: Running remediation on client VMs ---"
+  echo ""
+  for CLIENT_HOST in $(oc get vmi -n "${NAMESPACE}" -l role=client -o name 2>/dev/null | sed 's|virtualmachineinstance.kubevirt.io/||'); do
+    echo "  Remediating ${CLIENT_HOST}..."
+    run_on_vm_sudo "${CLIENT_HOST}" "bash /tmp/cis-remediate.sh" || true
+    echo ""
+  done
+  echo ""
+
+  echo "=== CIS remediation complete ==="
+  echo ""
+  echo "Re-run the scan to see improvement:"
+  echo "  $0 9          (CLI scan with HTML report)"
+  echo "  $0 10         (Satellite compliance dashboard)"
+  echo ""
+  echo "Expected: compliance score improves from ~45% to ~55-65%"
+}
+
+demo12() {
+  echo "=========================================================="
+  echo "  Demo 12: Deploy CIS-Hardened VM Image"
+  echo "  (Boot from pre-built Image Builder qcow2)"
+  echo "=========================================================="
+  echo ""
+  echo "This demo deploys a RHEL 9 VM from a qcow2 image that was"
+  echo "pre-hardened with CIS Level 2 profile using Image Builder."
+  echo ""
+
+  echo "--- Step 1: Checking CIS image availability ---"
+  echo ""
+  if ! oc get pvc cis-rhel9-base -n "${NAMESPACE}" > /dev/null 2>&1; then
+    echo "ERROR: CIS base image PVC 'cis-rhel9-base' not found."
+    echo ""
+    echo "Upload the CIS-hardened qcow2 image first:"
+    echo "  ${SCRIPT_DIR}/upload-cis-image.sh /path/to/cis-rhel9.qcow2"
+    echo ""
+    return 1
+  fi
+  echo "CIS base image PVC found:"
+  oc get pvc cis-rhel9-base -n "${NAMESPACE}" -o wide
+  echo ""
+
+  echo "--- Step 2: Deploying compliant client VM ---"
+  echo ""
+  oc apply -f "${BASE_DIR}/compliant-client-vm.yaml"
+  echo ""
+
+  echo "--- Step 3: Watching VM lifecycle ---"
+  echo ""
+  echo "In the GUI: OpenShift Console → Virtualization → VirtualMachines"
+  echo "  Watch: Provisioning → Starting → Running"
+  echo ""
+  oc get vmi/compliant-client -n "${NAMESPACE}" -w &
+  WATCH_PID=$!
+  sleep 3
+
+  echo "Waiting for VM to reach Running state..."
+  oc wait vmi/compliant-client -n "${NAMESPACE}" --for=jsonpath='{.status.phase}'=Running --timeout=300s 2>/dev/null || true
+  kill $WATCH_PID 2>/dev/null || true
+  echo ""
+
+  echo "=== CIS-hardened VM deployed ==="
+  echo ""
+  echo "The VM is booting from a pre-hardened CIS Level 2 image."
+  echo "Cloud-init will auto-register it to Satellite and IdM."
+  echo ""
+  echo "Monitor onboarding:"
+  ssh_hint compliant-client "sudo tail -f /var/log/client-setup.log"
+  echo ""
+  echo "Check registration in:"
+  echo "  Satellite UI → Hosts → All Hosts"
+  echo "  IdM UI → Identity → Hosts"
+  echo ""
+  echo "Once registered, run Demo 13 to verify compliance score:"
+  echo "  $0 13"
+}
+
+demo13() {
+  echo "=========================================================="
+  echo "  Demo 13: Compliance Verification"
+  echo "  (Compare vanilla vs CIS-hardened image)"
+  echo "=========================================================="
+  echo ""
+  echo "This demo scans the CIS-hardened VM and compares its compliance"
+  echo "score against the vanilla client from Demo 9."
+  echo ""
+
+  echo "--- Step 1: Verifying compliant-client is ready ---"
+  echo ""
+  if ! oc get vmi/compliant-client -n "${NAMESPACE}" > /dev/null 2>&1; then
+    echo "ERROR: compliant-client VM not found. Run Demo 12 first."
+    return 1
+  fi
+
+  echo "Waiting for compliant-client to be accessible..."
+  for i in $(seq 1 30); do
+    run_on_vm compliant-client "echo ok" > /dev/null 2>&1 && break
+    echo "  Attempt ${i}/30 — waiting for SSH..."
+    sleep 10
+  done
+  echo "compliant-client is accessible."
+  echo ""
+
+  echo "--- Step 2: Installing SCAP tools on compliant-client ---"
+  echo ""
+  run_on_vm_sudo compliant-client "
+    rpm -q openscap-scanner scap-security-guide > /dev/null 2>&1 || \
+      dnf install -y openscap-scanner scap-security-guide
+  " || true
+  echo ""
+
+  SCAP_PROFILE="xccdf_org.ssgproject.content_profile_cis"
+  SCAP_DS="/usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml"
+
+  echo "--- Step 3: Running CIS scan on compliant-client ---"
+  echo ""
+  echo "This takes 2-5 minutes..."
+
+  SCAN_CIS=$(run_on_vm_sudo compliant-client "
+    oscap xccdf eval \
+      --profile ${SCAP_PROFILE} \
+      --report /tmp/cis-report-\$(hostname -s).html \
+      --results-arf /tmp/cis-results-\$(hostname -s)-arf.xml \
+      ${SCAP_DS} 2>&1 ; echo \"OSCAP_EXIT=\$?\"
+  " 2>&1) || true
+
+  CIS_PASS=$(echo "${SCAN_CIS}" | grep -c 'pass$' || true)
+  CIS_FAIL=$(echo "${SCAN_CIS}" | grep -c 'fail$' || true)
+  CIS_TOTAL=$((CIS_PASS + CIS_FAIL))
+  CIS_PCT=0
+  if [ "${CIS_TOTAL}" -gt 0 ]; then
+    CIS_PCT=$((CIS_PASS * 100 / CIS_TOTAL))
+  fi
+  echo ""
+
+  echo "--- Step 4: Uploading results to Satellite ---"
+  echo ""
+  POLICY_ID=$(run_on_vm satellite "sudo hammer --csv policy list --organization Demo_Org 2>/dev/null | grep 'CIS Level 2' | head -1 | cut -d, -f1" 2>/dev/null) || POLICY_ID=""
+  SAT_HOST=$(run_on_vm satellite "hostname -f" 2>/dev/null) || SAT_HOST="${SAT_FQDN:-satellite}"
+
+  if [ -n "${POLICY_ID}" ]; then
+    echo "Uploading compliant-client scan to Satellite (policy ${POLICY_ID})..."
+    run_on_vm_sudo compliant-client "
+      mkdir -p /etc/foreman_scap_client
+      cat > /etc/foreman_scap_client/config.yaml <<SCAPCFG
+:server: '${SAT_HOST}'
+:port: 9090
+:ca_file: '/etc/rhsm/ca/katello-server-ca.pem'
+:host_certificate: '/etc/pki/consumer/cert.pem'
+:host_private_key: '/etc/pki/consumer/key.pem'
+${POLICY_ID}:
+  :profile: xccdf_org.ssgproject.content_profile_cis
+  :content_path: /usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml
+  :download_path: /compliance/policies/${POLICY_ID}/content
+SCAPCFG
+      foreman_scap_client ${POLICY_ID} 2>&1
+    " || true
+
+    echo ""
+    echo "Uploading vanilla client scan to Satellite..."
+    if oc get vmi/client -n "${NAMESPACE}" > /dev/null 2>&1; then
+      run_on_vm_sudo client "foreman_scap_client ${POLICY_ID}" || true
+    fi
+    echo ""
+  else
+    echo "(Demo 10 not configured — skipping Satellite upload)"
+    echo ""
+  fi
+
+  echo "--- Step 5: Comparison ---"
+  echo ""
+
+  VANILLA_PASS="N/A"
+  VANILLA_FAIL="N/A"
+  VANILLA_PCT="N/A"
+  if oc get vmi/client -n "${NAMESPACE}" > /dev/null 2>&1; then
+    SCAN_VANILLA=$(run_on_vm_sudo client "
+      rpm -q openscap-scanner > /dev/null 2>&1 || dnf install -y openscap-scanner scap-security-guide > /dev/null 2>&1
+      oscap xccdf eval \
+        --profile ${SCAP_PROFILE} \
+        ${SCAP_DS} 2>&1 ; echo \"OSCAP_EXIT=\$?\"
+    " 2>&1) || true
+
+    VANILLA_PASS=$(echo "${SCAN_VANILLA}" | grep -c 'pass$' || true)
+    VANILLA_FAIL=$(echo "${SCAN_VANILLA}" | grep -c 'fail$' || true)
+    VANILLA_TOTAL=$((VANILLA_PASS + VANILLA_FAIL))
+    if [ "${VANILLA_TOTAL}" -gt 0 ]; then
+      VANILLA_PCT="$((VANILLA_PASS * 100 / VANILLA_TOTAL))%"
+    fi
+    VANILLA_PASS="${VANILLA_PASS}"
+    VANILLA_FAIL="${VANILLA_FAIL}"
+  else
+    echo "(Vanilla client VM not running — showing CIS image results only)"
+    echo ""
+  fi
+
+  echo "+---------------------------+-----------+-------------+"
+  echo "| Metric                    | Vanilla   | CIS Image   |"
+  echo "+---------------------------+-----------+-------------+"
+  printf "| %-25s | %-9s | %-11s |\n" "Rules Passed" "${VANILLA_PASS}" "${CIS_PASS}"
+  printf "| %-25s | %-9s | %-11s |\n" "Rules Failed" "${VANILLA_FAIL}" "${CIS_FAIL}"
+  printf "| %-25s | %-9s | %-11s |\n" "Compliance" "${VANILLA_PCT}" "${CIS_PCT}%"
+  echo "+---------------------------+-----------+-------------+"
+  echo ""
+
+  echo "--- Step 6: Download reports ---"
+  echo ""
+  CIS_HOSTNAME=$(run_on_vm compliant-client "hostname -s" 2>/dev/null) || CIS_HOSTNAME="compliant-client"
+  echo "CIS-hardened VM report:"
+  echo "  sshpass -p \"\$DEMO_PASSWORD\" scp ${SSH_OPTS} \\"
+  echo "    -o ProxyCommand=\"virtctl port-forward --stdio vmi/compliant-client.${NAMESPACE} 22\" \\"
+  echo "    cloud-user@localhost:/tmp/cis-report-${CIS_HOSTNAME}.html ./cis-report-${CIS_HOSTNAME}.html"
+  echo ""
+  echo "Open both reports in a browser for side-by-side comparison."
+  echo ""
+
+  SAT_URL=$(oc get route satellite-ui -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null) || SAT_URL="${SAT_FQDN}"
+  echo "=== Compliance verification complete ==="
+  echo ""
+  echo "If Demo 10 was configured, view side-by-side in Satellite UI:"
+  echo "  https://${SAT_URL}"
+  echo "  Navigate to: Hosts → Compliance → Reports"
+}
+
+# Only execute the menu/demos automatically if the script is run directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  case "${1:-}" in
+    1) demo1 ;;
+    2) demo2 ;;
+    3) demo3 ;;
+    4) demo4 ;;
+    5) demo5 ;;
+    6) demo6 ;;
+    7) demo7 ;;
+    8) demo8 "$@" ;;
+    9) demo9 "$@" ;;
+    10) demo10 ;;
+    11) demo11 ;;
+    12) demo12 ;;
+    13) demo13 ;;
+    all)
     demo1; echo ""; echo "---"; echo ""
     demo2; echo ""; echo "---"; echo ""
     demo3; echo ""; echo "---"; echo ""
@@ -650,7 +1206,11 @@ case "${1:-}" in
     demo5; echo ""; echo "---"; echo ""
     demo6; echo ""; echo "---"; echo ""
     demo7; echo ""; echo "---"; echo ""
-    demo8
+    demo8; echo ""; echo "---"; echo ""
+    demo9; echo ""; echo "---"; echo ""
+    demo10; echo ""; echo "---"; echo ""
+    demo11
     ;;
   *) usage ;;
-esac
+  esac
+fi

@@ -124,6 +124,12 @@ foreman_ygg_worker
 yggdrasil
 katello-host-tools
 katello-host-tools-tracer
+rubygem-foreman_scap_client
+
+# --- OpenSCAP compliance ---
+openscap-scanner
+openscap-utils
+scap-security-guide
 
 # --- Kontejnerovy runtime ---
 podman

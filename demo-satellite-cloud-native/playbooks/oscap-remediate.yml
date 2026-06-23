@@ -1,0 +1,302 @@
+---
+# Kurovana remediace CIS Level 2 pro RHEL 9
+# Spousteno pres Satellite Remote Execution (REX)
+#
+# Aplikuje ~25 bezpecnych, vysokodopadovych oprav CIS L2 bez naruseni
+# funkcnosti VM. Plna SSG remediace muze narusit SSH, boot a sit —
+# proto pouzivame vyber oprav bezpecnych pro demo prostredi.
+#
+# Ocekavany vysledek: zlepseni compliance z ~40% na ~60-65%.
+
+- name: CIS Level 2 Remediation - Curated Fixes
+  hosts: localhost
+  connection: local
+  become: true
+
+  tasks:
+    # --- Opravneni souboru (CIS 6.1.x) ---
+    - name: Nastaveni opravneni /etc/passwd
+      ansible.builtin.file:
+        path: /etc/passwd
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Nastaveni opravneni /etc/shadow
+      ansible.builtin.file:
+        path: /etc/shadow
+        mode: '0000'
+        owner: root
+        group: root
+
+    - name: Nastaveni opravneni /etc/group
+      ansible.builtin.file:
+        path: /etc/group
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Nastaveni opravneni /etc/gshadow
+      ansible.builtin.file:
+        path: /etc/gshadow
+        mode: '0000'
+        owner: root
+        group: root
+
+    - name: Nastaveni opravneni /etc/passwd-
+      ansible.builtin.file:
+        path: /etc/passwd-
+        mode: '0644'
+        owner: root
+        group: root
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Nastaveni opravneni /etc/shadow-
+      ansible.builtin.file:
+        path: /etc/shadow-
+        mode: '0000'
+        owner: root
+        group: root
+      ignore_errors: true
+
+    # --- auditd (CIS 4.1.x) ---
+    - name: Instalace a povoleni auditd
+      ansible.builtin.dnf:
+        name: audit
+        state: present
+
+    - name: Povoleni auditd sluzby
+      ansible.builtin.systemd:
+        name: auditd
+        enabled: true
+        state: started
+
+    - name: Konfigurace auditd pravidel pro eskalaci opravneni
+      ansible.builtin.copy:
+        dest: /etc/audit/rules.d/50-cis-remediation.rules
+        mode: '0640'
+        owner: root
+        group: root
+        content: |
+          # Sledovani zmeny uzivatelu a skupin
+          -w /etc/passwd -p wa -k identity
+          -w /etc/group -p wa -k identity
+          -w /etc/shadow -p wa -k identity
+          -w /etc/gshadow -p wa -k identity
+          -w /etc/security/opasswd -p wa -k identity
+
+          # Sledovani zmeny v sudoers
+          -w /etc/sudoers -p wa -k scope
+          -w /etc/sudoers.d/ -p wa -k scope
+
+          # Sledovani pouziti sudo
+          -a always,exit -F arch=b64 -C euid!=uid -F auid!=unset -S execve -k user_emulation
+          -a always,exit -F arch=b32 -C euid!=uid -F auid!=unset -S execve -k user_emulation
+
+          # Sledovani prihlasovaciho logu
+          -w /var/log/lastlog -p wa -k logins
+          -w /var/run/faillock -p wa -k logins
+
+          # Sledovani zmeny casu
+          -a always,exit -F arch=b64 -S adjtimex -S settimeofday -S clock_settime -k time-change
+          -a always,exit -F arch=b32 -S adjtimex -S settimeofday -S clock_settime -k time-change
+          -w /etc/localtime -p wa -k time-change
+
+          # Sledovani zmeny hostname
+          -a always,exit -F arch=b64 -S sethostname -S setdomainname -k system-locale
+          -a always,exit -F arch=b32 -S sethostname -S setdomainname -k system-locale
+
+          # Sledovani mazani souboru
+          -a always,exit -F arch=b64 -S unlink -S unlinkat -S rename -S renameat -F auid>=1000 -F auid!=unset -k delete
+          -a always,exit -F arch=b32 -S unlink -S unlinkat -S rename -S renameat -F auid>=1000 -F auid!=unset -k delete
+      notify: Restart auditd
+
+    # --- sysctl hardening (CIS 3.x) ---
+    - name: Konfigurace sysctl parametru pro sitovy hardening
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-cis-hardening.conf
+        mode: '0644'
+        owner: root
+        group: root
+        content: |
+          net.ipv4.ip_forward = 0
+          net.ipv4.conf.all.send_redirects = 0
+          net.ipv4.conf.default.send_redirects = 0
+          net.ipv4.conf.all.accept_source_route = 0
+          net.ipv4.conf.default.accept_source_route = 0
+          net.ipv4.conf.all.accept_redirects = 0
+          net.ipv4.conf.default.accept_redirects = 0
+          net.ipv4.conf.all.secure_redirects = 0
+          net.ipv4.conf.default.secure_redirects = 0
+          net.ipv4.conf.all.log_martians = 1
+          net.ipv4.conf.default.log_martians = 1
+          net.ipv4.icmp_echo_ignore_broadcasts = 1
+          net.ipv4.icmp_ignore_bogus_error_responses = 1
+          net.ipv4.conf.all.rp_filter = 1
+          net.ipv4.conf.default.rp_filter = 1
+          net.ipv4.tcp_syncookies = 1
+          net.ipv6.conf.all.accept_ra = 0
+          net.ipv6.conf.default.accept_ra = 0
+          net.ipv6.conf.all.accept_redirects = 0
+          net.ipv6.conf.default.accept_redirects = 0
+          net.ipv6.conf.all.accept_source_route = 0
+          net.ipv6.conf.default.accept_source_route = 0
+          kernel.randomize_va_space = 2
+          fs.suid_dumpable = 0
+
+    - name: Aplikace sysctl parametru
+      ansible.builtin.command: sysctl --system
+      changed_when: true
+
+    # --- SSH hardening (CIS 5.2.x) ---
+    - name: SSH hardening
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+        validate: 'sshd -t -f %s'
+      loop:
+        - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 4' }
+        - { regexp: '^#?PermitEmptyPasswords', line: 'PermitEmptyPasswords no' }
+        - { regexp: '^#?HostbasedAuthentication', line: 'HostbasedAuthentication no' }
+        - { regexp: '^#?IgnoreRhosts', line: 'IgnoreRhosts yes' }
+        - { regexp: '^#?LogLevel', line: 'LogLevel VERBOSE' }
+        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+        - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 3' }
+        - { regexp: '^#?LoginGraceTime', line: 'LoginGraceTime 60' }
+        - { regexp: '^#?MaxStartups', line: 'MaxStartups 10:30:60' }
+        - { regexp: '^#?MaxSessions', line: 'MaxSessions 10' }
+        - { regexp: '^#?PermitUserEnvironment', line: 'PermitUserEnvironment no' }
+      notify: Restart sshd
+
+    # --- Password policy (CIS 5.4.x) ---
+    - name: Instalace pam_pwquality
+      ansible.builtin.dnf:
+        name: libpwquality
+        state: present
+
+    - name: Konfigurace password policy
+      ansible.builtin.lineinfile:
+        path: /etc/security/pwquality.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      loop:
+        - { regexp: '^#?\s*minlen', line: 'minlen = 14' }
+        - { regexp: '^#?\s*minclass', line: 'minclass = 4' }
+        - { regexp: '^#?\s*maxrepeat', line: 'maxrepeat = 3' }
+        - { regexp: '^#?\s*maxclassrepeat', line: 'maxclassrepeat = 4' }
+        - { regexp: '^#?\s*dcredit', line: 'dcredit = -1' }
+        - { regexp: '^#?\s*ucredit', line: 'ucredit = -1' }
+        - { regexp: '^#?\s*lcredit', line: 'lcredit = -1' }
+        - { regexp: '^#?\s*ocredit', line: 'ocredit = -1' }
+
+    # --- Core dump (CIS 1.5.x) ---
+    - name: Zakaz core dumps v limits.conf
+      ansible.builtin.lineinfile:
+        path: /etc/security/limits.conf
+        regexp: '^\*\s+hard\s+core'
+        line: '* hard core 0'
+        state: present
+
+    # --- Login banner (CIS 1.7.x) ---
+    - name: Nastaveni login banneru /etc/issue
+      ansible.builtin.copy:
+        dest: /etc/issue
+        mode: '0644'
+        owner: root
+        group: root
+        content: |
+          Authorized users only. All activity may be monitored and reported.
+
+    - name: Nastaveni login banneru /etc/issue.net
+      ansible.builtin.copy:
+        dest: /etc/issue.net
+        mode: '0644'
+        owner: root
+        group: root
+        content: |
+          Authorized users only. All activity may be monitored and reported.
+
+    # --- Zakazani nepotrebnych sluzeb ---
+    - name: Zakazani rpcbind pokud je nainstalovano
+      ansible.builtin.systemd:
+        name: rpcbind
+        enabled: false
+        state: stopped
+      ignore_errors: true
+
+    - name: Zakazani rpcbind.socket
+      ansible.builtin.systemd:
+        name: rpcbind.socket
+        enabled: false
+        state: stopped
+      ignore_errors: true
+
+    # --- cron/at omezeni (CIS 5.1.x) ---
+    - name: Opravneni /etc/crontab
+      ansible.builtin.file:
+        path: /etc/crontab
+        mode: '0600'
+        owner: root
+        group: root
+
+    - name: Opravneni /etc/cron.hourly
+      ansible.builtin.file:
+        path: /etc/cron.hourly
+        mode: '0700'
+        owner: root
+        group: root
+
+    - name: Opravneni /etc/cron.daily
+      ansible.builtin.file:
+        path: /etc/cron.daily
+        mode: '0700'
+        owner: root
+        group: root
+
+    - name: Opravneni /etc/cron.weekly
+      ansible.builtin.file:
+        path: /etc/cron.weekly
+        mode: '0700'
+        owner: root
+        group: root
+
+    - name: Opravneni /etc/cron.monthly
+      ansible.builtin.file:
+        path: /etc/cron.monthly
+        mode: '0700'
+        owner: root
+        group: root
+
+    - name: Opravneni /etc/cron.d
+      ansible.builtin.file:
+        path: /etc/cron.d
+        mode: '0700'
+        owner: root
+        group: root
+
+    # --- Overeni ---
+    - name: Overeni auditd behu
+      ansible.builtin.command: systemctl is-active auditd
+      changed_when: false
+
+    - name: Zobrazeni sysctl bezpecnostnich parametru
+      ansible.builtin.command: sysctl net.ipv4.tcp_syncookies kernel.randomize_va_space fs.suid_dumpable
+      changed_when: false
+      register: sysctl_check
+
+    - name: Souhrn sysctl
+      ansible.builtin.debug:
+        var: sysctl_check.stdout_lines
+
+  handlers:
+    - name: Restart auditd
+      ansible.builtin.command: service auditd restart
+      changed_when: true
+
+    - name: Restart sshd
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted

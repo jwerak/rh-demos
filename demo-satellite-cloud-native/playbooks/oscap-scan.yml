@@ -1,0 +1,51 @@
+---
+# OpenSCAP CIS Level 2 sken pro RHEL 9
+# Spousteno pres Satellite Remote Execution (REX) nebo primo pres SSH
+#
+# Generuje HTML report a ARF vysledky pro dalsi zpracovani.
+# oscap vraci exit code 2 kdyz najde nesplnena pravidla — to je ocekavane.
+
+- name: OpenSCAP CIS Level 2 Compliance Scan
+  hosts: all
+  become: true
+  vars:
+    scap_profile: xccdf_org.ssgproject.content_profile_cis
+    scap_datastream: /usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml
+    report_dir: /tmp
+
+  tasks:
+    - name: Instalace OpenSCAP nastroju
+      ansible.builtin.dnf:
+        name:
+          - openscap-scanner
+          - scap-security-guide
+        state: present
+
+    - name: Zobrazeni dostupnych profilu
+      ansible.builtin.command:
+        cmd: oscap info --profiles "{{ scap_datastream }}"
+      changed_when: false
+      register: profiles_output
+
+    - name: Vypis profilu
+      ansible.builtin.debug:
+        var: profiles_output.stdout_lines
+
+    - name: Spusteni CIS Level 2 skenu
+      ansible.builtin.command:
+        cmd: >-
+          oscap xccdf eval
+          --profile {{ scap_profile }}
+          --report {{ report_dir }}/cis-report-{{ ansible_hostname }}.html
+          --results-arf {{ report_dir }}/cis-results-{{ ansible_hostname }}-arf.xml
+          {{ scap_datastream }}
+      register: scan_result
+      failed_when: scan_result.rc == 1
+      changed_when: false
+
+    - name: Souhrn vysledku skenu
+      ansible.builtin.debug:
+        msg: >-
+          Sken dokoncen (exit code {{ scan_result.rc }}).
+          HTML report: {{ report_dir }}/cis-report-{{ ansible_hostname }}.html
+          ARF vysledky: {{ report_dir }}/cis-results-{{ ansible_hostname }}-arf.xml

@@ -1,0 +1,83 @@
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: compliant-client
+  namespace: satellite-cloud-native
+  labels:
+    app: compliant-client
+    app.kubernetes.io/name: compliant-client
+    app.kubernetes.io/part-of: satellite-cloud-native
+    app.kubernetes.io/component: managed-host
+    app.openshift.io/runtime: redhat
+    role: client
+    compliance: cis-l2
+    demo: satellite-cloud-native
+  annotations:
+    app.openshift.io/connects-to: '[
+      {"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"satellite"},
+      {"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"idm"}
+    ]'
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: compliant-client
+        app: compliant-client
+        app.kubernetes.io/name: compliant-client
+        app.kubernetes.io/part-of: satellite-cloud-native
+        app.kubernetes.io/component: managed-host
+        role: client
+        compliance: cis-l2
+        demo: satellite-cloud-native
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            - name: rhsm-creds
+              disk:
+                bus: virtio
+              serial: rhsm-creds
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: compliant-client-rootdisk
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            secretRef:
+              name: client-cloudinit
+        - name: rhsm-creds
+          secret:
+            secretName: rhsm-credentials
+  dataVolumeTemplates:
+    - metadata:
+        name: compliant-client-rootdisk
+      spec:
+        source:
+          pvc:
+            name: cis-rhel9-base
+            namespace: satellite-cloud-native
+        storage:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 30Gi

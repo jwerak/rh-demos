@@ -10,6 +10,8 @@ Cloud-native Satellite + IdM demo: RHEL VMs running on OpenShift Virtualization 
 - **Client Pool** (VirtualMachinePool) - Elastic pool of RHEL clients for scaling demos
 - **NetworkPolicy** - SDN-based micro-segmentation blocking client-to-client traffic
 - **Security Playbooks** - Ansible playbooks for OS hardening (fapolicyd, AIDE, sudoers) and RPM whitelist auditing, executed via Satellite REX
+- **Compliance Scanning** - OpenSCAP CIS Level 2 scanning with Satellite SCAP integration, curated remediation, and compliant image deployment. Satellite GUI job templates use Script provider with **pull-mqtt** (yggdrasil) since Ansible-type REX can't SSH to clients in masquerade mode.
+- **Compliant Client VM** - RHEL 9 VM booted from CIS Level 2 pre-hardened qcow2 image (Image Builder)
 
 ## Important Notes
 
@@ -26,16 +28,20 @@ Cloud-native Satellite + IdM demo: RHEL VMs running on OpenShift Virtualization 
 - `k8s/overlays/demo/` - Demo overlay (adds environment label)
 - `scripts/deploy.sh` - Sequenced deployment (IdM first, then Satellite, then clients)
 - `scripts/verify-registration.sh` - Check Satellite + IdM enrollment status
-- `scripts/demo-scenarios.sh` - Run individual demos 1-8
+- `scripts/demo-scenarios.sh` - Run individual demos 1-13
+- `scripts/upload-cis-image.sh` - Upload CIS-hardened qcow2 image for Demo 12
+- `scripts/cis-remediate.sh` - CIS Level 2 remediation bash script (Demo 11)
 - `playbooks/hardening.yml` - Ansible playbook: fapolicyd + AIDE + sudoers (RHEL System Roles)
 - `playbooks/rpm-whitelist-audit.yml` - Ansible playbook: RPM package whitelist audit/enforce
+- `playbooks/oscap-scan.yml` - Ansible playbook: OpenSCAP CIS Level 2 scan
+- `playbooks/oscap-remediate.yml` - Ansible playbook: curated CIS Level 2 remediation
 - `playbooks/files/rpm-whitelist.txt` - Approved RPM package list (Golden Image baseline)
 
 ## Kustomize Layout
 
 ```
 k8s/base/           # namespace, IdM (vm + cloudinit + svc), Satellite (vm + cloudinit + svc + route + pvc),
-                     # client (vm + cloudinit + pool), network-policy
+                     # client (vm + cloudinit + pool), compliant-client-vm, network-policy
 k8s/overlays/demo/   # Adds environment: demo label
 ```
 
@@ -49,6 +55,13 @@ source .env
 ./scripts/deploy.sh                  # Templates FQDNs into manifests and applies
                                      # If MANIFEST_PATH is set, waits for Satellite and uploads it automatically
 ./scripts/upload-manifest.sh         # Or upload manifest manually after Satellite installs (~20-30 min)
+
+# Ad-hoc VM access (source the script for helper functions)
+source scripts/demo-scenarios.sh
+ssh_exec satellite              # Interactive SSH session
+ssh_exec client
+run_on_vm satellite "sudo hammer host list"   # Run command, return output
+run_on_vm_sudo client "systemctl status fapolicyd"
 
 # Monitor IdM install
 sshpass -p "$DEMO_PASSWORD" ssh -o StrictHostKeyChecking=no -o ProxyCommand="virtctl port-forward --stdio vmi/idm.satellite-cloud-native 22" cloud-user@localhost "sudo tail -f /var/log/idm-setup.log"
@@ -72,6 +85,11 @@ oc scale vmpool client-pool -n satellite-cloud-native --replicas=5
 ./scripts/demo-scenarios.sh 7   # Automated hardening via Satellite REX
 ./scripts/demo-scenarios.sh 8   # RPM whitelist audit (audit mode)
 ./scripts/demo-scenarios.sh 8 enforce  # RPM whitelist audit (enforce mode)
+./scripts/demo-scenarios.sh 9   # CLI OpenSCAP CIS L2 scan + HTML report
+./scripts/demo-scenarios.sh 10  # Satellite SCAP compliance dashboard
+./scripts/demo-scenarios.sh 11  # CIS Level 2 remediation via Satellite REX
+./scripts/demo-scenarios.sh 12  # Deploy CIS-hardened VM from qcow2 image
+./scripts/demo-scenarios.sh 13  # Compliance verification (vanilla vs CIS image)
 
 # Verify registrations
 ./scripts/verify-registration.sh
