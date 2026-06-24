@@ -97,7 +97,7 @@ demo_step() {
     esac
   done
 
-  (( _STEP_NUM++ ))
+  (( _STEP_NUM++ )) || true
 
   # --- Display ---
   echo ""
