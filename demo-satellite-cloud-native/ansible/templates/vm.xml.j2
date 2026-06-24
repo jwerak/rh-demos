@@ -1,0 +1,60 @@
+<domain type='kvm'>
+  <name>{{ vm_name }}</name>
+  <memory unit='MiB'>{{ vm_ram_mb }}</memory>
+  <vcpu placement='static'>{{ vm_vcpus }}</vcpu>
+  <os>
+    <type arch='x86_64' machine='pc-q35-9.1'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <metadata>
+    <demo:instance xmlns:demo="https://github.com/jveverka/rh-demos">
+      <demo:profile>{{ vm_profile }}</demo:profile>
+    </demo:instance>
+  </metadata>
+  <features>
+    <acpi/>
+    <apic/>
+  </features>
+  <cpu mode='host-passthrough' check='none' migratable='on'/>
+  <devices>
+    <!-- Root disk -->
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='{{ libvirt_pool_dir }}/{{ vm_name }}.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <!-- Cloud-init NoCloud ISO (readonly) -->
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='{{ libvirt_pool_dir }}/{{ vm_name }}-cidata.iso'/>
+      <target dev='sda' bus='sata'/>
+      <readonly/>
+    </disk>
+    <!-- Extra disks (e.g. pulp-data) -->
+{% for disk in vm_extra_disks | default([]) %}
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='{{ libvirt_pool_dir }}/{{ vm_name }}-{{ disk.name }}.qcow2'/>
+      <target dev='vd{{ "bcdefgh"[loop.index0] }}' bus='virtio'/>
+    </disk>
+{% endfor %}
+    <!-- Network -->
+    <interface type='network'>
+      <source network='{{ libvirt_network_name }}'/>
+      <model type='virtio'/>
+{% if vm_mac is defined and vm_mac %}
+      <mac address='{{ vm_mac }}'/>
+{% endif %}
+    </interface>
+    <controller type='usb' index='0' model='qemu-xhci' ports='15'/>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+    <channel type='unix'>
+      <target type='virtio' name='org.qemu.guest_agent.0'/>
+    </channel>
+    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>
+      <listen type='address' address='127.0.0.1'/>
+    </graphics>
+  </devices>
+</domain>

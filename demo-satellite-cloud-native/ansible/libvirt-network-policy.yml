@@ -1,0 +1,76 @@
+---
+# Apply network micro-segmentation rules on a libvirt host (demo a5).
+#
+# Mirrors the OpenShift NetworkPolicy behavior: clients can reach
+# server VMs (IdM, Satellite) but cannot communicate with each other.
+#
+# Usage:
+#   ansible-playbook ansible/libvirt-network-policy.yml \
+#     -e "libvirt_host=fedora44.example.com" \
+#     -e "libvirt_user=root" \
+#     -e "libvirt_ssh_key=~/.ssh/id_rsa"
+#
+# To remove the rules:
+#   ansible-playbook ansible/libvirt-network-policy.yml \
+#     -e "libvirt_host=..." -e "nftables_state=absent"
+
+- name: Apply network micro-segmentation rules (demo a5)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    libvirt_host: "{{ libvirt_host }}"
+    libvirt_user: "{{ libvirt_user | default('root') }}"
+    libvirt_ssh_key: "{{ libvirt_ssh_key }}"
+    # Default IPs from the satellite-demo libvirt network (192.168.150.0/24)
+    idm_ip: "192.168.150.10"
+    sat_ip: "192.168.150.11"
+    client_subnet: "192.168.150.100/25"
+    nftables_table: "satellite-demo-seg"
+    nftables_state: "present"
+
+  tasks:
+    - name: Apply nftables segmentation rules
+      ansible.builtin.shell: |
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          -i "{{ libvirt_ssh_key }}" "{{ libvirt_user }}@{{ libvirt_host }}" bash -s <<'REMOTE_SCRIPT'
+        set -e
+
+        {% if nftables_state == 'absent' %}
+        # Remove the demo segmentation table
+        nft delete table inet {{ nftables_table }} 2>/dev/null && \
+          echo "Removed nftables table {{ nftables_table }}" || \
+          echo "Table {{ nftables_table }} not found (already removed)"
+        {% else %}
+        # Create or flush the segmentation table
+        nft add table inet {{ nftables_table }} 2>/dev/null || true
+        nft flush table inet {{ nftables_table }} 2>/dev/null || true
+
+        # Create a forward chain with filter priority
+        nft add chain inet {{ nftables_table }} forward \
+          '{ type filter hook forward priority 0 ; policy accept ; }'
+
+        # Allow client -> IdM server traffic
+        nft add rule inet {{ nftables_table }} forward \
+          ip saddr {{ client_subnet }} ip daddr {{ idm_ip }} accept
+
+        # Allow client -> Satellite server traffic
+        nft add rule inet {{ nftables_table }} forward \
+          ip saddr {{ client_subnet }} ip daddr {{ sat_ip }} accept
+
+        # Allow server -> client traffic (return path)
+        nft add rule inet {{ nftables_table }} forward \
+          ip saddr {{ idm_ip }} ip daddr {{ client_subnet }} accept
+        nft add rule inet {{ nftables_table }} forward \
+          ip saddr {{ sat_ip }} ip daddr {{ client_subnet }} accept
+
+        # Block client -> client traffic
+        nft add rule inet {{ nftables_table }} forward \
+          ip saddr {{ client_subnet }} ip daddr {{ client_subnet }} drop
+
+        echo "nftables rules applied:"
+        nft list table inet {{ nftables_table }}
+        {% endif %}
+        REMOTE_SCRIPT
+      changed_when: true

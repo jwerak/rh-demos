@@ -1,0 +1,33 @@
+---
+ansible-navigator:
+  execution-environment:
+    container-engine: podman
+    image: satellite-demo-ee:latest
+    pull:
+      policy: missing
+    container-options:
+      - "--network=host"
+    environment-variables:
+      pass:
+        - LIBVIRT_HOST
+        - LIBVIRT_USER
+        - LIBVIRT_SSH_KEY
+        - LIBVIRT_POOL_DIR
+        - LIBVIRT_NETWORK
+        - LIBVIRT_RHEL9_IMAGE
+        - IDM_FQDN
+        - SAT_FQDN
+        - DEMO_PASSWORD
+        - RHSM_ORG
+        - RHSM_ACTIVATION_KEY
+        - MANIFEST_PATH
+        - SSH_AUTH_SOCK
+    volume-mounts:
+      - src: "${HOME}/.cache/satellite-demo"
+        dest: /home/runner/.cache/satellite-demo
+        options: Z
+  mode: stdout
+  playbook-artifact:
+    enable: false
+  logging:
+    level: warning

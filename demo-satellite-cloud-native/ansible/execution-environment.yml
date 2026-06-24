@@ -1,0 +1,16 @@
+---
+version: 3
+images:
+  base_image:
+    name: quay.io/fedora/fedora:44
+options:
+  package_manager_path: /usr/bin/dnf
+additional_build_steps:
+  prepend_base:
+    - RUN dnf install -y python3-pip python3-devel gcc pkg-config ansible-core openssh-clients sshpass xorriso libvirt-client libvirt-devel virt-install python3-libvirt python3-lxml && pip3 install ansible-runner && dnf clean all
+dependencies:
+  galaxy:
+    collections:
+      - name: community.libvirt
+      - name: ansible.posix
+      - name: community.general

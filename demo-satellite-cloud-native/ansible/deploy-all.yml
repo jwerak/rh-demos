@@ -1,0 +1,289 @@
+---
+# Full-stack orchestration playbook for Satellite demo on libvirt.
+#
+# Deploys IdM, Satellite, and (optionally) uploads a subscription manifest,
+# then prepares client cloud-init templates for on-demand VM creation.
+#
+# Usage:
+#   ansible-playbook ansible/deploy-all.yml
+#   ansible-playbook ansible/deploy-all.yml --tags idm
+#   ansible-playbook ansible/deploy-all.yml --tags satellite,manifest
+#
+# Required environment variables (or pass as --extra-vars):
+#   LIBVIRT_HOST, IDM_FQDN, SAT_FQDN, DEMO_PASSWORD, RHSM_ORG, RHSM_ACTIVATION_KEY
+#
+# Optional:
+#   LIBVIRT_USER, LIBVIRT_SSH_KEY, LIBVIRT_POOL_DIR, LIBVIRT_RHEL9_IMAGE,
+#   LIBVIRT_NETWORK, manifest_path
+
+- name: Deploy Satellite demo stack on libvirt
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/vm-profiles.yml
+
+  vars:
+    libvirt_host: "{{ lookup('env', 'LIBVIRT_HOST') }}"
+    libvirt_user: "{{ lookup('env', 'LIBVIRT_USER') | default('root', true) }}"
+    libvirt_ssh_key: "{{ lookup('env', 'LIBVIRT_SSH_KEY') | default('~/.ssh/id_ed25519', true) }}"
+    libvirt_uri: "qemu+ssh://{{ libvirt_user }}@{{ libvirt_host }}/system"
+    libvirt_pool_dir: "{{ lookup('env', 'LIBVIRT_POOL_DIR') | default('/var/lib/libvirt/images', true) }}"
+    libvirt_rhel9_image: "{{ lookup('env', 'LIBVIRT_RHEL9_IMAGE') | default('rhel-9.6-x86_64-kvm.qcow2', true) }}"
+    libvirt_network_name: "{{ lookup('env', 'LIBVIRT_NETWORK') | default('satellite-demo', true) }}"
+    idm_fqdn: "{{ lookup('env', 'IDM_FQDN') }}"
+    sat_fqdn: "{{ lookup('env', 'SAT_FQDN') }}"
+    demo_password: "{{ lookup('env', 'DEMO_PASSWORD') }}"
+    rhsm_org: "{{ lookup('env', 'RHSM_ORG') }}"
+    rhsm_activation_key: "{{ lookup('env', 'RHSM_ACTIVATION_KEY') }}"
+    ipa_domain: "{{ idm_fqdn.split('.')[1:] | join('.') }}"
+    ipa_realm: "{{ ipa_domain | upper }}"
+
+    # SSH to the hypervisor host (direct)
+    _host_ssh_opts: >-
+      -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null
+      -o ConnectTimeout=10
+      -i {{ libvirt_ssh_key }}
+    # SSH to VMs through the hypervisor (NAT network)
+    _ssh_opts: >-
+      -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null
+      -o ConnectTimeout=10
+      -o ProxyCommand="ssh -o StrictHostKeyChecking=no -W %h:%p -i {{ libvirt_ssh_key }} {{ libvirt_user }}@{{ libvirt_host }}"
+    _ssh_cmd: >-
+      sshpass -p '{{ demo_password }}'
+      ssh {{ _ssh_opts }}
+
+    # Ansible playbook directory (relative to playbook location)
+    _playbook_dir: "{{ playbook_dir }}"
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Pre-flight checks
+  # ════════════════════════════════════════════════════════════════════════
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - libvirt_host | length > 0
+          - idm_fqdn | length > 0
+          - sat_fqdn | length > 0
+          - demo_password | length > 0
+          - rhsm_org | length > 0
+          - rhsm_activation_key | length > 0
+        fail_msg: >-
+          Missing required environment variables. Ensure LIBVIRT_HOST, IDM_FQDN,
+          SAT_FQDN, DEMO_PASSWORD, RHSM_ORG, and RHSM_ACTIVATION_KEY are set.
+      tags: [always]
+
+  tasks:
+    # ══════════════════════════════════════════════════════════════════════
+    # Phase 1: Host Setup
+    # ══════════════════════════════════════════════════════════════════════
+    - name: "Phase 1: Prepare libvirt host"
+      tags: [host-setup]
+      block:
+        - name: Run libvirt-host-setup playbook
+          ansible.builtin.command:
+            cmd: >-
+              ansible-playbook {{ _playbook_dir }}/libvirt-host-setup.yml
+              -i {{ libvirt_host }},
+              -u {{ libvirt_user }}
+              --private-key {{ libvirt_ssh_key }}
+              -b
+              -e libvirt_host={{ libvirt_host }}
+              -e libvirt_user={{ libvirt_user }}
+              -e libvirt_ssh_user={{ libvirt_user }}
+              -e libvirt_pool_dir={{ libvirt_pool_dir }}
+              -e libvirt_rhel9_image={{ libvirt_rhel9_image }}
+              -e libvirt_network_name={{ libvirt_network_name }}
+          changed_when: true
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Phase 2: Deploy IdM
+    # ══════════════════════════════════════════════════════════════════════
+    - name: "Phase 2: Deploy IdM VM"
+      tags: [idm]
+      block:
+        - name: Create IdM VM
+          ansible.builtin.command:
+            cmd: >-
+              ansible-playbook {{ _playbook_dir }}/libvirt-vm-create.yml
+              -i localhost,
+              -c local
+              -e vm_name=idm
+              -e vm_profile=idm
+              -e libvirt_host={{ libvirt_host }}
+              -e libvirt_uri={{ libvirt_uri }}
+              -e libvirt_pool_dir={{ libvirt_pool_dir }}
+              -e libvirt_rhel9_image={{ libvirt_rhel9_image }}
+              -e libvirt_network_name={{ libvirt_network_name }}
+              -e idm_fqdn={{ idm_fqdn }}
+              -e sat_fqdn={{ sat_fqdn }}
+              -e demo_password={{ demo_password }}
+              -e rhsm_org={{ rhsm_org }}
+              -e rhsm_activation_key={{ rhsm_activation_key }}
+              -e ipa_domain={{ ipa_domain }}
+              -e ipa_realm={{ ipa_realm }}
+          changed_when: true
+
+        - name: Get IdM VM IP address
+          ansible.builtin.set_fact:
+            idm_ip: "{{ vm_profiles.idm.ip }}"
+
+        - name: Wait for IdM VM to accept SSH connections
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ idm_ip }} "echo ok"
+          register: idm_ssh_check
+          until: idm_ssh_check.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Wait for IdM installation to complete (up to 30 min)
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ idm_ip }} \
+              "grep -q 'IdM Configuration Complete' /var/log/idm-setup.log 2>/dev/null"
+          register: idm_setup_result
+          until: idm_setup_result.rc == 0
+          retries: 60
+          delay: 30
+          changed_when: false
+
+        - name: IdM deployment complete
+          ansible.builtin.debug:
+            msg: "IdM is ready at {{ idm_fqdn }} ({{ idm_ip }})"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Phase 3: Deploy Satellite
+    # ══════════════════════════════════════════════════════════════════════
+    - name: "Phase 3: Deploy Satellite VM"
+      tags: [satellite]
+      block:
+        - name: Create Satellite VM
+          ansible.builtin.command:
+            cmd: >-
+              ansible-playbook {{ _playbook_dir }}/libvirt-vm-create.yml
+              -i localhost,
+              -c local
+              -e vm_name=satellite
+              -e vm_profile=satellite
+              -e libvirt_uri={{ libvirt_uri }}
+              -e libvirt_pool_dir={{ libvirt_pool_dir }}
+              -e libvirt_rhel9_image={{ libvirt_rhel9_image }}
+              -e libvirt_network_name={{ libvirt_network_name }}
+              -e idm_fqdn={{ idm_fqdn }}
+              -e sat_fqdn={{ sat_fqdn }}
+              -e demo_password={{ demo_password }}
+              -e rhsm_org={{ rhsm_org }}
+              -e rhsm_activation_key={{ rhsm_activation_key }}
+              -e ipa_domain={{ ipa_domain }}
+              -e ipa_realm={{ ipa_realm }}
+          changed_when: true
+
+        - name: Get Satellite VM IP address
+          ansible.builtin.set_fact:
+            satellite_ip: "{{ vm_profiles.satellite.ip }}"
+
+        - name: Wait for Satellite VM to accept SSH connections
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ satellite_ip }} "echo ok"
+          register: sat_ssh_check
+          until: sat_ssh_check.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Satellite installation to complete (up to 60 min)
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ satellite_ip }} \
+              "grep -q 'Satellite Configuration Complete' /var/log/satellite-setup.log 2>/dev/null"
+          register: satellite_setup_result
+          until: satellite_setup_result.rc == 0
+          retries: 120
+          delay: 30
+          changed_when: false
+
+        - name: Satellite deployment complete
+          ansible.builtin.debug:
+            msg: "Satellite is ready at {{ sat_fqdn }} ({{ satellite_ip }})"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Phase 4: Upload Subscription Manifest (optional)
+    # ══════════════════════════════════════════════════════════════════════
+    - name: "Phase 4: Upload subscription manifest"
+      tags: [manifest]
+      when: manifest_path is defined and manifest_path | length > 0
+      block:
+        - name: Copy manifest to Satellite VM
+          ansible.builtin.shell: |
+            sshpass -p '{{ demo_password }}' \
+              scp {{ _ssh_opts }} \
+              {{ manifest_path }} \
+              cloud-user@{{ vm_profiles.satellite.ip }}:/tmp/manifest.zip
+          changed_when: true
+
+        - name: Upload manifest to Satellite
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ vm_profiles.satellite.ip }} \
+              "sudo hammer subscription upload \
+                --file /tmp/manifest.zip \
+                --organization Demo_Org"
+          register: manifest_upload
+          changed_when: true
+
+        - name: Manifest upload result
+          ansible.builtin.debug:
+            msg: "{{ manifest_upload.stdout }}"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Phase 5: Prepare Client Template
+    # ══════════════════════════════════════════════════════════════════════
+    - name: "Phase 5: Prepare client cloud-init template"
+      tags: [client-prep]
+      block:
+        - name: Ensure cloud-init template directory exists on libvirt host
+          ansible.builtin.shell: |
+            ssh {{ _host_ssh_opts }} {{ libvirt_user }}@{{ libvirt_host }} \
+              "mkdir -p {{ libvirt_pool_dir }}/cloud-init-templates"
+          changed_when: false
+
+        - name: Generate client cloud-init meta-data template
+          ansible.builtin.template:
+            src: templates/cloud-init/meta-data.j2
+            dest: /tmp/satellite-demo-client-meta-data
+            mode: "0644"
+          vars:
+            vm_name: "__VM_NAME__"
+            vm_hostname: "__VM_NAME__"
+
+        - name: Generate client cloud-init network-config template
+          ansible.builtin.template:
+            src: templates/cloud-init/network-config.j2
+            dest: /tmp/satellite-demo-client-network-config
+            mode: "0644"
+
+        - name: Copy client cloud-init templates to libvirt host
+          ansible.builtin.shell: |
+            scp {{ _host_ssh_opts }} \
+              /tmp/satellite-demo-client-meta-data \
+              /tmp/satellite-demo-client-network-config \
+              {{ libvirt_user }}@{{ libvirt_host }}:{{ libvirt_pool_dir }}/cloud-init-templates/
+          changed_when: true
+
+        - name: Clean up local temporary files
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/satellite-demo-client-meta-data
+            - /tmp/satellite-demo-client-network-config
+
+        - name: Client template preparation complete
+          ansible.builtin.debug:
+            msg: >-
+              Client cloud-init templates are ready at
+              {{ libvirt_pool_dir }}/cloud-init-templates/ on {{ libvirt_host }}.
+              Client VMs can now be created on-demand by the demo scripts using
+              libvirt-vm-create.yml with vm_profile=client.

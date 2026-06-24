@@ -1,0 +1,156 @@
+#cloud-config
+hostname: satellite
+fqdn: {{ sat_fqdn }}
+user: cloud-user
+password: {{ demo_password }}
+chpasswd:
+  expire: false
+ssh_pwauth: true
+runcmd:
+  - |
+    set -euo pipefail
+    exec > /var/log/satellite-setup.log 2>&1
+    echo "=== Satellite Setup Starting ==="
+
+    SAT_FQDN="{{ sat_fqdn }}"
+
+    # Set hostname
+    hostnamectl set-hostname "${SAT_FQDN}"
+
+    # Map FQDN to the real VM IP, not loopback
+    VM_IP="{{ vm_ip | default('') }}"
+    if [ -z "${VM_IP}" ]; then
+      VM_IP=$(ip -4 addr show eth0 | grep -oP '(?<=inet )[\d.]+')
+    fi
+    sed -i 's/^127\.0\.0\.1.*/127.0.0.1 localhost localhost.localdomain/' /etc/hosts
+    echo "${VM_IP} ${SAT_FQDN} satellite" >> /etc/hosts
+
+    # Detect the persistent data disk for /var/lib/pulp (mounted after install)
+    sleep 5
+    PULP_DISK=""
+    for dev in /dev/vd{c,d,e,f}; do
+      if [ -b "$dev" ]; then
+        SIZE=$(blockdev --getsize64 "$dev" 2>/dev/null || echo 0)
+        # Pulp disk is >1GB
+        if [ "$SIZE" -gt 1073741824 ]; then
+          PULP_DISK="$dev"
+          break
+        fi
+      fi
+    done
+    if [ -n "$PULP_DISK" ]; then
+      if ! blkid "$PULP_DISK" > /dev/null 2>&1; then
+        mkfs.xfs -f "$PULP_DISK"
+      fi
+      echo "Found pulp data disk: ${PULP_DISK}"
+    else
+      echo "WARNING: Pulp data disk not found, /var/lib/pulp will use root disk"
+    fi
+
+    # Register with RHSM
+    subscription-manager register --org="{{ rhsm_org }}" --activationkey="{{ rhsm_activation_key }}"
+
+    # Enable Satellite repos
+    subscription-manager repos --disable '*'
+    subscription-manager repos \
+      --enable=rhel-9-for-x86_64-baseos-rpms \
+      --enable=rhel-9-for-x86_64-appstream-rpms \
+      --enable=satellite-6.18-for-rhel-9-x86_64-rpms \
+      --enable=satellite-maintenance-6.18-for-rhel-9-x86_64-rpms
+
+    # Install Satellite
+    dnf install -y satellite
+
+    # Run satellite-installer
+    satellite-installer --scenario satellite \
+      --foreman-initial-admin-username admin \
+      --foreman-initial-admin-password '{{ demo_password }}' \
+      --foreman-initial-organization 'Demo_Org' \
+      --foreman-initial-location 'Cloud' \
+      --certs-node-fqdn "${SAT_FQDN}" \
+      --foreman-proxy-dns false \
+      --foreman-proxy-dhcp false \
+      --foreman-proxy-tftp false
+
+    echo "=== Satellite Installed ==="
+
+    # Migrate /var/lib/pulp to separate storage (documented post-install procedure)
+    if [ -n "$PULP_DISK" ]; then
+      echo "Migrating /var/lib/pulp to ${PULP_DISK}..."
+      satellite-maintain service stop
+      mount "$PULP_DISK" /mnt
+      cp -r /var/lib/pulp/* /mnt/
+      umount /mnt
+      rm -rf /var/lib/pulp/*
+      echo "${PULP_DISK} /var/lib/pulp xfs defaults,context=\"system_u:object_r:pulpcore_var_lib_t:s0\" 0 2" >> /etc/fstab
+      mount -a
+      satellite-maintain service start
+      echo "Migrated /var/lib/pulp to ${PULP_DISK}"
+    fi
+
+    # Enable REX pull mode (MQTT) so Satellite doesn't need to SSH to clients
+    satellite-installer \
+      --foreman-proxy-plugin-remote-execution-script-mode pull-mqtt
+
+    hammer settings set \
+      --name remote_execution_prefer_registered_through_proxy \
+      --value true
+
+    echo "=== REX Pull Mode Enabled ==="
+
+    # Enable OpenSCAP plugin on the smart proxy (not auto-enabled in 6.18)
+    satellite-installer \
+      --enable-foreman-proxy-plugin-openscap \
+      --foreman-proxy-plugin-openscap-ansible-module true
+
+    echo "=== OpenSCAP Proxy Enabled ==="
+
+    # Post-install: create lifecycle environment and activation key
+    hammer organization update \
+      --name "Demo_Org" \
+      --description "Cloud-native Satellite demo organization"
+
+    hammer lifecycle-environment create \
+      --name "Lab" \
+      --prior "Library" \
+      --organization "Demo_Org"
+
+    hammer content-view create \
+      --name "RHEL9-Base" \
+      --organization "Demo_Org"
+
+    hammer content-view publish \
+      --name "RHEL9-Base" \
+      --organization "Demo_Org"
+
+    hammer content-view version promote \
+      --content-view "RHEL9-Base" \
+      --to-lifecycle-environment "Lab" \
+      --organization "Demo_Org"
+
+    hammer activation-key create \
+      --name "rhel9-key" \
+      --organization "Demo_Org" \
+      --lifecycle-environment "Lab" \
+      --content-view "RHEL9-Base" \
+      --unlimited-hosts
+
+    # Generate global registration command for clients
+    REG_CMD=$(hammer host-registration generate-command \
+      --activation-keys "rhel9-key" \
+      --force true \
+      --insecure true \
+      --setup-remote-execution-pull true \
+      --jwt-expiration 0 2>/dev/null)
+    echo "${REG_CMD}" > /var/www/html/pub/register.sh
+    chmod 644 /var/www/html/pub/register.sh
+    echo "Global registration command saved to /var/www/html/pub/register.sh"
+
+    # Install RHEL System Roles, SCAP client Ansible role, and sync into Satellite
+    satellite-maintain packages install -y rhel-system-roles ansiblerole-foreman_scap_client
+    hammer ansible roles sync --proxy-id 1
+
+    # Import security hardening playbooks as REX job templates
+    mkdir -p /opt/demo-playbooks/files
+
+    echo "=== Satellite Configuration Complete ==="

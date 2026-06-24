@@ -1,0 +1,45 @@
+---
+vm_profiles:
+  idm:
+    vcpus: 2
+    ram_mb: 4096
+    disk_gb: 30
+    mac: "52:54:00:de:a0:01"
+    ip: "192.168.150.10"
+    cloudinit_template: idm
+  satellite:
+    vcpus: 4
+    ram_mb: 22528
+    disk_gb: 100
+    extra_disks:
+      - name: pulp-data
+        size_gb: 100
+        mount: /var/lib/pulp
+    mac: "52:54:00:de:a0:02"
+    ip: "192.168.150.11"
+    cloudinit_template: satellite
+  client:
+    vcpus: 1
+    ram_mb: 2048
+    disk_gb: 30
+    cloudinit_template: client
+  sec-client:
+    vcpus: 1
+    ram_mb: 2048
+    disk_gb: 30
+    cloudinit_template: client
+  lc-client:
+    vcpus: 1
+    ram_mb: 2048
+    disk_gb: 30
+    cloudinit_template: lc-client
+  compliant-client:
+    vcpus: 1
+    ram_mb: 2048
+    disk_gb: 30
+    cloudinit_template: client
+    base_image: cis-rhel9.qcow2
+
+libvirt_network_name: satellite-demo
+libvirt_pool_dir: /var/lib/libvirt/images
+libvirt_rhel9_image: rhel-9.8-x86_64-kvm.qcow2

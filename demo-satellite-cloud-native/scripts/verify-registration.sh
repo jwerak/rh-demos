@@ -6,24 +6,22 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -z "${DEMO_PASSWORD:-}" ] && [ -f "${SCRIPT_DIR}/../.env" ]; then
   source "${SCRIPT_DIR}/../.env"
 fi
-SSH_PASS="${DEMO_PASSWORD:?DEMO_PASSWORD not set. Run: source .env}"
+: "${DEMO_PASSWORD:?DEMO_PASSWORD not set. Run: source .env}"
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
-# Helper: run a command on a VM via virtctl port-forward + sshpass
-run_on_vm() {
-  local vmi_name="$1"
-  shift
-  sshpass -p "${SSH_PASS}" ssh ${SSH_OPTS} \
-    -o ProxyCommand="virtctl port-forward --stdio vmi/${vmi_name}.${NAMESPACE} 22" \
-    cloud-user@localhost "$@"
-}
+# Source the platform driver (provides run_on_vm, list_vms_by_role, get_service_url, etc.)
+source "${SCRIPT_DIR}/platform-${DEMO_PLATFORM:-openshift}.sh"
 
 echo "=== Registration Verification ==="
 echo ""
 
 # Check VM status
 echo "--- VM Status ---"
-oc get vm,vmi -n "${NAMESPACE}"
+if [ "${DEMO_PLATFORM:-openshift}" = "libvirt" ]; then
+  _libvirt_ssh "virsh list --all" 2>/dev/null || echo "  Could not list VMs on libvirt host"
+else
+  oc get vm,vmi -n "${NAMESPACE}"
+fi
 echo ""
 
 # Verify Satellite registration
@@ -36,12 +34,20 @@ echo ""
 
 # Check all pool clients
 echo "Checking pool clients..."
-for VMI in $(oc get vmi -n "${NAMESPACE}" -l kubevirt.io/vmpool=client-pool -o name 2>/dev/null); do
-  NAME=$(echo "${VMI}" | cut -d/ -f2)
-  echo -n "  ${NAME}: "
-  run_on_vm "${NAME}" "sudo subscription-manager identity" 2>/dev/null && \
-    echo "registered" || echo "not registered"
-done
+if [ "${DEMO_PLATFORM:-openshift}" = "libvirt" ]; then
+  for NAME in $(list_vms_by_role client-pool); do
+    echo -n "  ${NAME}: "
+    run_on_vm "${NAME}" "sudo subscription-manager identity" 2>/dev/null && \
+      echo "registered" || echo "not registered"
+  done
+else
+  for VMI in $(oc get vmi -n "${NAMESPACE}" -l kubevirt.io/vmpool=client-pool -o name 2>/dev/null); do
+    NAME=$(echo "${VMI}" | cut -d/ -f2)
+    echo -n "  ${NAME}: "
+    run_on_vm "${NAME}" "sudo subscription-manager identity" 2>/dev/null && \
+      echo "registered" || echo "not registered"
+  done
+fi
 echo ""
 
 # Verify IdM enrollment
@@ -58,16 +64,30 @@ run_on_vm client "echo '${DEMO_PASSWORD}' | kinit demouser 2>/dev/null && klist"
   echo "  Could not obtain Kerberos ticket on client"
 echo ""
 
-for VMI in $(oc get vmi -n "${NAMESPACE}" -l kubevirt.io/vmpool=client-pool -o name 2>/dev/null); do
-  NAME=$(echo "${VMI}" | cut -d/ -f2)
-  echo "${NAME}:"
-  run_on_vm "${NAME}" "echo '${DEMO_PASSWORD}' | kinit demouser 2>/dev/null && klist" 2>/dev/null || \
-    echo "  Could not obtain Kerberos ticket on ${NAME}"
-  echo ""
-done
+if [ "${DEMO_PLATFORM:-openshift}" = "libvirt" ]; then
+  for NAME in $(list_vms_by_role client-pool); do
+    echo "${NAME}:"
+    run_on_vm "${NAME}" "echo '${DEMO_PASSWORD}' | kinit demouser 2>/dev/null && klist" 2>/dev/null || \
+      echo "  Could not obtain Kerberos ticket on ${NAME}"
+    echo ""
+  done
+else
+  for VMI in $(oc get vmi -n "${NAMESPACE}" -l kubevirt.io/vmpool=client-pool -o name 2>/dev/null); do
+    NAME=$(echo "${VMI}" | cut -d/ -f2)
+    echo "${NAME}:"
+    run_on_vm "${NAME}" "echo '${DEMO_PASSWORD}' | kinit demouser 2>/dev/null && klist" 2>/dev/null || \
+      echo "  Could not obtain Kerberos ticket on ${NAME}"
+    echo ""
+  done
+fi
 
 # Satellite Web UI
 echo "--- Satellite Web UI ---"
-ROUTE=$(oc get route satellite-ui -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || echo "<pending>")
-echo "URL: https://${ROUTE}"
+if [ "${DEMO_PLATFORM:-openshift}" = "libvirt" ]; then
+  SAT_URL=$(get_service_url satellite 2>/dev/null || echo "https://${SAT_FQDN:-<unknown>}")
+  echo "URL: ${SAT_URL}"
+else
+  ROUTE=$(oc get route satellite-ui -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || echo "<pending>")
+  echo "URL: https://${ROUTE}"
+fi
 echo "Credentials: admin / ${DEMO_PASSWORD}"

@@ -1,0 +1,129 @@
+---
+# Deploy Caddy reverse proxy on the libvirt host for Satellite and IdM web UIs.
+#
+# Caddy provides automatic HTTPS (Let's Encrypt) and proxies to the VMs
+# on the libvirt NAT network. Runs as a rootful Podman container with
+# host networking so it can reach both the public interface and VM IPs.
+#
+# Required variables:
+#   sat_fqdn    - Public FQDN for Satellite (e.g. satellite.demo.veverak.net)
+#   idm_fqdn    - Public FQDN for IdM (e.g. idm.demo.veverak.net)
+#
+# Optional:
+#   sat_ip      - Satellite VM IP (default: 192.168.150.11)
+#   idm_ip      - IdM VM IP (default: 192.168.150.10)
+#
+# Usage:
+#   ansible-navigator run caddy-proxy.yml \
+#     --extra-vars "sat_fqdn=satellite.demo.veverak.net idm_fqdn=idm.demo.veverak.net"
+
+- name: Deploy Caddy reverse proxy for demo web UIs
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    sat_fqdn: "{{ lookup('env', 'SAT_FQDN') }}"
+    idm_fqdn: "{{ lookup('env', 'IDM_FQDN') }}"
+    sat_ip: "192.168.150.11"
+    idm_ip: "192.168.150.10"
+    caddy_config_dir: /etc/caddy
+    caddy_data_dir: /var/lib/caddy
+
+  tasks:
+    # ── 1. Firewall ──────────────────────────────────────────────────
+    - name: Open HTTP and HTTPS ports in firewall
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop:
+        - 80/tcp
+        - 443/tcp
+      ignore_errors: true
+
+    # ── 2. Caddy config ─────────────────────────────────────────────
+    - name: Create Caddy config directory
+      ansible.builtin.file:
+        path: "{{ caddy_config_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create Caddy data directory
+      ansible.builtin.file:
+        path: "{{ caddy_data_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Generate Caddyfile
+      ansible.builtin.copy:
+        content: |
+          {{ sat_fqdn }} {
+              reverse_proxy https://{{ sat_ip }}:443 {
+                  transport http {
+                      tls_insecure_skip_verify
+                  }
+              }
+          }
+
+          {{ idm_fqdn }} {
+              reverse_proxy https://{{ idm_ip }}:443 {
+                  transport http {
+                      tls_insecure_skip_verify
+                  }
+              }
+          }
+        dest: "{{ caddy_config_dir }}/Caddyfile"
+        mode: '0644'
+      register: caddyfile
+
+    # ── 3. Run Caddy via Podman ──────────────────────────────────────
+    - name: Stop existing Caddy container
+      containers.podman.podman_container:
+        name: caddy-proxy
+        state: absent
+      when: caddyfile.changed
+      ignore_errors: true
+
+    - name: Run Caddy container
+      containers.podman.podman_container:
+        name: caddy-proxy
+        image: docker.io/library/caddy:2-alpine
+        state: started
+        restart_policy: always
+        network: host
+        volumes:
+          - "{{ caddy_config_dir }}/Caddyfile:/etc/caddy/Caddyfile:Z"
+          - "{{ caddy_data_dir }}:/data:Z"
+
+    # ── 4. Systemd service for auto-start ────────────────────────────
+    - name: Generate systemd unit for Caddy container
+      containers.podman.podman_generate_systemd:
+        name: caddy-proxy
+        dest: /etc/systemd/system/
+        restart_policy: always
+      ignore_errors: true
+
+    - name: Enable Caddy systemd service
+      ansible.builtin.systemd:
+        name: container-caddy-proxy
+        enabled: true
+        daemon_reload: true
+      ignore_errors: true
+
+    # ── 5. Verify ────────────────────────────────────────────────────
+    - name: Wait for Caddy to start
+      ansible.builtin.wait_for:
+        port: 443
+        delay: 5
+        timeout: 30
+      ignore_errors: true
+
+    - name: Display access info
+      ansible.builtin.debug:
+        msg: |
+          Caddy reverse proxy is running.
+          Satellite UI: https://{{ sat_fqdn }}
+          IdM UI:       https://{{ idm_fqdn }}
+          Let's Encrypt certificates will be provisioned on first access.

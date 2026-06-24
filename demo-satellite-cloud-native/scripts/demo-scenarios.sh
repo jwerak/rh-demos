@@ -18,88 +18,9 @@ SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerA
 # Source interactive demo framework
 source "${SCRIPT_DIR}/demo-lib.sh"
 
-# Run a command on a VM via virtctl port-forward + sshpass SSH
-run_on_vm() {
-  local vmi_name="$1"
-  shift
-  sshpass -p "${DEMO_PASSWORD}" ssh ${SSH_OPTS} \
-    -o ProxyCommand="virtctl port-forward --stdio vmi/${vmi_name}.${NAMESPACE} 22" \
-    cloud-user@localhost "$@"
-}
-
-# Print a copya ble SSH command for the user to run outside the script
-ssh_hint() {
-  local vmi_name="$1"
-  local cmd="$2"
-  echo "  sshpass -p \"\$DEMO_PASSWORD\" ssh ${SSH_OPTS} -o ProxyCommand=\"virtctl port-forward --stdio vmi/${vmi_name}.${NAMESPACE} 22\" cloud-user@localhost \"${cmd}\""
-}
-
-ssh_exec() {
-  local vmi_name="$1"
-  sshpass -p "${DEMO_PASSWORD}" ssh ${SSH_OPTS} -o ProxyCommand="virtctl port-forward --stdio vmi/${vmi_name}.${NAMESPACE} 22" cloud-user@localhost "${cmd}"
-}
-
-# Run a command as root on a VM
-run_on_vm_sudo() {
-  local vmi_name="$1"
-  shift
-  run_on_vm "${vmi_name}" "sudo bash -c '$*'"
-}
-
-# Pipe stdin to a file on a VM (as root)
-upload_to_vm() {
-  local vmi_name="$1"
-  local dest_path="$2"
-  sshpass -p "${DEMO_PASSWORD}" ssh ${SSH_OPTS} \
-    -o ProxyCommand="virtctl port-forward --stdio vmi/${vmi_name}.${NAMESPACE} 22" \
-    cloud-user@localhost "sudo bash -c 'cat > ${dest_path}'"
-}
-
-# Ensure a VM exists and is running. Deploys it if missing, waits for SSH.
-# Usage: ensure_vm <vm-name> <yaml-file>
-ensure_vm() {
-  local vm_name="$1"
-  local yaml_file="$2"
-  if oc get vmi "${vm_name}" -n "${NAMESPACE}" > /dev/null 2>&1; then
-    return 0
-  fi
-  echo "  Deploying ${vm_name}..."
-  oc apply -f "${yaml_file}"
-  echo "  Waiting for ${vm_name} to start..."
-  # Wait for DV clone if needed
-  local dv_name="${vm_name}-rootdisk"
-  if oc get dv "${dv_name}" -n "${NAMESPACE}" > /dev/null 2>&1; then
-    for i in $(seq 1 60); do
-      local phase
-      phase=$(oc get dv "${dv_name}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null)
-      [ "${phase}" = "Succeeded" ] && break
-      sleep 10
-    done
-  fi
-  oc wait vmi/"${vm_name}" -n "${NAMESPACE}" --for=jsonpath='{.status.phase}'=Running --timeout=300s 2>/dev/null || true
-  echo "  Waiting for ${vm_name} cloud-init to complete..."
-  for i in $(seq 1 60); do
-    run_on_vm "${vm_name}" "grep -qE '(Onboarding Finished|Satellite Registration Complete|registration init script)' /var/log/client-setup.log 2>/dev/null" 2>/dev/null && break
-    sleep 15
-  done
-  echo "  ${vm_name} is ready."
-}
-
-# Ensure pool has at least N replicas
-ensure_pool() {
-  local pool_name="$1"
-  local min_replicas="$2"
-  local current
-  current=$(oc get vmpool "${pool_name}" -n "${NAMESPACE}" -o jsonpath='{.spec.replicas}' 2>/dev/null) || current=0
-  if [ "${current}" -lt "${min_replicas}" ]; then
-    echo "  Scaling ${pool_name} to ${min_replicas} replicas..."
-    oc scale vmpool "${pool_name}" -n "${NAMESPACE}" --replicas="${min_replicas}"
-    sleep 5
-    for vm in $(oc get vmi -n "${NAMESPACE}" -l "kubevirt.io/vmpool=${pool_name}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-      oc wait vmi/"${vm}" -n "${NAMESPACE}" --for=jsonpath='{.status.phase}'=Running --timeout=300s 2>/dev/null || true
-    done
-  fi
-}
+# Source platform driver (openshift or libvirt)
+: "${DEMO_PLATFORM:=openshift}"
+source "${SCRIPT_DIR}/platform-${DEMO_PLATFORM}.sh"
 
 usage() {
   echo "Usage: $0 <demo-id>"
@@ -142,20 +63,26 @@ demo1() {
   echo "  Demo 1: Zero-Touch Provisioning Workflow"
   echo "============================================"
   echo ""
-  echo "Deploying a single RHEL client VM..."
-  oc apply -f "${BASE_DIR}/client-vm.yaml"
-  echo ""
 
-  echo "Watching VM boot (Ctrl+C to stop watching, VM continues in background)..."
-  echo "Expected: Provisioning → Scheduling → Running"
-  oc get vmi/client -n "${NAMESPACE}" -w &
-  WATCH_PID=$!
-  sleep 5
+  if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    echo "Deploying a single RHEL client VM..."
+    oc apply -f "${BASE_DIR}/client-vm.yaml"
+    echo ""
 
-  echo ""
-  echo "Waiting for VM to reach Running state..."
-  oc wait vmi/client -n "${NAMESPACE}" --for=jsonpath='{.status.phase}'=Running --timeout=300s 2>/dev/null || true
-  kill $WATCH_PID 2>/dev/null || true
+    echo "Watching VM boot (Ctrl+C to stop watching, VM continues in background)..."
+    echo "Expected: Provisioning → Scheduling → Running"
+    oc get vmi/client -n "${NAMESPACE}" -w &
+    WATCH_PID=$!
+    sleep 5
+
+    echo ""
+    echo "Waiting for VM to reach Running state..."
+    oc wait vmi/client -n "${NAMESPACE}" --for=jsonpath='{.status.phase}'=Running --timeout=300s 2>/dev/null || true
+    kill $WATCH_PID 2>/dev/null || true
+  else
+    echo "Deploying a single RHEL client VM on libvirt..."
+    ensure_vm client client
+  fi
 
   echo ""
   echo "VM is running. Cloud-init is now executing the onboarding scripts."
@@ -173,29 +100,50 @@ demo2() {
   echo "========================================"
   echo ""
 
-  echo "Current pool state:"
-  oc get vmpool client-pool -n "${NAMESPACE}" 2>/dev/null || echo "Pool not found"
-  echo ""
+  if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    echo "Current pool state:"
+    oc get vmpool client-pool -n "${NAMESPACE}" 2>/dev/null || echo "Pool not found"
+    echo ""
 
-  echo "Scaling client pool to 2 instances..."
-  oc scale vmpool client-pool -n "${NAMESPACE}" --replicas=2
-  sleep 3
-  echo ""
+    echo "Scaling client pool to 2 instances..."
+    oc scale vmpool client-pool -n "${NAMESPACE}" --replicas=2
+    sleep 3
+    echo ""
 
-  echo "Watching VMs come up..."
-  oc get vmi -n "${NAMESPACE}" -l kubevirt.io/vmpool=client-pool
-  echo ""
+    echo "Watching VMs come up..."
+    oc get vmi -n "${NAMESPACE}" -l kubevirt.io/vmpool=client-pool
+    echo ""
 
-  echo "Scaling to 5 instances..."
-  oc scale vmpool client-pool -n "${NAMESPACE}" --replicas=5
-  sleep 3
-  echo ""
+    echo "Scaling to 5 instances..."
+    oc scale vmpool client-pool -n "${NAMESPACE}" --replicas=5
+    sleep 3
+    echo ""
 
-  echo "All pool VMs:"
-  oc get vmi -n "${NAMESPACE}" -l kubevirt.io/vmpool=client-pool
-  echo ""
+    echo "All pool VMs:"
+    oc get vmi -n "${NAMESPACE}" -l kubevirt.io/vmpool=client-pool
+    echo ""
 
-  echo "Note: All VMs share internal IP 10.0.2.x (NAT) but register as unique hosts."
+    echo "Note: All VMs share internal IP 10.0.2.x (NAT) but register as unique hosts."
+  else
+    echo "Current pool VMs:"
+    list_vms_by_role client
+    echo ""
+
+    echo "Scaling client pool to 2 instances..."
+    ensure_pool client-pool 2
+    echo ""
+
+    echo "Scaling to 5 instances..."
+    ensure_pool client-pool 5
+    echo ""
+
+    echo "All pool VMs:"
+    list_vms_by_role client
+    echo ""
+
+    echo "Note: Each VM has a unique IP on the libvirt network."
+  fi
+
   echo "Verification (after ~5 minutes):"
   echo "  # Check Satellite sees all hosts"
   ssh_hint satellite "sudo hammer host list --organization Demo_Org"
@@ -210,26 +158,46 @@ demo3() {
   echo "==========================================="
   echo ""
 
-  echo "Current VM state:"
-  oc get vmi -n "${NAMESPACE}"
-  echo ""
+  if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    echo "Current VM state:"
+    oc get vmi -n "${NAMESPACE}"
+    echo ""
 
-  echo "Simulating failure: deleting the client VMI (not the VM)..."
-  echo "The VirtualMachine controller (runStrategy: Always) will recreate it."
-  oc delete vmi/client -n "${NAMESPACE}" --wait=false
-  echo ""
+    echo "Simulating failure: deleting the client VMI (not the VM)..."
+    echo "The VirtualMachine controller (runStrategy: Always) will recreate it."
+    oc delete vmi/client -n "${NAMESPACE}" --wait=false
+    echo ""
 
-  echo "Watching recovery..."
-  echo "Expected: the VMI disappears, then a new one is created automatically."
-  sleep 2
-  oc get vmi -n "${NAMESPACE}" -w &
-  WATCH_PID=$!
-  sleep 30
-  kill $WATCH_PID 2>/dev/null || true
+    echo "Watching recovery..."
+    echo "Expected: the VMI disappears, then a new one is created automatically."
+    sleep 2
+    oc get vmi -n "${NAMESPACE}" -w &
+    WATCH_PID=$!
+    sleep 30
+    kill $WATCH_PID 2>/dev/null || true
 
-  echo ""
-  echo "Recovery status:"
-  oc get vmi -n "${NAMESPACE}"
+    echo ""
+    echo "Recovery status:"
+    oc get vmi -n "${NAMESPACE}"
+  else
+    echo "Current VM state:"
+    list_vms_by_role client
+    echo ""
+
+    echo "Simulating failure: destroying the client VM on the libvirt host..."
+    echo "After destroy, we restart the VM to demonstrate recovery."
+    ssh ${SSH_OPTS} -i "${LIBVIRT_SSH_KEY}" "${LIBVIRT_USER}@${LIBVIRT_HOST}" \
+      "virsh destroy client 2>/dev/null; echo 'VM destroyed.'; sleep 2; virsh start client; echo 'VM restarted.'"
+    echo ""
+
+    echo "Waiting for VM to recover..."
+    wait_vm_ready client
+
+    echo ""
+    echo "Recovery status:"
+    list_vms_by_role client
+  fi
+
   echo ""
   echo "The VM was automatically rescheduled and restarted."
   echo "Persistent storage (if configured) retains all data."
@@ -241,11 +209,18 @@ demo4() {
   echo "================================================"
   echo ""
 
-  echo "All client VMs share the same internal NAT IP (10.0.2.x)."
-  echo "Kerberos tickets must work independently on each."
+  if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    echo "All client VMs share the same internal NAT IP (10.0.2.x)."
+    echo "Kerberos tickets must work independently on each."
+    VMIS=($(oc get vmi -n "${NAMESPACE}" -l role=client -o jsonpath='{.items[*].metadata.name}' 2>/dev/null))
+    IP_GREP="inet 10\."
+  else
+    echo "Each client VM has a unique IP on the libvirt network."
+    echo "Kerberos tickets work across all unique IPs."
+    VMIS=($(list_vms_by_role client))
+    IP_GREP="inet "
+  fi
   echo ""
-
-  VMIS=($(oc get vmi -n "${NAMESPACE}" -l role=client -o jsonpath='{.items[*].metadata.name}' 2>/dev/null))
 
   if [ ${#VMIS[@]} -lt 2 ]; then
     echo "Need at least 2 client VMs. Scale the pool first: $0 2"
@@ -255,7 +230,7 @@ demo4() {
   echo "Testing Kerberos on ${VMIS[0]}:"
   run_on_vm "${VMIS[0]}" "
     echo '--- Internal IP ---'
-    ip addr show | grep 'inet 10\.'
+    ip addr show | grep '${IP_GREP}'
     echo '--- Obtaining Kerberos ticket ---'
     echo '${DEMO_PASSWORD}' | kinit demouser 2>/dev/null
     echo '--- Ticket details ---'
@@ -266,7 +241,7 @@ demo4() {
   echo "Testing Kerberos on ${VMIS[1]}:"
   run_on_vm "${VMIS[1]}" "
     echo '--- Internal IP ---'
-    ip addr show | grep 'inet 10\.'
+    ip addr show | grep '${IP_GREP}'
     echo '--- Obtaining Kerberos ticket ---'
     echo '${DEMO_PASSWORD}' | kinit demouser 2>/dev/null
     echo '--- Ticket details ---'
@@ -274,8 +249,13 @@ demo4() {
   " 2>/dev/null || echo "  (VM not ready for Kerberos yet)"
 
   echo ""
-  echo "Both VMs have the same internal IP but hold unique, valid Kerberos tickets."
-  echo "This works because krb5.conf has 'noaddresses = true' in [libdefaults]."
+  if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    echo "Both VMs have the same internal IP but hold unique, valid Kerberos tickets."
+    echo "This works because krb5.conf has 'noaddresses = true' in [libdefaults]."
+  else
+    echo "Both VMs have unique IPs and hold valid, independent Kerberos tickets."
+    echo "This confirms Kerberos works across the libvirt network."
+  fi
 }
 
 demo5() {
@@ -284,43 +264,92 @@ demo5() {
   echo "=================================================="
   echo ""
 
-  echo "NetworkPolicy applied:"
-  oc get networkpolicy -n "${NAMESPACE}"
-  echo ""
+  if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    echo "NetworkPolicy applied:"
+    oc get networkpolicy -n "${NAMESPACE}"
+    echo ""
 
-  VMIS=($(oc get vmi -n "${NAMESPACE}" -l role=client -o jsonpath='{.items[*].metadata.name}' 2>/dev/null))
+    VMIS=($(oc get vmi -n "${NAMESPACE}" -l role=client -o jsonpath='{.items[*].metadata.name}' 2>/dev/null))
 
-  if [ ${#VMIS[@]} -lt 2 ]; then
-    echo "Need at least 2 client VMs. Scale the pool first: $0 2"
-    return
-  fi
+    if [ ${#VMIS[@]} -lt 2 ]; then
+      echo "Need at least 2 client VMs. Scale the pool first: $0 2"
+      return
+    fi
 
-  POD2=$(oc get "vmi/${VMIS[1]}" -n "${NAMESPACE}" -o jsonpath='{.status.interfaces[0].ipAddress}' 2>/dev/null)
+    POD2=$(oc get "vmi/${VMIS[1]}" -n "${NAMESPACE}" -o jsonpath='{.status.interfaces[0].ipAddress}' 2>/dev/null)
 
-  echo "Testing: Client → Satellite (should SUCCEED):"
-  SAT_IP=$(oc get svc satellite -n "${NAMESPACE}" -o jsonpath='{.spec.clusterIP}')
-  run_on_vm "${VMIS[0]}" "curl -sk --connect-timeout 5 https://${SAT_IP}/ > /dev/null 2>&1" && \
-    echo "  -> PASS: Client can reach Satellite" || \
-    echo "  -> BLOCKED (check NetworkPolicy)"
-  echo ""
+    echo "Testing: Client -> Satellite (should SUCCEED):"
+    SAT_IP=$(oc get svc satellite -n "${NAMESPACE}" -o jsonpath='{.spec.clusterIP}')
+    run_on_vm "${VMIS[0]}" "curl -sk --connect-timeout 5 https://${SAT_IP}/ > /dev/null 2>&1" && \
+      echo "  -> PASS: Client can reach Satellite" || \
+      echo "  -> BLOCKED (check NetworkPolicy)"
+    echo ""
 
-  echo "Testing: Client → IdM (should SUCCEED):"
-  IDM_IP=$(oc get svc idm -n "${NAMESPACE}" -o jsonpath='{.spec.clusterIP}')
-  run_on_vm "${VMIS[0]}" "curl -sk --connect-timeout 5 https://${IDM_IP}/ > /dev/null 2>&1" && \
-    echo "  -> PASS: Client can reach IdM" || \
-    echo "  -> BLOCKED (check NetworkPolicy)"
-  echo ""
+    echo "Testing: Client -> IdM (should SUCCEED):"
+    IDM_IP=$(oc get svc idm -n "${NAMESPACE}" -o jsonpath='{.spec.clusterIP}')
+    run_on_vm "${VMIS[0]}" "curl -sk --connect-timeout 5 https://${IDM_IP}/ > /dev/null 2>&1" && \
+      echo "  -> PASS: Client can reach IdM" || \
+      echo "  -> BLOCKED (check NetworkPolicy)"
+    echo ""
 
-  echo "Testing: Client → Client (should be BLOCKED):"
-  if [ -n "$POD2" ]; then
-    run_on_vm "${VMIS[0]}" "ping -c 2 -W 3 ${POD2} > /dev/null 2>&1" && \
-      echo "  -> FAIL: Client-to-client traffic NOT blocked" || \
-      echo "  -> PASS: Client-to-client traffic is blocked by NetworkPolicy"
+    echo "Testing: Client -> Client (should be BLOCKED):"
+    if [ -n "$POD2" ]; then
+      run_on_vm "${VMIS[0]}" "ping -c 2 -W 3 ${POD2} > /dev/null 2>&1" && \
+        echo "  -> FAIL: Client-to-client traffic NOT blocked" || \
+        echo "  -> PASS: Client-to-client traffic is blocked by NetworkPolicy"
+    else
+      echo "  Could not determine pod IP for ${VMIS[1]}"
+    fi
+    echo ""
+    echo "VMs inherit Kubernetes NetworkPolicy -- no guest firewall rules needed."
   else
-    echo "  Could not determine pod IP for ${VMIS[1]}"
+    echo "Applying nftables rules on libvirt host for client-to-client isolation..."
+    (cd "${SCRIPT_DIR}/../ansible" && ansible-navigator run libvirt-network-policy.yml \
+      --extra-vars "libvirt_host=${LIBVIRT_HOST} libvirt_user=${LIBVIRT_USER} libvirt_ssh_key=${LIBVIRT_SSH_KEY}") || true
+    echo ""
+
+    VMIS=($(list_vms_by_role client))
+
+    if [ ${#VMIS[@]} -lt 2 ]; then
+      echo "Need at least 2 client VMs. Scale the pool first: $0 2"
+      return
+    fi
+
+    VM2_IP=$(get_vm_ip "${VMIS[1]}" 2>/dev/null)
+    SAT_IP=$(get_vm_ip satellite 2>/dev/null)
+    IDM_IP=$(get_vm_ip idm 2>/dev/null)
+
+    echo "Testing: Client -> Satellite (should SUCCEED):"
+    if [ -n "${SAT_IP}" ]; then
+      run_on_vm "${VMIS[0]}" "curl -sk --connect-timeout 5 https://${SAT_IP}/ > /dev/null 2>&1" && \
+        echo "  -> PASS: Client can reach Satellite" || \
+        echo "  -> BLOCKED (check nftables rules)"
+    else
+      echo "  Could not determine Satellite IP"
+    fi
+    echo ""
+
+    echo "Testing: Client -> IdM (should SUCCEED):"
+    if [ -n "${IDM_IP}" ]; then
+      run_on_vm "${VMIS[0]}" "curl -sk --connect-timeout 5 https://${IDM_IP}/ > /dev/null 2>&1" && \
+        echo "  -> PASS: Client can reach IdM" || \
+        echo "  -> BLOCKED (check nftables rules)"
+    else
+      echo "  Could not determine IdM IP"
+    fi
+    echo ""
+
+    echo "Testing: Client -> Client (should be BLOCKED):"
+    if [ -n "${VM2_IP}" ]; then
+      run_on_vm "${VMIS[0]}" "ping -c 2 -W 3 ${VM2_IP} > /dev/null 2>&1" && \
+        echo "  -> FAIL: Client-to-client traffic NOT blocked" || \
+        echo "  -> PASS: Client-to-client traffic is blocked by nftables rules"
+    else
+      echo "  Could not determine IP for ${VMIS[1]}"
+    fi
+    echo ""
+    echo "Client isolation enforced via nftables on the libvirt host."
   fi
-  echo ""
-  echo "VMs inherit Kubernetes NetworkPolicy — no guest firewall rules needed."
 }
 
 demo6() {
@@ -1258,7 +1287,11 @@ SCAPCFG
 # function run against it.
 
 ensure_sec_client() {
-  ensure_vm sec-client "${BASE_DIR}/sec-client-vm.yaml"
+  if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    ensure_vm sec-client "${BASE_DIR}/sec-client-vm.yaml"
+  else
+    ensure_vm sec-client "sec-client"
+  fi
 }
 
 # Section B uses sec-client as the target VM name for demos that accept it.
@@ -1284,7 +1317,7 @@ demo6_on() {
   echo "Target VM: ${target}"
   echo ""
 
-  if ! oc get vmi/"${target}" -n "${NAMESPACE}" > /dev/null 2>&1; then
+  if ! vm_exists "${target}"; then
     echo "ERROR: ${target} VM not found."
     return 1
   fi
@@ -1347,49 +1380,67 @@ deploy_lc_vm() {
   local reg_script="register-lc-${env_name}.sh"
   local vm_name="lc-${env_name}"
 
-  if oc get vmi "${vm_name}" -n "${NAMESPACE}" > /dev/null 2>&1; then
-    echo "  ${vm_name} already running"
-    return 0
+  if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    if oc get vmi "${vm_name}" -n "${NAMESPACE}" > /dev/null 2>&1; then
+      echo "  ${vm_name} already running"
+      return 0
+    fi
+
+    local IPA_DOMAIN
+    IPA_DOMAIN=$(echo "${IDM_FQDN}" | cut -d. -f2-)
+    local IPA_REALM
+    IPA_REALM=$(echo "${IPA_DOMAIN}" | tr '[:lower:]' '[:upper:]')
+
+    sed -e "s|__LC_REG_URL__|http://${SAT_FQDN}/pub/${reg_script}|g" \
+        -e "s|lc-client-cloudinit|lc-${env_name}-cloudinit|g" \
+        -e "s|app: lc-client|app: lc-${env_name}|g" \
+        -e "s|__IDM_FQDN__|${IDM_FQDN}|g" \
+        -e "s|__SAT_FQDN__|${SAT_FQDN}|g" \
+        -e "s|__IPA_DOMAIN__|${IPA_DOMAIN}|g" \
+        -e "s|__IPA_REALM__|${IPA_REALM}|g" \
+        -e "s|__DEMO_PASSWORD__|${DEMO_PASSWORD}|g" \
+        "${BASE_DIR}/lc-client-cloudinit-secret.yaml" | oc apply -f -
+
+    sed -e "s|lc-client|lc-${env_name}|g" \
+        "${BASE_DIR}/lc-client-vm.yaml" | oc apply -f -
+
+    echo "  ${vm_name} deployed (provisioning...)"
+  else
+    # For libvirt, use lc-client profile with lifecycle-specific registration URL
+    local lc_reg_url="http://${SAT_FQDN}/pub/${reg_script}"
+    if vm_exists "lc-${env_name}"; then
+      echo "  lc-${env_name} already exists"
+      return 0
+    fi
+    echo "  Deploying lc-${env_name} (profile: lc-client, reg: ${reg_script})..."
+    (cd "${SCRIPT_DIR}/../ansible" && ansible-navigator run libvirt-vm-create.yml \
+      --extra-vars "vm_name=lc-${env_name} vm_profile=lc-client lc_reg_url=${lc_reg_url} libvirt_host=${LIBVIRT_HOST} libvirt_uri=qemu+ssh://${LIBVIRT_USER}@${LIBVIRT_HOST}/system")
+    wait_vm_ready "lc-${env_name}"
+    echo "  lc-${env_name} is ready."
   fi
-
-  local IPA_DOMAIN
-  IPA_DOMAIN=$(echo "${IDM_FQDN}" | cut -d. -f2-)
-  local IPA_REALM
-  IPA_REALM=$(echo "${IPA_DOMAIN}" | tr '[:lower:]' '[:upper:]')
-
-  sed -e "s|__LC_REG_URL__|http://${SAT_FQDN}/pub/${reg_script}|g" \
-      -e "s|lc-client-cloudinit|lc-${env_name}-cloudinit|g" \
-      -e "s|app: lc-client|app: lc-${env_name}|g" \
-      -e "s|__IDM_FQDN__|${IDM_FQDN}|g" \
-      -e "s|__SAT_FQDN__|${SAT_FQDN}|g" \
-      -e "s|__IPA_DOMAIN__|${IPA_DOMAIN}|g" \
-      -e "s|__IPA_REALM__|${IPA_REALM}|g" \
-      -e "s|__DEMO_PASSWORD__|${DEMO_PASSWORD}|g" \
-      "${BASE_DIR}/lc-client-cloudinit-secret.yaml" | oc apply -f -
-
-  sed -e "s|lc-client|lc-${env_name}|g" \
-      "${BASE_DIR}/lc-client-vm.yaml" | oc apply -f -
-
-  echo "  ${vm_name} deployed (provisioning...)"
 }
 
 # Wait for a lifecycle VM to be ready (Running + SSH accessible)
 wait_lc_vm() {
   local vm_name="$1"
-  # Wait for DV clone
-  local dv_name="${vm_name}-rootdisk"
-  for i in $(seq 1 60); do
-    local phase
-    phase=$(oc get dv "${dv_name}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null)
-    [ "${phase}" = "Succeeded" ] && break
-    [ "${phase}" = "" ] && break
-    sleep 10
-  done
-  oc wait vmi/"${vm_name}" -n "${NAMESPACE}" --for=jsonpath='{.status.phase}'=Running --timeout=300s 2>/dev/null || true
-  for i in $(seq 1 60); do
-    run_on_vm "${vm_name}" "grep -qE '(Onboarding Finished|registration init script)' /var/log/client-setup.log 2>/dev/null" 2>/dev/null && break
-    sleep 15
-  done
+  if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    # Wait for DV clone
+    local dv_name="${vm_name}-rootdisk"
+    for i in $(seq 1 60); do
+      local phase
+      phase=$(oc get dv "${dv_name}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null)
+      [ "${phase}" = "Succeeded" ] && break
+      [ "${phase}" = "" ] && break
+      sleep 10
+    done
+    oc wait vmi/"${vm_name}" -n "${NAMESPACE}" --for=jsonpath='{.status.phase}'=Running --timeout=300s 2>/dev/null || true
+    for i in $(seq 1 60); do
+      run_on_vm "${vm_name}" "grep -qE '(Onboarding Finished|registration init script)' /var/log/client-setup.log 2>/dev/null" 2>/dev/null && break
+      sleep 15
+    done
+  else
+    wait_vm_ready "${vm_name}"
+  fi
 }
 
 # Build an RPM on the Satellite VM and upload it to the custom repo
@@ -1961,7 +2012,14 @@ demo_c3() {
 # --- Section A wrappers: ensure platform VMs exist ---
 demo_a1() { demo1; }
 demo_a2() { demo2; }
-demo_a3() { ensure_vm client "${BASE_DIR}/client-vm.yaml"; demo3; }
+demo_a3() {
+  if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    ensure_vm client "${BASE_DIR}/client-vm.yaml"
+  else
+    ensure_vm client client
+  fi
+  demo3
+}
 demo_a4() { ensure_pool client-pool 2; demo4; }
 demo_a5() { ensure_pool client-pool 2; demo5; }
 

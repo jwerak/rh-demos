@@ -1,0 +1,251 @@
+---
+# Create a single libvirt VM from a profile definition.
+#
+# Required vars:
+#   vm_name     - Name for the VM (e.g. "idm", "client", "sec-client")
+#   vm_profile  - Profile key from vars/vm-profiles.yml (e.g. "idm", "satellite", "client")
+#
+# Optional vars (override defaults):
+#   libvirt_host           - Hypervisor hostname/IP (default: from inventory)
+#   libvirt_user           - SSH user for hypervisor (default: root)
+#   libvirt_uri            - Full libvirt URI (default: qemu+ssh://user@host/system)
+#   vm_hostname            - FQDN for the VM (default: vm_name)
+#   demo_password          - Password for cloud-user and services
+#   rhsm_org               - RHSM org for subscription-manager
+#   rhsm_activation_key    - RHSM activation key
+#   idm_fqdn, sat_fqdn     - Server FQDNs
+#   ipa_domain, ipa_realm  - IPA domain/realm
+#   idm_ip, sat_ip         - Server IPs (for client /etc/hosts)
+#
+# Usage:
+#   ansible-playbook libvirt-vm-create.yml \
+#     -e vm_name=idm -e vm_profile=idm \
+#     -e libvirt_host=hypervisor.example.com
+
+- name: Create libvirt VM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    libvirt_user: "{{ lookup('env', 'LIBVIRT_USER') | default('root', true) }}"
+    _home: "{{ lookup('env', 'HOME') }}"
+    _raw_ssh_key: "{{ lookup('env', 'LIBVIRT_SSH_KEY') | default('~/.ssh/id_ed25519', true) }}"
+    libvirt_ssh_key: "{{ _home + '/.ssh/' + (_raw_ssh_key | basename) }}"
+    libvirt_uri: "qemu+ssh://{{ libvirt_user }}@{{ libvirt_host }}/system"
+    vm_registry_dir: "{{ _home }}/.cache/satellite-demo"
+    vm_registry_file: "{{ vm_registry_dir }}/vm-registry.json"
+    demo_password: "{{ lookup('env', 'DEMO_PASSWORD') }}"
+    rhsm_org: "{{ lookup('env', 'RHSM_ORG') }}"
+    rhsm_activation_key: "{{ lookup('env', 'RHSM_ACTIVATION_KEY') }}"
+    idm_fqdn: "{{ lookup('env', 'IDM_FQDN') }}"
+    sat_fqdn: "{{ lookup('env', 'SAT_FQDN') }}"
+    ipa_domain: "{{ idm_fqdn.split('.')[1:] | join('.') if idm_fqdn else '' }}"
+    ipa_realm: "{{ ipa_domain | upper }}"
+    idm_ip: "192.168.150.10"
+    sat_ip: "192.168.150.11"
+
+  tasks:
+    # ── Load profile ──────────────────────────────────────────────────
+    - name: Load VM profile definitions
+      ansible.builtin.include_vars:
+        file: vars/vm-profiles.yml
+
+    - name: Look up profile for {{ vm_profile }}
+      ansible.builtin.set_fact:
+        profile: "{{ vm_profiles[vm_profile] }}"
+
+    - name: Fail if profile not found
+      ansible.builtin.fail:
+        msg: "Unknown vm_profile '{{ vm_profile }}'. Valid profiles: {{ vm_profiles.keys() | list }}"
+      when: profile is not defined
+
+    # ── Set VM facts ──────────────────────────────────────────────────
+    - name: Set VM facts from profile
+      ansible.builtin.set_fact:
+        vm_vcpus: "{{ profile.vcpus }}"
+        vm_ram_mb: "{{ profile.ram_mb }}"
+        vm_disk_gb: "{{ profile.disk_gb }}"
+        vm_mac: "{{ profile.mac | default('') }}"
+        vm_ip: "{{ profile.ip | default('') }}"
+        vm_extra_disks: "{{ profile.extra_disks | default([]) }}"
+        vm_base_image: "{{ profile.base_image | default(libvirt_rhel9_image) }}"
+        vm_cloudinit_template: "{{ profile.cloudinit_template }}"
+
+    # ── Check if VM exists ────────────────────────────────────────────
+    - name: List existing VMs
+      community.libvirt.virt:
+        command: list_vms
+        uri: "{{ libvirt_uri }}"
+      register: existing_vms
+      delegate_to: localhost
+
+    - name: Check if VM already exists
+      ansible.builtin.set_fact:
+        vm_exists: "{{ vm_name in existing_vms.list_vms }}"
+
+    - name: Skip creation if VM exists
+      ansible.builtin.debug:
+        msg: "VM '{{ vm_name }}' already exists, skipping creation."
+      when: vm_exists | bool
+
+    # ── Create disks ──────────────────────────────────────────────────
+    - name: Create root disk (backing file overlay)
+      ansible.builtin.shell: |
+        ssh -o StrictHostKeyChecking=no -i {{ libvirt_ssh_key }} \
+          {{ libvirt_user }}@{{ libvirt_host }} \
+          "sudo qemu-img create -b {{ libvirt_pool_dir }}/{{ vm_base_image }} \
+           -F qcow2 -f qcow2 \
+           {{ libvirt_pool_dir }}/{{ vm_name }}.qcow2 {{ vm_disk_gb }}G"
+      when: not (vm_exists | bool)
+
+    - name: Create extra disks
+      ansible.builtin.shell: |
+        ssh -o StrictHostKeyChecking=no -i {{ libvirt_ssh_key }} \
+          {{ libvirt_user }}@{{ libvirt_host }} \
+          "sudo qemu-img create -f qcow2 \
+           {{ libvirt_pool_dir }}/{{ vm_name }}-{{ item.name }}.qcow2 {{ item.size_gb }}G"
+      loop: "{{ vm_extra_disks }}"
+      when: not (vm_exists | bool)
+
+    # ── Generate cloud-init ───────────────────────────────────────────
+    - name: Create cloud-init staging directory
+      ansible.builtin.file:
+        path: "/tmp/cloud-init-{{ vm_name }}"
+        state: directory
+        mode: '0755'
+      when: not (vm_exists | bool)
+
+    - name: Generate cloud-init meta-data
+      ansible.builtin.template:
+        src: templates/cloud-init/meta-data.j2
+        dest: "/tmp/cloud-init-{{ vm_name }}/meta-data"
+        mode: '0644'
+      when: not (vm_exists | bool)
+
+    - name: Generate cloud-init user-data
+      ansible.builtin.template:
+        src: "templates/cloud-init/{{ vm_cloudinit_template }}-userdata.j2"
+        dest: "/tmp/cloud-init-{{ vm_name }}/user-data"
+        mode: '0644'
+      when: not (vm_exists | bool)
+
+    - name: Generate cloud-init network-config
+      ansible.builtin.template:
+        src: templates/cloud-init/network-config.j2
+        dest: "/tmp/cloud-init-{{ vm_name }}/network-config"
+        mode: '0644'
+      when: not (vm_exists | bool)
+
+    - name: Create NoCloud ISO
+      ansible.builtin.command:
+        cmd: >-
+          xorriso -as genisoimage
+          -output /tmp/cloud-init-{{ vm_name }}/{{ vm_name }}-cidata.iso
+          -volid cidata -joliet -rock
+          /tmp/cloud-init-{{ vm_name }}/user-data
+          /tmp/cloud-init-{{ vm_name }}/meta-data
+          /tmp/cloud-init-{{ vm_name }}/network-config
+      when: not (vm_exists | bool)
+
+    - name: Copy cloud-init ISO to libvirt host
+      ansible.builtin.shell: |
+        scp -o StrictHostKeyChecking=no -i {{ libvirt_ssh_key }} \
+          /tmp/cloud-init-{{ vm_name }}/{{ vm_name }}-cidata.iso \
+          {{ libvirt_user }}@{{ libvirt_host }}:/tmp/{{ vm_name }}-cidata.iso
+        ssh -o StrictHostKeyChecking=no -i {{ libvirt_ssh_key }} \
+          {{ libvirt_user }}@{{ libvirt_host }} \
+          "sudo mv /tmp/{{ vm_name }}-cidata.iso {{ libvirt_pool_dir }}/{{ vm_name }}-cidata.iso"
+      when: not (vm_exists | bool)
+
+    - name: Clean up local cloud-init staging directory
+      ansible.builtin.file:
+        path: "/tmp/cloud-init-{{ vm_name }}"
+        state: absent
+      when: not (vm_exists | bool)
+
+    # ── Define and start VM ───────────────────────────────────────────
+    - name: Generate VM domain XML
+      ansible.builtin.template:
+        src: templates/vm.xml.j2
+        dest: "/tmp/{{ vm_name }}.xml"
+        mode: '0644'
+      when: not (vm_exists | bool)
+
+    - name: Define VM from XML
+      community.libvirt.virt:
+        command: define
+        xml: "{{ lookup('template', 'templates/vm.xml.j2') }}"
+        uri: "{{ libvirt_uri }}"
+      delegate_to: localhost
+      when: not (vm_exists | bool)
+
+    - name: Start VM
+      community.libvirt.virt:
+        name: "{{ vm_name }}"
+        state: running
+        uri: "{{ libvirt_uri }}"
+      delegate_to: localhost
+
+    - name: Clean up temporary domain XML
+      ansible.builtin.file:
+        path: "/tmp/{{ vm_name }}.xml"
+        state: absent
+
+    # ── Wait for SSH (static IP VMs only) ─────────────────────────────
+    - name: Wait for SSH to become available
+      ansible.builtin.wait_for:
+        host: "{{ vm_ip }}"
+        port: 22
+        delay: 10
+        timeout: 600
+        state: started
+      when:
+        - not (vm_exists | bool)
+        - vm_ip | length > 0
+
+    # ── Register VM in local registry ─────────────────────────────────
+    - name: Ensure registry directory exists
+      ansible.builtin.file:
+        path: "{{ vm_registry_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Load existing registry
+      ansible.builtin.slurp:
+        src: "{{ vm_registry_file }}"
+      register: registry_raw
+      failed_when: false
+
+    - name: Parse existing registry
+      ansible.builtin.set_fact:
+        vm_registry: "{{ (registry_raw.content | b64decode | from_json) if (registry_raw is not failed and registry_raw.content is defined) else {} }}"
+
+    - name: Get DHCP-assigned IP for dynamic VMs
+      ansible.builtin.command:
+        cmd: "virsh -c {{ libvirt_uri }} domifaddr {{ vm_name }}"
+      register: domifaddr_result
+      delegate_to: localhost
+      when: vm_ip | length == 0
+      retries: 12
+      delay: 10
+      until: domifaddr_result.stdout is search('\\d+\\.\\d+\\.\\d+\\.\\d+')
+
+    - name: Parse dynamic IP from domifaddr output
+      ansible.builtin.set_fact:
+        vm_ip: "{{ domifaddr_result.stdout | regex_search('(\\d+\\.\\d+\\.\\d+\\.\\d+)', '\\1') | first }}"
+      when: vm_ip | length == 0
+
+    - name: Update VM registry
+      ansible.builtin.set_fact:
+        vm_registry: "{{ vm_registry | combine({vm_name: vm_ip}) }}"
+
+    - name: Write VM registry
+      ansible.builtin.copy:
+        content: "{{ vm_registry | to_nice_json }}"
+        dest: "{{ vm_registry_file }}"
+        mode: '0644'
+
+    - name: Display VM info
+      ansible.builtin.debug:
+        msg: "VM '{{ vm_name }}' (profile: {{ vm_profile }}) is running at {{ vm_ip }}"

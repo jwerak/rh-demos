@@ -1,0 +1,121 @@
+#cloud-config
+user: cloud-user
+password: {{ demo_password }}
+chpasswd:
+  expire: false
+ssh_pwauth: true
+runcmd:
+  - |
+    set -euo pipefail
+    exec > /var/log/client-setup.log 2>&1
+    echo "=== Client Onboarding Starting ==="
+
+    IDM_FQDN="{{ idm_fqdn }}"
+    SAT_FQDN="{{ sat_fqdn }}"
+    IPA_DOMAIN="{{ ipa_domain }}"
+    IPA_REALM="{{ ipa_realm }}"
+    LC_REG_URL="{{ lc_reg_url }}"
+
+    # Use the VM name passed from provisioning, fall back to DHCP hostname or random ID
+    VM_NAME="{{ vm_name | default('') }}"
+    if [ -z "${VM_NAME}" ]; then
+      VM_NAME=$(nmcli -t -f DHCP4.OPTION dev show eth0 2>/dev/null | grep ':host_name =' | sed 's/.*= //' | head -1)
+      VM_NAME="${VM_NAME:-client-$(cat /proc/sys/kernel/random/boot_id | cut -c1-8)}"
+    fi
+    CLIENT_FQDN="${VM_NAME}.${IPA_DOMAIN}"
+    hostnamectl set-hostname "${CLIENT_FQDN}"
+    VM_IP=$(ip -4 addr show eth0 | grep -oP '(?<=inet )[\d.]+')
+    sed -i 's/^127\.0\.0\.1.*/127.0.0.1 localhost localhost.localdomain/' /etc/hosts
+    echo "${VM_IP} ${CLIENT_FQDN} ${VM_NAME}" >> /etc/hosts
+    echo "Hostname: ${CLIENT_FQDN} IP: ${VM_IP}"
+
+    # Map server FQDNs to their known IPs
+    echo "{{ idm_ip }} {{ idm_fqdn }} idm" >> /etc/hosts
+    echo "{{ sat_ip }} {{ sat_fqdn }} satellite" >> /etc/hosts
+    echo "IdM mapped: {{ idm_ip }} -> {{ idm_fqdn }}"
+    echo "Satellite mapped: {{ sat_ip }} -> {{ sat_fqdn }}"
+
+    # --- Phase 0: RHSM Registration (for package access) ---
+    echo "--- Registering to RHSM ---"
+    subscription-manager register --org="{{ rhsm_org }}" --activationkey="{{ rhsm_activation_key }}"
+    subscription-manager repos --disable '*'
+    subscription-manager repos \
+      --enable=rhel-9-for-x86_64-baseos-rpms \
+      --enable=rhel-9-for-x86_64-appstream-rpms \
+      --enable=satellite-client-6-for-rhel-9-x86_64-rpms
+
+    # Install all required packages while RHSM repos are available
+    dnf install -y ipa-client foreman_ygg_worker openscap-scanner scap-security-guide rubygem-foreman_scap_client ansible-core
+    echo "--- RHSM Registration Complete ---"
+
+    # --- Phase 1: IdM Enrollment (before Satellite, which removes RHSM repos) ---
+    echo "--- Enrolling to IdM ---"
+    for i in $(seq 1 30); do
+      curl -sk "https://${IDM_FQDN}/" > /dev/null 2>&1 && break
+      echo "Waiting for IdM... attempt ${i}/30"
+      sleep 20
+    done
+
+    ipa-client-install \
+      --server="${IDM_FQDN}" \
+      --domain="${IPA_DOMAIN}" \
+      --realm="${IPA_REALM}" \
+      --principal=admin \
+      --password='{{ demo_password }}' \
+      --hostname="${CLIENT_FQDN}" \
+      --no-ntp \
+      --no-dns-sshfp \
+      --unattended \
+      --force-join \
+      --force
+
+    # Fix Kerberos for NAT
+    if ! grep -q 'noaddresses' /etc/krb5.conf; then
+      sed -i '/\[libdefaults\]/a\  noaddresses = true' /etc/krb5.conf
+    fi
+
+    echo "--- IdM Enrollment Complete ---"
+
+    # --- Phase 2: Satellite Registration (lifecycle-specific registration script) ---
+    echo "--- Registering to Satellite (lifecycle: ${LC_REG_URL}) ---"
+    for i in $(seq 1 60); do
+      curl -sk "${LC_REG_URL}" 2>/dev/null | grep -q 'curl' && break
+      echo "Waiting for Satellite registration script... attempt ${i}/60"
+      sleep 30
+    done
+    REG_SCRIPT=$(curl -sk "${LC_REG_URL}" 2>/dev/null)
+    if echo "${REG_SCRIPT}" | grep -q 'curl'; then
+      echo "Executing Satellite lifecycle registration..."
+      eval "${REG_SCRIPT}" 2>&1 || echo "Satellite registration init script had errors (non-fatal)"
+    else
+      echo "Satellite registration script not available, skipping"
+    fi
+
+    echo "--- Satellite Registration Complete ---"
+
+    # --- Phase 3: Yggdrasil REX pull provider (optional) ---
+    # Errors here are non-fatal — yggdrasil requires synced repos
+    set +e
+    getent group yggdrasil-worker > /dev/null 2>&1 || groupadd -r yggdrasil-worker
+    usermod -a -G yggdrasil-worker root
+
+    SAT_CERT_DIR="/etc/pki/consumer"
+    if [ -f "${SAT_CERT_DIR}/cert.pem" ] && rpm -q yggdrasil > /dev/null 2>&1; then
+      cat > /etc/yggdrasil/config.toml <<YGGEOF
+    # Configured by cloud-init for Satellite REX pull mode
+    broker = ["mqtts://${SAT_FQDN}:1883"]
+    server = ["mqtts://${SAT_FQDN}:1883"]
+    cert-file = "${SAT_CERT_DIR}/cert.pem"
+    key-file = "${SAT_CERT_DIR}/key.pem"
+    ca-root = ["/etc/rhsm/ca/katello-server-ca.pem"]
+    log-level = "error"
+    path-prefix = "yggdrasil"
+    YGGEOF
+      systemctl enable --now yggdrasild com.redhat.Yggdrasil1.Worker1.foreman.service 2>/dev/null
+      echo "yggdrasil REX pull provider configured and started"
+    else
+      echo "Skipping yggdrasil setup (missing certs or package)"
+    fi
+    set -e
+
+    echo "=== Client Onboarding Finished ==="

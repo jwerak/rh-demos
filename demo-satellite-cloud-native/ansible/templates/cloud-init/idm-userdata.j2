@@ -1,0 +1,102 @@
+#cloud-config
+hostname: idm
+fqdn: {{ idm_fqdn }}
+user: cloud-user
+password: {{ demo_password }}
+chpasswd:
+  expire: false
+ssh_pwauth: true
+write_files:
+  - path: /root/idm-install.yml
+    permissions: '0644'
+    content: |
+      ---
+      - name: Install IdM Server
+        hosts: localhost
+        connection: local
+        become: true
+        vars:
+          ipaserver_domain: {{ ipa_domain }}
+          ipaserver_realm: {{ ipa_realm }}
+          ipaserver_hostname: {{ idm_fqdn }}
+          ipaadmin_password: '{{ demo_password }}'
+          ipadm_password: '{{ demo_password }}'
+          ipaserver_ip_addresses:
+            - "{{ '{{' }} ansible_default_ipv4.address {{ '}}' }}"
+          ipaserver_setup_dns: true
+          ipaserver_no_forwarders: true
+          ipaserver_no_reverse: true
+          ipaserver_allow_zone_overlap: true
+          ipaserver_no_ntp: true
+          ipaserver_no_hbac_allow: true
+        roles:
+          - role: ipaserver
+  - path: /root/idm-postconfig.yml
+    permissions: '0644'
+    content: |
+      ---
+      - name: Post-install IdM configuration
+        hosts: localhost
+        connection: local
+        become: true
+        vars:
+          ipaadmin_password: '{{ demo_password }}'
+        tasks:
+          - name: Obtain admin Kerberos ticket
+            shell: echo '{{ '{{' }} ipaadmin_password {{ '}}' }}' | kinit admin
+          - name: Create demo user
+            shell: >
+              ipa user-add demouser
+              --first=Demo --last=User
+              --password <<< '{{ demo_password }}'
+            register: user_result
+            failed_when: user_result.rc != 0 and 'already exists' not in user_result.stderr
+          - name: Extend demo user password expiry
+            shell: >
+              ipa user-mod demouser
+              --password-expiration=20271231235959Z
+            when: user_result is changed
+          - name: Create host group for auto-enrolled clients
+            shell: >
+              ipa hostgroup-add satellite-clients
+              --desc="Auto-enrolled RHEL clients from libvirt"
+            register: group_result
+            failed_when: group_result.rc != 0 and 'already exists' not in group_result.stderr
+runcmd:
+  - |
+    set -euo pipefail
+    exec > /var/log/idm-setup.log 2>&1
+    echo "=== IdM Setup Starting ==="
+
+    IDM_FQDN="{{ idm_fqdn }}"
+
+    # Set hostname
+    hostnamectl set-hostname "${IDM_FQDN}"
+
+    # Map FQDN to the real VM IP, not 127.0.0.1.
+    VM_IP="{{ vm_ip | default('') }}"
+    if [ -z "${VM_IP}" ]; then
+      VM_IP=$(ip -4 addr show eth0 | grep -oP '(?<=inet )[\d.]+')
+    fi
+    sed -i 's/^127\.0\.0\.1.*/127.0.0.1 localhost localhost.localdomain/' /etc/hosts
+    echo "${VM_IP} ${IDM_FQDN} idm" >> /etc/hosts
+
+    # Register with RHSM
+    subscription-manager register --org="{{ rhsm_org }}" --activationkey="{{ rhsm_activation_key }}"
+
+    # Enable required repos
+    subscription-manager repos --disable '*'
+    subscription-manager repos \
+      --enable=rhel-9-for-x86_64-baseos-rpms \
+      --enable=rhel-9-for-x86_64-appstream-rpms
+
+    # Install ansible-freeipa and dependencies
+    dnf install -y ansible-freeipa ansible-core
+
+    echo "=== Running ipaserver Ansible role ==="
+    ansible-playbook /root/idm-install.yml -v 2>&1 | tee /var/log/idm-ansible.log
+
+    echo "=== Running post-install configuration ==="
+    ansible-playbook /root/idm-postconfig.yml -v 2>&1 | tee -a /var/log/idm-ansible.log
+
+    echo "=== IdM Configuration Complete ==="

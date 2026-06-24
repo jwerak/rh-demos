@@ -32,9 +32,9 @@ Red Hat Satellite + IdM (FreeIPA) + RHEL clients running entirely as KubeVirt VM
       - [Demo b6: CIS Level 2 Remediation](#demo-b6-cis-level-2-remediation)
       - [Demo b7: Deploy CIS-Hardened VM Image](#demo-b7-deploy-cis-hardened-vm-image)
       - [Demo b8: Compliance Verification](#demo-b8-compliance-verification)
-    - [Section C: Lifecycle (VMs: lc-client)](#section-c-lifecycle-vms-lc-client)
+    - [Section C: Lifecycle (VMs: lc-dev, lc-qa, lc-prod)](#section-c-lifecycle-vms-lc-dev-lc-qa-lc-prod)
       - [Demo c1: Lifecycle Environments Pipeline](#demo-c1-lifecycle-environments-pipeline)
-      - [Demo c2: Content View Versioning  Promotion](#demo-c2-content-view-versioning--promotion)
+      - [Demo c2: Content View Versioning \& Promotion](#demo-c2-content-view-versioning--promotion)
       - [Demo c3: Composite Content Views](#demo-c3-composite-content-views)
   - [Resource Requirements](#resource-requirements)
   - [Project Structure](#project-structure)
@@ -55,7 +55,7 @@ Red Hat Satellite + IdM (FreeIPA) + RHEL clients running entirely as KubeVirt VM
 
 ## Architecture
 
-```
+```txt
                   [ Kubernetes ClusterIP Services ]
              (satellite-svc)               (idm-svc)
                     |                          |
@@ -427,7 +427,7 @@ Scans both the vanilla client and the CIS-hardened VM, uploads results to Satell
 
 ### Section C: Lifecycle (VMs: lc-dev, lc-qa, lc-prod)
 
-```
+```txt
 Section C Architecture:
 
   ┌─────────────────────────────────────────────────────────┐
@@ -440,7 +440,7 @@ Section C Architecture:
   │                      ├──► RHEL9-FullStack (composite)   │
   │    Demo-App-CV  ─────┘  (demo-app custom RPM)           │
   │                           │                             │
-  │                     promoted to Dev, QA, Prod            │
+  │                     promoted to Dev, QA, Prod           │
   │                                                         │
   │  Activation Keys:                                       │
   │    rhel9-lc-dev  ──► Dev  / RHEL9-FullStack             │
@@ -502,15 +502,15 @@ Demonstrates how adding a new package (`demo-lib`) to a component content view f
 ```
 Demo c3 — Composite content flow:
 
-  ┌────────────────────────────────────────┐
-  │       RHEL9-FullStack (composite)      │
-  │                                        │
-  │  ┌────────────────┐ ┌───────────────┐  │
+  ┌─────────────────────────────────────────┐
+  │       RHEL9-FullStack (composite)       │
+  │                                         │
+  │  ┌─────────────────┐ ┌───────────────┐  │
   │  │ RHEL9-Lifecycle │ │ Demo-App-CV   │  │
-  │  │ (BaseOS +      │ │ (demo-app +   │  │
-  │  │  AppStream)    │ │  demo-lib) ◄──┼──┼── new package added here
-  │  └────────────────┘ └───────────────┘  │
-  └────────────────────────────────────────┘
+  │  │ (BaseOS +       │ │ (demo-app +   │  │
+  │  │  AppStream)     │ │  demo-lib) ◄──┼──┼── new package added here
+  │  └─────────────────┘ └───────────────┘  │
+  └─────────────────────────────────────────┘
            │                     │
      republish composite    promote to Dev
            │                     │
@@ -696,4 +696,3 @@ oc delete vm/client -n satellite-cloud-native
 - [Red Hat IdM Installation Guide](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/installing_identity_management)
 - [KubeVirt VirtualMachinePool](https://kubevirt.io/user-guide/virtual_machines/pool/)
 - [Kubernetes NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
-

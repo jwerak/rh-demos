@@ -39,6 +39,11 @@ echo "Satellite FQDN:    ${SAT_FQDN}"
 echo "IPA domain/realm:  ${IPA_DOMAIN} / ${IPA_REALM}"
 echo ""
 
+# Platform dispatch: if libvirt, delegate to deploy-libvirt.sh
+if [ "${DEMO_PLATFORM:-openshift}" = "libvirt" ]; then
+  exec "${SCRIPT_DIR}/deploy-libvirt.sh" "$@"
+fi
+
 # Validate DNS resolution
 echo "--- Validating DNS ---"
 for FQDN in "${IDM_FQDN}" "${SAT_FQDN}"; do

@@ -1,0 +1,145 @@
+---
+# Delete a single libvirt VM and clean up its artifacts.
+#
+# Required vars:
+#   vm_name  - Name of the VM to delete (e.g. "idm", "client", "sec-client")
+#
+# Optional vars:
+#   libvirt_host  - Hypervisor hostname/IP (default: from inventory)
+#   libvirt_user  - SSH user for hypervisor (default: root)
+#   libvirt_uri   - Full libvirt URI (default: qemu+ssh://user@host/system)
+#
+# Usage:
+#   ansible-playbook libvirt-vm-delete.yml \
+#     -e vm_name=client \
+#     -e libvirt_host=hypervisor.example.com
+
+- name: Delete libvirt VM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    libvirt_user: "{{ lookup('env', 'LIBVIRT_USER') | default('root', true) }}"
+    _home: "{{ lookup('env', 'HOME') }}"
+    _raw_ssh_key: "{{ lookup('env', 'LIBVIRT_SSH_KEY') | default('~/.ssh/id_ed25519', true) }}"
+    libvirt_ssh_key: "{{ _home + '/.ssh/' + (_raw_ssh_key | basename) }}"
+    libvirt_uri: "qemu+ssh://{{ libvirt_user }}@{{ libvirt_host }}/system"
+    vm_registry_dir: "{{ _home }}/.cache/satellite-demo"
+    vm_registry_file: "{{ vm_registry_dir }}/vm-registry.json"
+
+  tasks:
+    # ── Load profile definitions (for pool_dir) ──────────────────────
+    - name: Load VM profile definitions
+      ansible.builtin.include_vars:
+        file: vars/vm-profiles.yml
+
+    # ── Check if VM exists ────────────────────────────────────────────
+    - name: List existing VMs
+      community.libvirt.virt:
+        command: list_vms
+        uri: "{{ libvirt_uri }}"
+      register: existing_vms
+      delegate_to: localhost
+
+    - name: Check if VM exists
+      ansible.builtin.set_fact:
+        vm_exists: "{{ vm_name in existing_vms.list_vms }}"
+
+    - name: Skip deletion if VM does not exist
+      ansible.builtin.debug:
+        msg: "VM '{{ vm_name }}' does not exist, skipping."
+      when: not (vm_exists | bool)
+
+    # ── Destroy VM if running ─────────────────────────────────────────
+    - name: Get VM state
+      community.libvirt.virt:
+        name: "{{ vm_name }}"
+        command: status
+        uri: "{{ libvirt_uri }}"
+      register: vm_status
+      delegate_to: localhost
+      when: vm_exists | bool
+
+    - name: Destroy VM (force stop)
+      community.libvirt.virt:
+        name: "{{ vm_name }}"
+        state: destroyed
+        uri: "{{ libvirt_uri }}"
+      delegate_to: localhost
+      when:
+        - vm_exists | bool
+        - vm_status.status is defined
+        - vm_status.status == 'running'
+
+    # ── Undefine VM ───────────────────────────────────────────────────
+    - name: Undefine VM
+      community.libvirt.virt:
+        name: "{{ vm_name }}"
+        command: undefine
+        uri: "{{ libvirt_uri }}"
+      delegate_to: localhost
+      when: vm_exists | bool
+
+    # ── Remove disk files ─────────────────────────────────────────────
+    - name: Find all disk files for this VM
+      ansible.builtin.find:
+        paths: "{{ libvirt_pool_dir }}"
+        patterns:
+          - "{{ vm_name }}.qcow2"
+          - "{{ vm_name }}-*.qcow2"
+      register: disk_files
+      delegate_to: "{{ libvirt_host }}"
+      become: true
+      vars:
+        ansible_user: "{{ libvirt_user }}"
+        ansible_ssh_private_key_file: "{{ libvirt_ssh_key }}"
+
+    - name: Remove disk files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ disk_files.files }}"
+      delegate_to: "{{ libvirt_host }}"
+      become: true
+      vars:
+        ansible_user: "{{ libvirt_user }}"
+        ansible_ssh_private_key_file: "{{ libvirt_ssh_key }}"
+
+    # ── Remove cloud-init ISO ─────────────────────────────────────────
+    - name: Remove cloud-init ISO
+      ansible.builtin.file:
+        path: "{{ libvirt_pool_dir }}/{{ vm_name }}-cidata.iso"
+        state: absent
+      delegate_to: "{{ libvirt_host }}"
+      become: true
+      vars:
+        ansible_user: "{{ libvirt_user }}"
+        ansible_ssh_private_key_file: "{{ libvirt_ssh_key }}"
+
+    # ── Remove from VM registry ───────────────────────────────────────
+    - name: Load existing registry
+      ansible.builtin.slurp:
+        src: "{{ vm_registry_file }}"
+      register: registry_raw
+      failed_when: false
+
+    - name: Parse existing registry
+      ansible.builtin.set_fact:
+        vm_registry: "{{ (registry_raw.content | b64decode | from_json) if (registry_raw is not failed and registry_raw.content is defined) else {} }}"
+
+    - name: Remove VM from registry
+      ansible.builtin.set_fact:
+        vm_registry: "{{ vm_registry | dict2items | rejectattr('key', 'eq', vm_name) | items2dict }}"
+      when: vm_name in vm_registry
+
+    - name: Write updated VM registry
+      ansible.builtin.copy:
+        content: "{{ vm_registry | to_nice_json }}"
+        dest: "{{ vm_registry_file }}"
+        mode: '0644'
+      when: vm_registry is defined
+
+    - name: Display result
+      ansible.builtin.debug:
+        msg: "VM '{{ vm_name }}' has been deleted and cleaned up."

@@ -1,0 +1,13 @@
+network:
+  version: 1
+  config:
+    - type: physical
+      name: eth0
+      subnets:
+        - type: dhcp
+{% if idm_ip is defined and idm_ip %}
+          dns_nameservers:
+            - {{ idm_ip }}
+          dns_search:
+            - {{ ipa_domain | default('') }}
+{% endif %}

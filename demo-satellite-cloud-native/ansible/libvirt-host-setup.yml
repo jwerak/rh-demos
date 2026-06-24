@@ -1,0 +1,217 @@
+---
+# Prepare a remote Fedora 44 libvirt host for running Satellite demo VMs.
+#
+# Usage:
+#   ansible-playbook -i inventory/libvirt.yml ansible/libvirt-host-setup.yml
+#
+# Required variables (set in inventory or extra-vars):
+#   libvirt_user         - SSH user on the libvirt host
+#   libvirt_host         - hostname/IP of the libvirt host
+#
+# Optional overrides:
+#   libvirt_pool_dir             - storage pool path (default: /var/lib/libvirt/images)
+#   libvirt_rhel9_image          - RHEL 9 cloud image filename
+#   libvirt_rhel9_image_source   - directory containing the source image
+
+- name: Prepare Fedora 44 libvirt host for Satellite demo
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    # Tasks run ON the libvirt host (hosts: libvirt_host), so use local URI
+    libvirt_uri: "qemu:///system"
+    libvirt_pool_dir: /var/lib/libvirt/images
+    libvirt_network_name: satellite-demo
+    libvirt_network_subnet: 192.168.150.0/24
+    libvirt_rhel9_image: rhel-9.6-x86_64-kvm.qcow2
+    libvirt_rhel9_image_source: "{{ libvirt_pool_dir }}"
+
+  tasks:
+    # ── 1. Install packages ──────────────────────────────────────────────
+    - name: Install libvirt and supporting packages
+      ansible.builtin.dnf:
+        name:
+          - qemu-kvm-core
+          - libvirt
+          - virt-install
+          - guestfs-tools
+          - xorriso
+          - python3-libvirt
+          - python3-lxml
+          - sshpass
+        state: present
+
+    # ── 1b. Add SSH user to libvirt group (for qemu+ssh:// access) ─────
+    - name: Add SSH user to libvirt group
+      ansible.builtin.user:
+        name: "{{ libvirt_ssh_user | default(ansible_user) }}"
+        groups: libvirt
+        append: true
+      when: libvirt_ssh_user is defined or ansible_user != 'root'
+
+    # ── 2. Enable modular libvirt daemons (Fedora 44) ────────────────────
+    - name: Enable and start virtqemud service
+      ansible.builtin.systemd:
+        name: virtqemud.service
+        enabled: true
+        state: started
+
+    - name: Enable modular libvirt sockets
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - virtnetworkd.socket
+        - virtstoraged.socket
+        - virtnodedevd.socket
+        - virtsecretd.socket
+        - virtnwfilterd.socket
+
+    # ── 3. Create dedicated libvirt network ──────────────────────────────
+    - name: Check if satellite-demo network exists
+      community.libvirt.virt_net:
+        uri: "{{ libvirt_uri }}"
+        command: list_nets
+      register: libvirt_networks
+
+    - name: Define satellite-demo network
+      community.libvirt.virt_net:
+        uri: "{{ libvirt_uri }}"
+        command: define
+        name: "{{ libvirt_network_name }}"
+        xml: |
+          <network>
+            <name>{{ libvirt_network_name }}</name>
+            <forward mode='nat'>
+              <nat>
+                <port start='1024' end='65535'/>
+              </nat>
+            </forward>
+            <bridge name='virbr-satdemo' stp='on' delay='0'/>
+            <ip address='192.168.150.1' netmask='255.255.255.0'>
+              <dhcp>
+                <range start='192.168.150.100' end='192.168.150.200'/>
+                <host mac='52:54:00:de:a0:01' name='idm' ip='192.168.150.10'/>
+                <host mac='52:54:00:de:a0:02' name='satellite' ip='192.168.150.11'/>
+              </dhcp>
+            </ip>
+          </network>
+      when: libvirt_network_name not in libvirt_networks.list_nets
+
+    - name: Start satellite-demo network
+      community.libvirt.virt_net:
+        uri: "{{ libvirt_uri }}"
+        command: create
+        name: "{{ libvirt_network_name }}"
+      when: libvirt_network_name not in libvirt_networks.list_nets
+
+    - name: Set satellite-demo network to autostart
+      community.libvirt.virt_net:
+        uri: "{{ libvirt_uri }}"
+        name: "{{ libvirt_network_name }}"
+        autostart: true
+
+    # ── 4. Create storage pool ───────────────────────────────────────────
+    - name: Ensure storage pool directory exists
+      ansible.builtin.file:
+        path: "{{ libvirt_pool_dir }}"
+        state: directory
+        owner: qemu
+        group: qemu
+        mode: "0755"
+
+    - name: Check if satellite-demo storage pool exists
+      community.libvirt.virt_pool:
+        uri: "{{ libvirt_uri }}"
+        command: list_pools
+      register: libvirt_pools
+
+    - name: Define satellite-demo storage pool
+      community.libvirt.virt_pool:
+        uri: "{{ libvirt_uri }}"
+        command: define
+        name: satellite-demo
+        xml: |
+          <pool type='dir'>
+            <name>satellite-demo</name>
+            <target>
+              <path>{{ libvirt_pool_dir }}</path>
+            </target>
+          </pool>
+      when: "'satellite-demo' not in libvirt_pools.list_pools"
+
+    - name: Build satellite-demo storage pool
+      community.libvirt.virt_pool:
+        uri: "{{ libvirt_uri }}"
+        command: build
+        name: satellite-demo
+      when: "'satellite-demo' not in libvirt_pools.list_pools"
+
+    - name: Start satellite-demo storage pool
+      community.libvirt.virt_pool:
+        uri: "{{ libvirt_uri }}"
+        command: create
+        name: satellite-demo
+      when: "'satellite-demo' not in libvirt_pools.list_pools"
+
+    - name: Set satellite-demo storage pool to autostart
+      community.libvirt.virt_pool:
+        uri: "{{ libvirt_uri }}"
+        name: satellite-demo
+        autostart: true
+
+    # ── 5. SELinux context for custom pool paths ─────────────────────────
+    - name: Set SELinux context for custom pool directory
+      when: libvirt_pool_dir != '/var/lib/libvirt/images'
+      block:
+        - name: Install policycoreutils-python-utils for semanage
+          ansible.builtin.dnf:
+            name: policycoreutils-python-utils
+            state: present
+
+        - name: Add virt_image_t SELinux context to custom pool path
+          community.general.sefcontext:
+            target: "{{ libvirt_pool_dir }}(/.*)?"
+            setype: virt_image_t
+            state: present
+
+        - name: Restore SELinux context on custom pool directory
+          ansible.builtin.command:
+            cmd: restorecon -RFv {{ libvirt_pool_dir }}
+          register: restorecon_result
+          changed_when: restorecon_result.stdout | length > 0
+
+    # ── 6. Copy RHEL 9 cloud image to pool ───────────────────────────────
+    - name: Check if RHEL 9 cloud image already exists in pool
+      ansible.builtin.stat:
+        path: "{{ libvirt_pool_dir }}/{{ libvirt_rhel9_image }}"
+      register: rhel9_image_dest
+
+    - name: Copy RHEL 9 cloud image to storage pool
+      ansible.builtin.copy:
+        src: "{{ libvirt_rhel9_image_source }}/{{ libvirt_rhel9_image }}"
+        dest: "{{ libvirt_pool_dir }}/{{ libvirt_rhel9_image }}"
+        owner: qemu
+        group: qemu
+        mode: "0644"
+        remote_src: true
+      when: not rhel9_image_dest.stat.exists
+
+    # ── 7. Docker conflict warning ───────────────────────────────────────
+    - name: Check if Docker is installed
+      ansible.builtin.command:
+        cmd: rpm -q docker-ce
+      register: docker_check
+      changed_when: false
+      failed_when: false
+
+    - name: Warn about Docker iptables conflict
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: Docker is installed on this host. Docker's iptables rules
+          can break libvirt NAT networking. If VMs cannot reach the internet,
+          consider stopping Docker (systemctl stop docker) or adding
+          iptables rules to allow forwarding on the satellite-demo bridge.
+      when: docker_check.rc == 0
