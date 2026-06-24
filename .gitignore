@@ -19,3 +19,5 @@ ansible-navigator.log
 .DS_Store
 Thumbs.db
 
+# Ansible EE build artifacts
+**/context/_build/
