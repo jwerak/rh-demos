@@ -1,0 +1,23 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: foreman-demo
+
+resources:
+  - namespace.yaml
+  # Foreman server
+  - foreman-cloudinit-secret.yaml
+  - foreman-vm.yaml
+  - foreman-service.yaml
+  - foreman-route.yaml
+  # RHEL client (single)
+  - client-cloudinit-secret.yaml
+  - client-vm.yaml
+  # RHEL client pool (elastic scaling)
+  - client-pool.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: foreman-demo
+      demo: foreman-demo

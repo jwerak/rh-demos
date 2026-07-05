@@ -1,0 +1,7 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: foreman-demo
+  labels:
+    demo: foreman-demo

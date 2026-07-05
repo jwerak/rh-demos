@@ -1,0 +1,23 @@
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: foreman-ui
+  namespace: foreman-demo
+  labels:
+    app: foreman
+    app.kubernetes.io/name: foreman
+    app.kubernetes.io/part-of: foreman-demo
+    role: infra
+    demo: foreman-demo
+spec:
+  host: __FOREMAN_FQDN__
+  to:
+    kind: Service
+    name: foreman
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

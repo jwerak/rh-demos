@@ -1,0 +1,80 @@
+---
+apiVersion: pool.kubevirt.io/v1alpha1
+kind: VirtualMachinePool
+metadata:
+  name: client-pool
+  namespace: foreman-demo
+  labels:
+    app: client
+    app.kubernetes.io/name: client-pool
+    app.kubernetes.io/part-of: foreman-demo
+    role: client
+    demo: foreman-demo
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      kubevirt.io/vmpool: client-pool
+  virtualMachineTemplate:
+    metadata:
+      labels:
+        kubevirt.io/vmpool: client-pool
+        app: client
+        app.kubernetes.io/name: client-pool
+        app.kubernetes.io/part-of: foreman-demo
+        role: client
+        demo: foreman-demo
+    spec:
+      runStrategy: Always
+      template:
+        metadata:
+          labels:
+            kubevirt.io/vmpool: client-pool
+            app: client
+            app.kubernetes.io/name: client-pool
+            app.kubernetes.io/part-of: foreman-demo
+            role: client
+            demo: foreman-demo
+        spec:
+          domain:
+            cpu:
+              cores: 1
+            devices:
+              disks:
+                - name: rootdisk
+                  disk:
+                    bus: virtio
+                - name: cloudinitdisk
+                  disk:
+                    bus: virtio
+              interfaces:
+                - name: default
+                  masquerade: {}
+            resources:
+              requests:
+                memory: 2Gi
+          networks:
+            - name: default
+              pod: {}
+          volumes:
+            - name: rootdisk
+              dataVolume:
+                name: client-pool-rootdisk
+            - name: cloudinitdisk
+              cloudInitNoCloud:
+                secretRef:
+                  name: client-cloudinit
+      dataVolumeTemplates:
+        - metadata:
+            name: client-pool-rootdisk
+          spec:
+            sourceRef:
+              kind: DataSource
+              name: rhel9
+              namespace: openshift-virtualization-os-images
+            storage:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: 30Gi
