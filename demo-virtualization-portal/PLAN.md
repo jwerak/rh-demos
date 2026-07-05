@@ -1,12 +1,12 @@
 # Plan: demo-virtualization-portal
 
-Self-service VM portál pro PTK 2. kolo — RHDH 1.10 + Gitea + ArgoCD + OCP Virt.
+Self-service VM portál pro PTK 2. kolo — RHDH 1.10 + GitLab + ArgoCD + OCP Virt.
 
 ## Rozhodnutí
 
 - Portál: RHDH 1.10 (Operator)
-- Auth: htpasswd → guest login (Phase A), OCP OAuth OIDC (Phase B/C)
-- Git: Gitea na clusteru (GitHub-compatible API)
+- Auth: guest login (Phase A), Keycloak OIDC (Phase B/C)
+- Git: GitLab CE na clusteru (nativní podpora v RHDH — `integrations.gitlab`, `publish:gitlab`)
 - GitOps: OpenShift GitOps (ArgoCD) od nuly
 - Workflow: RHDH Orchestrator / SonataFlow (Phase B)
 - VM: OCP Virtualization (už na clusteru)
@@ -14,10 +14,23 @@ Self-service VM portál pro PTK 2. kolo — RHDH 1.10 + Gitea + ArgoCD + OCP Vir
 - Backup: OADP + MinIO (Phase C)
 - Bez AAP — vše Kubernetes-native přes GitOps
 
+### Proč GitLab místo Gitea
+
+Gitea NENÍ podporovaná v RHDH 1.10. `integrations.gitea` neexistuje, GitHub URL reader nedokáže
+parsovat Gitea raw URL formát (`/raw/branch/{ref}/` vs GitHub's `/raw/{ref}/`). Pokusy o workaround
+(internal URL, backend.reading.allow, dual GitHub integration) selhaly na `fetch:template` akci
+scaffolderu, která vyžaduje funkční integration pro čtení skeleton souborů.
+
+GitLab je first-class citizen v RHDH:
+- `integrations.gitlab` — nativní integrace s PAT tokenem
+- `publish:gitlab` — scaffolder akce pro vytváření repozitářů
+- `catalog-backend-module-gitlab` — auto-discovery entit z GitLab skupin
+- Plně testováno a supportováno Red Hatem
+
 ## Architektura: dva Git servery
 
 - **GitHub** (rh-demos repo): ArgoCD čte infrastrukturní manifesty
-- **Gitea** (on-cluster): RHDH šablony/katalog + scaffolded VM repos
+- **GitLab** (on-cluster): RHDH šablony/katalog + scaffolded VM repos
 
 ## Adresářová struktura
 
@@ -25,17 +38,17 @@ Self-service VM portál pro PTK 2. kolo — RHDH 1.10 + Gitea + ArgoCD + OCP Vir
 demo-virtualization-portal/
 ├── CLAUDE.md
 ├── .env.sample
-├── bootstrap/                          # Ruční: oc apply -k bootstrap/
+├── bootstrap/                          # deploy.sh Phase 1: oc apply -k bootstrap/
 │   ├── kustomization.yaml
 │   ├── 01-gitops-subscription.yaml     # OpenShift GitOps Operator
 │   └── 02-argocd-rbac.yaml            # ClusterRole + Binding
 ├── argocd-apps/                        # deploy.sh aplikuje sekvenčně
 │   ├── phase1-operators.yaml           # → base/operators/
-│   ├── phase2-instances.yaml           # → base/gitea/ + base/rhdh/
+│   ├── phase2-instances.yaml           # → base/gitlab/ + base/rhdh/
 │   └── phase3-demo-env.yaml           # → base/demo-env/
 ├── base/
 │   ├── operators/                      # RHDH Operator Subscription
-│   ├── gitea/                          # Deployment, Service, Route, PVC
+│   ├── gitlab/                         # GitLab CE Deployment, Service, Route, PVCs
 │   ├── rhdh/                           # Backstage CR, app-config, dynamic-plugins
 │   └── demo-env/                       # Namespaces, Quotas, NetworkPolicies
 ├── templates/
@@ -50,8 +63,8 @@ demo-virtualization-portal/
 │               ├── service.yaml
 │               └── cloudinit-secret.yaml
 ├── scripts/
-│   ├── deploy.sh                       # Phased deployment
-│   ├── seed-gitea.sh                   # Gitea API: orgs, repos, push templates
+│   ├── deploy.sh                       # Phased deployment (0-6)
+│   ├── seed-gitlab.sh                  # GitLab API: groups, projects, push templates
 │   ├── create-demo-users.sh            # htpasswd users
 │   └── teardown.sh
 └── docs/
@@ -61,123 +74,139 @@ demo-virtualization-portal/
 ## VM Ordering GitOps Loop
 
 ```
-User → RHDH Template → publish:github → Gitea repo (vm-instances/<vm-name>)
+User → RHDH Template → publish:gitlab → GitLab repo (vm-instances/<vm-name>)
                                               ↓
-ArgoCD SCM Provider (watches vm-instances org) → discovers new repo
+ArgoCD SCM Provider (watches vm-instances group) → discovers new repo
                                               ↓
 ArgoCD syncs VirtualMachine CR → OCP Virt creates VM
 ```
 
+## Co je už hotové a co je třeba změnit
+
+### Soubory, které ZŮSTÁVAJÍ beze změn
+- `bootstrap/` — GitOps Operator + RBAC (OK)
+- `base/operators/` — RHDH Operator Subscription (OK)
+- `base/demo-env/` — Namespaces, Quotas, NetworkPolicies (OK)
+- `argocd-apps/phase1-operators.yaml` — (OK)
+- `argocd-apps/phase3-demo-env.yaml` — (OK)
+- `templates/create-vm/skeleton/vm-manifests/` — VirtualMachine CR, Service, CloudInit (OK)
+
+### Soubory, které je třeba SMAZAT (Gitea-specific)
+- `base/gitea/` — celý adresář (nahrazeno base/gitlab/)
+- `scripts/seed-gitea.sh` — nahrazeno seed-gitlab.sh
+
+### Soubory, které je třeba VYTVOŘIT
+- `base/gitlab/namespace.yaml` — Namespace gitlab
+- `base/gitlab/pvc.yaml` — PVCs pro GitLab (config, data, logs)
+- `base/gitlab/deployment.yaml` — gitlab/gitlab-ce:latest, env vars pro EXTERNAL_URL, root password
+- `base/gitlab/service.yaml` — ClusterIP port 80 (GitLab HTTP), 22 (SSH)
+- `base/gitlab/route.yaml` — TLS edge, `gitlab.__BASE_DOMAIN__`
+- `base/gitlab/kustomization.yaml`
+- `scripts/seed-gitlab.sh` — GitLab API: create groups (demo, vm-instances), push templates
+
+### Soubory, které je třeba UPRAVIT
+- `.env.sample` — Gitea → GitLab (GITLAB_ADMIN_PASSWORD, GITLAB_TOKEN místo GITEA_*)
+- `CLAUDE.md` — Gitea → GitLab references
+- `base/rhdh/app-config-cm.yaml` — `integrations.gitlab` místo `integrations.github`, `catalog.locations` → GitLab URL
+- `base/rhdh/dynamic-plugins-cm.yaml` — enable `backstage-plugin-catalog-backend-module-gitlab-org-dynamic`
+- `base/rhdh/secrets.yaml` — GITLAB_TOKEN místo GITEA_TOKEN
+- `base/rhdh/backstage-cr.yaml` — zachovat NODE_TLS_REJECT_UNAUTHORIZED=0
+- `argocd-apps/phase2-instances.yaml` — base/gitea → base/gitlab
+- `templates/create-vm/template.yaml` — `publish:gitlab` místo `publish:github`, repoUrl format pro GitLab
+- `templates/create-vm/skeleton/catalog-info.yaml` — GitLab URL v anotacích
+- `templates/catalog-info.yaml` — GitLab URL
+- `scripts/deploy.sh` — Gitea → GitLab (admin user creation, env vars, wait conditions)
+- `scripts/teardown.sh` — gitea namespace → gitlab namespace
+
+## RHDH app-config pro GitLab
+
+```yaml
+integrations:
+  gitlab:
+    - host: gitlab.__BASE_DOMAIN__
+      token: ${GITLAB_TOKEN}
+
+catalog:
+  locations:
+    - type: url
+      target: https://gitlab.__BASE_DOMAIN__/demo/templates/-/raw/main/catalog-info.yaml
+      rules:
+        - allow: [Location, Template]
+
+# dynamic-plugins.yaml — optional, for auto-discovery:
+plugins:
+  - package: ./dynamic-plugins/dist/backstage-plugin-catalog-backend-module-gitlab-org-dynamic
+    disabled: false
+```
+
+## Template: publish:gitlab
+
+```yaml
+- id: publish
+  name: Publish to GitLab
+  action: publish:gitlab
+  input:
+    repoUrl: gitlab.__BASE_DOMAIN__?owner=vm-instances&repo=${{ parameters.vmName }}
+    defaultBranch: main
+    repoVisibility: public
+```
+
+## GitLab CE Deployment Notes
+
+- Image: `gitlab/gitlab-ce:latest`
+- GitLab needs significant resources: min 4Gi RAM, 2 CPU
+- First boot takes 3-5 minutes (database migration)
+- Root password set via `GITLAB_ROOT_PASSWORD` env var
+- External URL set via `GITLAB_OMNIBUS_CONFIG` env var
+- PVCs: /etc/gitlab (config, 1Gi), /var/opt/gitlab (data, 10Gi), /var/log/gitlab (logs, 2Gi)
+- GitLab exposes HTTP on port 80 (not 443 — TLS terminated at Route)
+- API token created via: `gitlab-rails runner "token = User.find_by_username('root').personal_access_tokens.create(scopes: ['api'], name: 'rhdh', expires_at: 365.days.from_now); token.set_token('glpat-xxxx'); token.save!"`
+
+## DNS Setup
+
+Wildcard A record: `*.<base-domain>` → router IP.
+To find the router IP:
+```bash
+dig +short console-openshift-console.$(oc get ingress.config cluster -o jsonpath='{.spec.domain}')
+```
+NOTE: Do NOT use CNAME to apps.<cluster> — the bare apps domain has no A record.
+
+## Known Issues from Phase A (Gitea attempt)
+
+1. OpenShift OAuth is NOT OIDC — needs Keycloak broker (Phase B/C)
+2. RHDH Operator auto-generates Route hostname — must patch after each restart
+3. NODE_TLS_REJECT_UNAUTHORIZED=0 needed when custom domain doesn't match Router cert
+4. Dynamic plugin package names need `-dynamic` suffix
+5. `auth.providers.guest.dangerouslyAllowOutsideDevelopment: true` needed for guest auth to actually work
+
 ## Implementační kroky
 
-### Krok 1: Offline příprava (BEZ clusteru)
+### Krok 1: Migrace Gitea → GitLab
 
-Tyto soubory se dají připravit kompletně bez přístupu ke clusteru:
+1. Smazat `base/gitea/` adresář a `scripts/seed-gitea.sh`
+2. Vytvořit `base/gitlab/` manifesty (namespace, deployment, service, route, PVCs, kustomization)
+3. Vytvořit `scripts/seed-gitlab.sh` (GitLab API: groups, projects, push templates)
+4. Aktualizovat `base/rhdh/` (app-config, dynamic-plugins, secrets)
+5. Aktualizovat templates (publish:gitlab, GitLab URLs)
+6. Aktualizovat skripty (deploy.sh, teardown.sh)
+7. Aktualizovat meta soubory (.env.sample, CLAUDE.md)
 
-**1a. Scaffold — CLAUDE.md + .env.sample**
-- `CLAUDE.md` s popisem komponent, adresářovou strukturou, key commands
-- `.env.sample` s placeholdery (BASE_DOMAIN, GITEA_ADMIN_PASSWORD, BACKEND_SECRET, DEMO_PASSWORD)
-
-**1b. Bootstrap manifesty**
-- `bootstrap/01-gitops-subscription.yaml` — OpenShift GitOps Operator Subscription (channel: latest, redhat-operators)
-- `bootstrap/02-argocd-rbac.yaml` — ClusterRole pro ArgoCD (kubevirt.io, rhdh.redhat.com, oadp.openshift.io, apps, routes)
-- `bootstrap/kustomization.yaml` — resources list
-
-**1c. Operator manifesty**
-- `base/operators/rhdh-subscription.yaml` — RHDH Operator (channel: fast-1.10)
-- `base/operators/rhdh-operator-namespace.yaml` — Namespace rhdh-operator
-- `base/operators/kustomization.yaml`
-
-**1d. Gitea manifesty**
-- `base/gitea/deployment.yaml` — gitea/gitea:latest, PVC /data, env pro admin user
-- `base/gitea/service.yaml` — ClusterIP port 3000
-- `base/gitea/route.yaml` — TLS edge, `__BASE_DOMAIN__` placeholder
-- `base/gitea/pvc.yaml` — 10Gi
-- `base/gitea/namespace.yaml` + `kustomization.yaml`
-
-**1e. RHDH manifesty**
-- `base/rhdh/backstage-cr.yaml` — rhdh.redhat.com/v1alpha5, enableLocalDb: true, route: enabled
-- `base/rhdh/app-config-cm.yaml` — auth: development (guest), catalog.locations → Gitea, integrations.github → Gitea API
-- `base/rhdh/dynamic-plugins-cm.yaml` — catalog-backend-module-github enabled
-- `base/rhdh/namespace.yaml` + `kustomization.yaml`
-
-**1f. Demo environment manifesty**
-- `base/demo-env/namespaces.yaml` — vm-dev, vm-staging, vm-prod
-- `base/demo-env/quotas.yaml` — ResourceQuota per namespace (vCPU, RAM, storage, VM count)
-- `base/demo-env/network-policies.yaml` — izolace mezi namespaces
-- `base/demo-env/kustomization.yaml`
-
-**1g. ArgoCD Application manifesty**
-- `argocd-apps/phase1-operators.yaml` — Application → base/operators/ (GitHub repo)
-- `argocd-apps/phase2-instances.yaml` — Application → base/gitea/ + base/rhdh/ (GitHub repo)
-- `argocd-apps/phase3-demo-env.yaml` — Application → base/demo-env/ (GitHub repo)
-- Placeholder: `__GITHUB_REPO__`, `__GIT_REVISION__`
-
-**1h. Software Template (Create VM)**
-- `templates/catalog-info.yaml` — Backstage Location pointing to create-vm/template.yaml
-- `templates/create-vm/template.yaml` — scaffolder v1beta3, JSON Schema (vmName, cpuCores, memoryGi, osImage, environment), publish:github → Gitea, catalog:register
-- `templates/create-vm/skeleton/catalog-info.yaml` — Component entity for scaffolded VM
-- `templates/create-vm/skeleton/vm-manifests/virtualmachine.yaml` — VirtualMachine CR (pattern from demo-satellite-cloud-native)
-- `templates/create-vm/skeleton/vm-manifests/service.yaml`
-- `templates/create-vm/skeleton/vm-manifests/cloudinit-secret.yaml`
-- `templates/create-vm/skeleton/vm-manifests/kustomization.yaml`
-
-**1i. Scripts**
-- `scripts/deploy.sh` — set -euo pipefail, apply_templated(), phased (0-5), oc wait
-- `scripts/seed-gitea.sh` — Gitea REST API: create orgs (demo, vm-instances), repos, push templates
-- `scripts/create-demo-users.sh` — htpasswd users (admin, developer, approver, viewer)
-- `scripts/teardown.sh` — delete ArgoCD apps, namespaces, operator subscriptions
-
-### Krok 2: Validace na clusteru
-
-Jakmile je cluster ready:
+### Krok 2: Deploy a validace na clusteru
 
 ```bash
-cp .env.sample .env
+cp .env.sample .env  # Edit with your values
 source .env
 ./scripts/deploy.sh
 ```
 
-**Validační checklist:**
-- [ ] `oc get applications.argoproj.io -n openshift-gitops` — všechny Synced/Healthy
-- [ ] RHDH UI se načte a zobrazí katalog
-- [ ] "Create VM" šablona je viditelná v katalogu
-- [ ] Vytvořit VM přes šablonu → repo se objeví v Gitea
+Validační checklist:
+- [ ] GitLab UI se načte a login funguje (root / password)
+- [ ] RHDH UI se načte, guest login funguje
+- [ ] "Create VM" šablona je viditelná v RHDH katalogu (Kind: Template)
+- [ ] Vytvořit VM přes šablonu → repo se objeví v GitLab pod vm-instances skupinou
 - [ ] ArgoCD vytvoří Application pro nový repo
 - [ ] `oc get vm -n vm-dev` — VM běží
 
 ### Krok 3: Orchestration (Phase B)
-
-- Orchestrator plugins v dynamic-plugins.yaml
-- SonataFlow workflow s 2-step approval (app owner + security)
-- Template triggeruje workflow místo přímého Git publish
-
 ### Krok 4: Full Demo (Phase C)
-
-- Resize + Decommission templates
-- Netbox + OADP
-- Policy enforcement (Scénář B)
-- Exception workflow
-- Demo scenarios script
-
-## Klíčové soubory — reference z existujícího repo
-
-| Potřebuji | Vzor z repo |
-|-----------|-------------|
-| ArgoCD Subscription | `demo-acm-gitops/bootstrap/01-gitops-operator.yaml` |
-| ArgoCD RBAC | `demo-acm-gitops/bootstrap/02-argocd-rbac.yaml` |
-| ApplicationSet | `demo-acm-gitops/bootstrap/03-root-applicationset.yaml` |
-| deploy.sh pattern | `demo-satellite-cloud-native/scripts/deploy.sh` |
-| apply_templated() | `demo-satellite-cloud-native/scripts/deploy.sh` |
-| VirtualMachine CR | `demo-satellite-cloud-native/k8s/base/client-vm.yaml` |
-| .env.sample | `demo-satellite-cloud-native/.env.sample` |
-| Kustomization labels | `demo-satellite-cloud-native/k8s/base/kustomization.yaml` |
-
-## Rizika
-
-| Risk | Mitigation |
-|------|-----------|
-| Gitea `publish:github` kompatibilita | Testovat v Phase A. Fallback: `http:backstage:request` |
-| ArgoCD SCM Gitea generator | Fallback: monorepo + `git` generator s `directories` |
-| RHDH CRD timing | deploy.sh čeká na CSV Succeeded |
-| Netbox složitost | Phase C only |
+(nezměněno)
