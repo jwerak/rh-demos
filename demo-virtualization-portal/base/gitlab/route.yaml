@@ -2,17 +2,17 @@
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: gitea
-  namespace: gitea
+  name: gitlab
+  namespace: gitlab
   labels:
-    app: gitea
-    app.kubernetes.io/name: gitea
+    app: gitlab
+    app.kubernetes.io/name: gitlab
     app.kubernetes.io/part-of: virt-portal
 spec:
-  host: gitea-gitea.__BASE_DOMAIN__
+  host: gitlab.__BASE_DOMAIN__
   to:
     kind: Service
-    name: gitea
+    name: gitlab
   port:
     targetPort: http
   tls:

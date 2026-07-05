@@ -1,0 +1,115 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BASE_DIR="${SCRIPT_DIR}/.."
+
+: "${BASE_DOMAIN:?ERROR: BASE_DOMAIN must be set}"
+: "${GITLAB_ADMIN_PASSWORD:?ERROR: GITLAB_ADMIN_PASSWORD must be set}"
+: "${GITLAB_TOKEN:?ERROR: GITLAB_TOKEN must be set}"
+
+GITLAB_URL="https://gitlab.${BASE_DOMAIN}"
+GITLAB_API="${GITLAB_URL}/api/v4"
+CURL_OPTS="-k"
+
+echo "=== Seeding GitLab at ${GITLAB_URL} ==="
+echo ""
+
+api() {
+  local method="$1" endpoint="$2"
+  shift 2
+  curl ${CURL_OPTS} -sSf -X "${method}" \
+    -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+    -H "Content-Type: application/json" \
+    "${GITLAB_API}${endpoint}" "$@"
+}
+
+api_ignore_conflict() {
+  local method="$1" endpoint="$2"
+  shift 2
+  local http_code
+  http_code=$(curl ${CURL_OPTS} -sS -o /dev/null -w "%{http_code}" -X "${method}" \
+    -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+    -H "Content-Type: application/json" \
+    "${GITLAB_API}${endpoint}" "$@")
+  if [ "${http_code}" -ge 400 ] && [ "${http_code}" -ne 400 ] && [ "${http_code}" -ne 409 ] && [ "${http_code}" -ne 422 ]; then
+    echo "ERROR: ${method} ${endpoint} returned HTTP ${http_code}"
+    return 1
+  fi
+}
+
+# Create PAT via rails runner
+echo "--- Creating GitLab Personal Access Token ---"
+GITLAB_POD=$(oc get pod -n gitlab -l app=gitlab -o jsonpath='{.items[0].metadata.name}')
+oc exec -n gitlab "${GITLAB_POD}" -- gitlab-rails runner "
+  token = PersonalAccessToken.find_by(name: 'rhdh')
+  if token
+    token.revoke! rescue nil
+    token.destroy!
+    puts 'Removed existing token'
+  end
+  user = User.find_by_username('root')
+  token = user.personal_access_tokens.create!(
+    name: 'rhdh',
+    scopes: ['api', 'read_repository', 'write_repository'],
+    expires_at: 365.days.from_now
+  )
+  token.set_token('${GITLAB_TOKEN}')
+  token.save!
+  puts 'Token created successfully'
+" 2>/dev/null || echo "  Token may already exist."
+echo ""
+
+# Create groups
+echo "--- Creating groups ---"
+for group in demo vm-instances; do
+  api_ignore_conflict POST "/groups" \
+    -d "{\"name\": \"${group}\", \"path\": \"${group}\", \"visibility\": \"public\"}"
+  echo "  Group: ${group}"
+done
+echo ""
+
+# Create templates project in demo group
+echo "--- Creating templates project ---"
+DEMO_GROUP_ID=$(api GET "/groups/demo" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+if [ -n "${DEMO_GROUP_ID}" ]; then
+  api_ignore_conflict POST "/projects" \
+    -d "{\"name\": \"templates\", \"namespace_id\": ${DEMO_GROUP_ID}, \"visibility\": \"public\", \"initialize_with_readme\": true, \"default_branch\": \"main\"}"
+  echo "  Project: demo/templates"
+fi
+echo ""
+
+# Push templates to GitLab
+echo "--- Pushing templates to GitLab ---"
+
+# Unprotect main branch to allow force push
+TEMPLATES_PROJECT_ID=$(api GET "/projects/demo%2Ftemplates" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+if [ -n "${TEMPLATES_PROJECT_ID}" ]; then
+  curl ${CURL_OPTS} -sS -o /dev/null -X DELETE \
+    -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+    "${GITLAB_API}/projects/${TEMPLATES_PROJECT_ID}/protected_branches/main" 2>/dev/null || true
+fi
+
+TMPDIR=$(mktemp -d)
+trap "rm -rf ${TMPDIR}" EXIT
+
+cd "${TMPDIR}"
+git init -b main
+git config user.email "admin@example.com"
+git config user.name "Admin"
+git config http.sslVerify false
+
+cp -r "${BASE_DIR}/templates/"* .
+
+# Replace __BASE_DOMAIN__ in template files before pushing
+find . -type f -name '*.yaml' -exec sed -i "s|__BASE_DOMAIN__|${BASE_DOMAIN}|g" {} +
+
+git add -A
+git commit -m "Initial template import"
+git remote add origin "https://oauth2:${GITLAB_TOKEN}@gitlab.${BASE_DOMAIN}/demo/templates.git"
+GIT_SSL_NO_VERIFY=true git push -u origin main --force
+
+echo "  Templates pushed to demo/templates"
+echo ""
+
+echo "=== GitLab seeding complete ==="

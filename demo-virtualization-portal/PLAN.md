@@ -181,17 +181,26 @@ NOTE: Do NOT use CNAME to apps.<cluster> — the bare apps domain has no A recor
 
 ## Implementační kroky
 
-### Krok 1: Migrace Gitea → GitLab
+### Krok 1: Migrace Gitea → GitLab ✅ HOTOVO (2026-07-05)
 
-1. Smazat `base/gitea/` adresář a `scripts/seed-gitea.sh`
-2. Vytvořit `base/gitlab/` manifesty (namespace, deployment, service, route, PVCs, kustomization)
-3. Vytvořit `scripts/seed-gitlab.sh` (GitLab API: groups, projects, push templates)
-4. Aktualizovat `base/rhdh/` (app-config, dynamic-plugins, secrets)
-5. Aktualizovat templates (publish:gitlab, GitLab URLs)
-6. Aktualizovat skripty (deploy.sh, teardown.sh)
-7. Aktualizovat meta soubory (.env.sample, CLAUDE.md)
+1. ✅ Smazat `base/gitea/` adresář a `scripts/seed-gitea.sh`
+2. ✅ Vytvořit `base/gitlab/` manifesty (namespace, scc, deployment, service, route, PVCs, kustomization)
+3. ✅ Vytvořit `scripts/seed-gitlab.sh` (GitLab API: PAT via rails runner, groups, projects, push templates)
+4. ✅ Aktualizovat `base/rhdh/` (app-config s integrations.gitlab + apiBaseUrl/baseUrl, dynamic-plugins se scaffolder-backend-module-gitlab, secrets)
+5. ✅ Aktualizovat templates (publish:gitlab, GitLab URLs s /-/blob/ formátem)
+6. ✅ Aktualizovat skripty (deploy.sh — přímý apply místo ArgoCD pro gitlab/rhdh, teardown.sh)
+7. ✅ Aktualizovat meta soubory (.env.sample, .env, CLAUDE.md), smazat phase2-instances.yaml
 
-### Krok 2: Deploy a validace na clusteru
+Poučení z implementace:
+- GitLab CE 18.11.6 (ne 17.x — nelze přeskočit major verze při upgrade)
+- `gitlab_rails['monitoring_whitelist'] = ['0.0.0.0/0']` nutný pro K8s health probes
+- RHDH vyžaduje `apiBaseUrl` a `baseUrl` v integrations.gitlab (ne jen host+token)
+- `publish:gitlab` nepodporuje `allowedHosts` ani `description` (na rozdíl od publish:github)
+- Catalog location URL musí použít `/-/blob/` ne `/-/raw/`
+- GitLab protected branch blokuje force push — seed skript musí unprotect před pushem
+- Anyuid SCC binding nutný pro GitLab CE (běží jako root)
+
+### Krok 2: Deploy a validace na clusteru ✅ HOTOVO (2026-07-05)
 
 ```bash
 cp .env.sample .env  # Edit with your values
@@ -200,12 +209,12 @@ source .env
 ```
 
 Validační checklist:
-- [ ] GitLab UI se načte a login funguje (root / password)
-- [ ] RHDH UI se načte, guest login funguje
-- [ ] "Create VM" šablona je viditelná v RHDH katalogu (Kind: Template)
-- [ ] Vytvořit VM přes šablonu → repo se objeví v GitLab pod vm-instances skupinou
-- [ ] ArgoCD vytvoří Application pro nový repo
-- [ ] `oc get vm -n vm-dev` — VM běží
+- [x] GitLab UI se načte a login funguje (root / password)
+- [x] RHDH UI se načte, guest login funguje
+- [x] "Create VM" šablona je viditelná v RHDH katalogu (Kind: Template)
+- [x] Vytvořit VM přes šablonu → repo se objeví v GitLab pod vm-instances skupinou
+- [ ] ArgoCD vytvoří Application pro nový repo (⏳ vyžaduje ApplicationSet s GitLab SCM Provider — Phase B)
+- [ ] `oc get vm -n vm-dev` — VM běží (⏳ závisí na ArgoCD SCM Provider)
 
 ### Krok 3: Orchestration (Phase B)
 ### Krok 4: Full Demo (Phase C)

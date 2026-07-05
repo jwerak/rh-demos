@@ -132,13 +132,10 @@ spec:
           owner: ${{ parameters.owner }}
 
     - id: publish
-      name: Publish to Gitea
-      action: publish:github
+      name: Publish to GitLab
+      action: publish:gitlab
       input:
-        allowedHosts:
-          - gitea-gitea.__BASE_DOMAIN__
-        repoUrl: gitea-gitea.__BASE_DOMAIN__?owner=vm-instances&repo=${{ parameters.vmName }}
-        description: "VM: ${{ parameters.vmName }} (${{ parameters.cpuCores }} vCPU, ${{ parameters.memoryGi }}Gi RAM, ${{ parameters.osImage }})"
+        repoUrl: gitlab.__BASE_DOMAIN__?owner=vm-instances&repo=${{ parameters.vmName }}
         defaultBranch: main
         repoVisibility: public
 

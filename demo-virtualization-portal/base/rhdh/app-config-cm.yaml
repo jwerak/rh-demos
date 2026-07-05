@@ -16,7 +16,8 @@ data:
         origin: https://backstage-rhdh.__BASE_DOMAIN__
       reading:
         allow:
-          - host: "gitea.gitea.svc:3000"
+          - host: "gitlab.gitlab.svc"
+          - host: "gitlab.__BASE_DOMAIN__"
       auth:
         externalAccess:
           - type: static
@@ -35,13 +36,13 @@ data:
         - allow: [Component, System, API, Resource, Location, Template]
       locations:
         - type: url
-          target: http://gitea.gitea.svc:3000/demo/templates/raw/branch/main/catalog-info.yaml
+          target: https://gitlab.__BASE_DOMAIN__/demo/templates/-/blob/main/catalog-info.yaml
           rules:
             - allow: [Location, Template]
 
     integrations:
-      github:
-        - host: gitea-gitea.__BASE_DOMAIN__
-          apiBaseUrl: https://gitea-gitea.__BASE_DOMAIN__/api/v1
-          rawBaseUrl: https://gitea-gitea.__BASE_DOMAIN__
-          token: ${GITEA_TOKEN}
+      gitlab:
+        - host: gitlab.__BASE_DOMAIN__
+          token: ${GITLAB_TOKEN}
+          apiBaseUrl: https://gitlab.__BASE_DOMAIN__/api/v4
+          baseUrl: https://gitlab.__BASE_DOMAIN__

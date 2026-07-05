@@ -1,0 +1,84 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitlab
+  namespace: gitlab
+  labels:
+    app: gitlab
+    app.kubernetes.io/name: gitlab
+    app.kubernetes.io/part-of: virt-portal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitlab
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: gitlab
+        app.kubernetes.io/name: gitlab
+    spec:
+      containers:
+        - name: gitlab
+          image: gitlab/gitlab-ce:18.11.6-ce.0
+          ports:
+            - containerPort: 80
+              name: http
+          env:
+            - name: GITLAB_ROOT_PASSWORD
+              value: __GITLAB_ADMIN_PASSWORD__
+            - name: GITLAB_OMNIBUS_CONFIG
+              value: |
+                external_url 'https://gitlab.__BASE_DOMAIN__'
+                nginx['listen_port'] = 80
+                nginx['listen_https'] = false
+                puma['worker_processes'] = 0
+                sidekiq['concurrency'] = 5
+                gitlab_rails['monitoring_whitelist'] = ['0.0.0.0/0']
+                prometheus_monitoring['enable'] = false
+          volumeMounts:
+            - name: config
+              mountPath: /etc/gitlab
+            - name: data
+              mountPath: /var/opt/gitlab
+            - name: logs
+              mountPath: /var/log/gitlab
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          startupProbe:
+            httpGet:
+              path: /-/liveness
+              port: http
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /-/liveness
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /-/readiness
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: gitlab-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: gitlab-data
+        - name: logs
+          persistentVolumeClaim:
+            claimName: gitlab-logs

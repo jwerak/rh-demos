@@ -8,6 +8,7 @@ echo "--- Deleting ArgoCD Applications ---"
 oc delete application virt-portal-demo-env -n openshift-gitops --ignore-not-found
 oc delete application virt-portal-rhdh -n openshift-gitops --ignore-not-found
 oc delete application virt-portal-gitea -n openshift-gitops --ignore-not-found
+oc delete application virt-portal-gitlab -n openshift-gitops --ignore-not-found
 oc delete application virt-portal-operators -n openshift-gitops --ignore-not-found
 echo ""
 
@@ -25,7 +26,7 @@ oc delete backstage rhdh -n rhdh --ignore-not-found 2>/dev/null || true
 echo ""
 
 echo "--- Deleting namespaces ---"
-for ns in vm-dev vm-staging vm-prod rhdh gitea rhdh-operator; do
+for ns in vm-dev vm-staging vm-prod rhdh gitlab gitea rhdh-operator; do
   oc delete namespace "${ns}" --ignore-not-found 2>/dev/null || true
   echo "  Deleted namespace: ${ns}"
 done
