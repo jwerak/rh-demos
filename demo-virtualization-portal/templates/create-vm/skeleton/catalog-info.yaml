@@ -1,0 +1,21 @@
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${{ values.vmName }}
+  description: "VM ${{ values.vmName }} (${{ values.cpuCores }} vCPU, ${{ values.memoryGi }}Gi RAM)"
+  annotations:
+    backstage.io/managed-by-location: url:https://gitea-gitea.__BASE_DOMAIN__/vm-instances/${{ values.vmName }}/src/branch/main/catalog-info.yaml
+    backstage.io/managed-by-origin-location: url:https://gitea-gitea.__BASE_DOMAIN__/vm-instances/${{ values.vmName }}/src/branch/main/catalog-info.yaml
+  tags:
+    - vm
+    - ${{ values.osImage }}
+    - ${{ values.environment }}
+  links:
+    - title: OpenShift Console
+      url: https://console-openshift-console.__BASE_DOMAIN__/k8s/ns/${{ values.environment }}/kubevirt.io~v1~VirtualMachine/${{ values.vmName }}
+spec:
+  type: vm
+  lifecycle: production
+  owner: ${{ values.owner }}
+  system: virt-portal

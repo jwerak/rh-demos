@@ -1,0 +1,158 @@
+---
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: create-vm
+  title: Create Virtual Machine
+  description: Order a new RHEL virtual machine on OpenShift Virtualization
+  tags:
+    - vm
+    - openshift-virtualization
+    - recommended
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  owner: platform-team
+  type: vm
+
+  parameters:
+    - title: VM Configuration
+      required:
+        - vmName
+        - cpuCores
+        - memoryGi
+        - osImage
+        - environment
+      properties:
+        vmName:
+          title: VM Name
+          type: string
+          description: Name of the virtual machine (lowercase, alphanumeric, hyphens)
+          pattern: "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
+          ui:autofocus: true
+        cpuCores:
+          title: CPU Cores
+          type: integer
+          description: Number of vCPU cores
+          default: 2
+          enum:
+            - 1
+            - 2
+            - 4
+            - 8
+          enumNames:
+            - "1 core"
+            - "2 cores"
+            - "4 cores"
+            - "8 cores"
+        memoryGi:
+          title: Memory (GiB)
+          type: integer
+          description: Amount of RAM in GiB
+          default: 4
+          enum:
+            - 2
+            - 4
+            - 8
+            - 16
+          enumNames:
+            - "2 GiB"
+            - "4 GiB"
+            - "8 GiB"
+            - "16 GiB"
+        diskSizeGi:
+          title: Disk Size (GiB)
+          type: integer
+          description: Root disk size in GiB
+          default: 30
+          enum:
+            - 20
+            - 30
+            - 50
+            - 100
+          enumNames:
+            - "20 GiB"
+            - "30 GiB"
+            - "50 GiB"
+            - "100 GiB"
+        osImage:
+          title: OS Image
+          type: string
+          description: Base operating system image
+          default: rhel9
+          enum:
+            - rhel9
+            - rhel8
+            - fedora
+          enumNames:
+            - "RHEL 9"
+            - "RHEL 8"
+            - "Fedora"
+        environment:
+          title: Environment
+          type: string
+          description: Target deployment environment
+          default: vm-dev
+          enum:
+            - vm-dev
+            - vm-staging
+            - vm-prod
+          enumNames:
+            - "Development"
+            - "Staging"
+            - "Production"
+
+    - title: Owner Information
+      required:
+        - owner
+      properties:
+        owner:
+          title: Owner
+          type: string
+          description: Team or user responsible for this VM
+          ui:field: OwnerPicker
+          ui:options:
+            allowedKinds:
+              - Group
+              - User
+
+  steps:
+    - id: fetch-skeleton
+      name: Fetch VM Skeleton
+      action: fetch:template
+      input:
+        url: ./skeleton
+        values:
+          vmName: ${{ parameters.vmName }}
+          cpuCores: ${{ parameters.cpuCores }}
+          memoryGi: ${{ parameters.memoryGi }}
+          diskSizeGi: ${{ parameters.diskSizeGi }}
+          osImage: ${{ parameters.osImage }}
+          environment: ${{ parameters.environment }}
+          owner: ${{ parameters.owner }}
+
+    - id: publish
+      name: Publish to Gitea
+      action: publish:github
+      input:
+        allowedHosts:
+          - gitea-gitea.__BASE_DOMAIN__
+        repoUrl: gitea-gitea.__BASE_DOMAIN__?owner=vm-instances&repo=${{ parameters.vmName }}
+        description: "VM: ${{ parameters.vmName }} (${{ parameters.cpuCores }} vCPU, ${{ parameters.memoryGi }}Gi RAM, ${{ parameters.osImage }})"
+        defaultBranch: main
+        repoVisibility: public
+
+    - id: register
+      name: Register in Catalog
+      action: catalog:register
+      input:
+        repoContentsUrl: ${{ steps['publish'].output.repoContentsUrl }}
+        catalogInfoPath: /catalog-info.yaml
+
+  output:
+    links:
+      - title: Repository
+        url: ${{ steps['publish'].output.remoteUrl }}
+      - title: Catalog Entry
+        icon: catalog
+        entityRef: ${{ steps['register'].output.entityRef }}

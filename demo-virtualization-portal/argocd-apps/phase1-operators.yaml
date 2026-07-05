@@ -1,0 +1,20 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: virt-portal-operators
+  namespace: openshift-gitops
+spec:
+  project: default
+  source:
+    repoURL: __GITHUB_REPO__
+    targetRevision: __GIT_REVISION__
+    path: demo-virtualization-portal/base/operators
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

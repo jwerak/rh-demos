@@ -1,0 +1,47 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config-rhdh
+  namespace: rhdh
+data:
+  app-config.yaml: |
+    app:
+      title: VM Self-Service Portal
+      baseUrl: https://backstage-rhdh.__BASE_DOMAIN__
+
+    backend:
+      baseUrl: https://backstage-rhdh.__BASE_DOMAIN__
+      cors:
+        origin: https://backstage-rhdh.__BASE_DOMAIN__
+      reading:
+        allow:
+          - host: "gitea.gitea.svc:3000"
+      auth:
+        externalAccess:
+          - type: static
+            options:
+              token: ${BACKEND_SECRET}
+              subject: external-access
+
+    auth:
+      environment: development
+      providers:
+        guest:
+          dangerouslyAllowOutsideDevelopment: true
+
+    catalog:
+      rules:
+        - allow: [Component, System, API, Resource, Location, Template]
+      locations:
+        - type: url
+          target: http://gitea.gitea.svc:3000/demo/templates/raw/branch/main/catalog-info.yaml
+          rules:
+            - allow: [Location, Template]
+
+    integrations:
+      github:
+        - host: gitea-gitea.__BASE_DOMAIN__
+          apiBaseUrl: https://gitea-gitea.__BASE_DOMAIN__/api/v1
+          rawBaseUrl: https://gitea-gitea.__BASE_DOMAIN__
+          token: ${GITEA_TOKEN}

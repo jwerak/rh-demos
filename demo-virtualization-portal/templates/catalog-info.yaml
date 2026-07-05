@@ -1,0 +1,9 @@
+---
+apiVersion: backstage.io/v1alpha1
+kind: Location
+metadata:
+  name: virt-portal-templates
+  description: VM self-service templates for RHDH
+spec:
+  targets:
+    - ./create-vm/template.yaml
