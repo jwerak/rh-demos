@@ -55,8 +55,8 @@ runcmd:
     subscription-manager repos \
       --enable=rhel-9-for-x86_64-baseos-rpms \
       --enable=rhel-9-for-x86_64-appstream-rpms \
-      --enable=satellite-6.18-for-rhel-9-x86_64-rpms \
-      --enable=satellite-maintenance-6.18-for-rhel-9-x86_64-rpms
+      --enable=satellite-6.19-for-rhel-9-x86_64-rpms \
+      --enable=satellite-maintenance-6.19-for-rhel-9-x86_64-rpms
 
     # Install Satellite
     dnf install -y satellite
@@ -98,7 +98,7 @@ runcmd:
 
     echo "=== REX Pull Mode Enabled ==="
 
-    # Enable OpenSCAP plugin on the smart proxy (not auto-enabled in 6.18)
+    # Enable OpenSCAP plugin on the smart proxy
     satellite-installer \
       --enable-foreman-proxy-plugin-openscap \
       --foreman-proxy-plugin-openscap-ansible-module true

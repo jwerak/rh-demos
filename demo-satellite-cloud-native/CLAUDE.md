@@ -5,7 +5,7 @@ Cloud-native Satellite + IdM demo: RHEL VMs running on OpenShift Virtualization 
 ## Components
 
 - **IdM VM** (FreeIPA) - Identity server providing Kerberos/LDAP authentication. Installed via `ansible-freeipa` `ipaserver` role (RPM: `ansible-freeipa`), key vars: `ipaserver_ip_addresses`, `ipaserver_no_reverse: true`, `ipaserver_allow_zone_overlap: true`.
-- **Satellite VM** - Red Hat Satellite 6.18 for content management and host lifecycle.
+- **Satellite VM** - Red Hat Satellite 6.19 for content management and host lifecycle.
 - **Client VM** - Single RHEL 9 client that auto-registers to both Satellite and IdM. Uses `ipa-client-install --force-join --force` (the `--force` flag allows CA cert download over HTTP without pre-existing trust).
 - **Client Pool** (VirtualMachinePool) - Elastic pool of RHEL clients for scaling demos
 - **NetworkPolicy** - SDN-based micro-segmentation blocking client-to-client traffic

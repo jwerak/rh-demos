@@ -77,7 +77,17 @@ EXTRA_VARS="${EXTRA_VARS} ipa_domain=${IPA_DOMAIN}"
 EXTRA_VARS="${EXTRA_VARS} ipa_realm=${IPA_REALM}"
 
 if [ -n "${MANIFEST_PATH:-}" ]; then
-  EXTRA_VARS="${EXTRA_VARS} manifest_path=${MANIFEST_PATH}"
+  if [ ! -f "${MANIFEST_PATH}" ]; then
+    echo "WARNING: MANIFEST_PATH set but file not found: ${MANIFEST_PATH}"
+  else
+    # Copy manifest into the volume-mounted cache dir so it's accessible
+    # inside the ansible-navigator EE container
+    CACHE_DIR="${HOME}/.cache/satellite-demo"
+    mkdir -p "${CACHE_DIR}"
+    cp "${MANIFEST_PATH}" "${CACHE_DIR}/manifest.zip"
+    EXTRA_VARS="${EXTRA_VARS} manifest_path=/home/runner/.cache/satellite-demo/manifest.zip"
+    echo "Manifest copied to EE-accessible path"
+  fi
 fi
 
 cd "${ANSIBLE_DIR}"

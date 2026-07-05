@@ -194,12 +194,15 @@
 
     # ── Wait for SSH (static IP VMs only) ─────────────────────────────
     - name: Wait for SSH to become available
-      ansible.builtin.wait_for:
-        host: "{{ vm_ip }}"
-        port: 22
-        delay: 10
-        timeout: 600
-        state: started
+      ansible.builtin.shell: |
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i {{ libvirt_ssh_key }} \
+          {{ libvirt_user }}@{{ libvirt_host }} \
+          "nc -z {{ vm_ip }} 22"
+      register: ssh_wait_result
+      until: ssh_wait_result.rc == 0
+      retries: 60
+      delay: 10
+      changed_when: false
       when:
         - not (vm_exists | bool)
         - vm_ip | length > 0

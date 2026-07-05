@@ -169,6 +169,7 @@
               -c local
               -e vm_name=satellite
               -e vm_profile=satellite
+              -e libvirt_host={{ libvirt_host }}
               -e libvirt_uri={{ libvirt_uri }}
               -e libvirt_pool_dir={{ libvirt_pool_dir }}
               -e libvirt_rhel9_image={{ libvirt_rhel9_image }}
@@ -231,11 +232,14 @@
                 --file /tmp/manifest.zip \
                 --organization Demo_Org"
           register: manifest_upload
-          changed_when: true
+          changed_when: "'MANIFEST_SAME' not in (manifest_upload.stderr | default(''))"
+          failed_when:
+            - manifest_upload.rc != 0
+            - "'MANIFEST_SAME' not in (manifest_upload.stderr | default(''))"
 
         - name: Manifest upload result
           ansible.builtin.debug:
-            msg: "{{ manifest_upload.stdout }}"
+            msg: "{{ 'Manifest already uploaded (same content)' if 'MANIFEST_SAME' in (manifest_upload.stderr | default('')) else manifest_upload.stdout }}"
 
     # ══════════════════════════════════════════════════════════════════════
     # Phase 5: Prepare Client Template

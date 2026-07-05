@@ -82,17 +82,17 @@ All libvirt VM lifecycle (create, start, stop, delete) is managed by Ansible pla
 
 Before implementation, validate RHEL-specific assumptions with NotebookLM using official Red Hat documentation.
 
-**Prompt for NotebookLM** (paste this along with RHEL 9, Satellite 6.18, and IdM/FreeIPA documentation):
+**Prompt for NotebookLM** (paste this along with RHEL 9, Satellite 6.19, and IdM/FreeIPA documentation):
 
 ```
-I'm deploying Red Hat Satellite 6.18, FreeIPA (IdM), and RHEL 9 client VMs on a 
+I'm deploying Red Hat Satellite 6.19, FreeIPA (IdM), and RHEL 9 client VMs on a 
 standalone libvirt/KVM host (Fedora 44) instead of OpenShift Virtualization. 
 Please validate or correct these assumptions:
 
 1. SATELLITE INSTALLER ON LIBVIRT VM:
    - Can satellite-installer run successfully inside a KVM/libvirt VM with 4 vCPU, 
      20 GiB RAM, 100 GiB root disk + 100 GiB /var/lib/pulp?
-   - Are there any known issues with Satellite 6.18 on KVM guests vs bare metal?
+   - Are there any known issues with Satellite 6.19 on KVM guests vs bare metal?
    - Does the Satellite installer require the hostname to resolve to a non-loopback 
      IP? What's the correct /etc/hosts configuration?
 
@@ -146,7 +146,7 @@ Please validate or correct these assumptions:
    - VMs on libvirt still need RHSM registration. Can I use the same activation 
      key approach (org + activation key) as on OpenShift?
    - Any differences in repo enablement between KVM guests and OpenShift KubeVirt 
-     guests for Satellite 6.18 installation?
+     guests for Satellite 6.19 installation?
 ```
 
 **What to do with answers**: Any correction that changes the cloud-init scripts, Ansible vars, or networking model should be fed back as constraints before Phase 1 begins.
