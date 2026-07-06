@@ -31,7 +31,8 @@ spec:
         vmName:
           title: VM Name
           type: string
-          description: "Any name — Gatekeeper enforces: ^[a-z]{2,4}-[a-z]+-[0-9]{2}$ (e.g. dev-web-01)"
+          description: "Lowercase letters, numbers, hyphens only — Gatekeeper enforces: prefix-name-number (e.g. dev-web-01)"
+          pattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
           ui:autofocus: true
         cpuCores:
           title: CPU Cores

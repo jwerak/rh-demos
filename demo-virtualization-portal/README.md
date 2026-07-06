@@ -79,7 +79,7 @@ Shows automated policy-as-code — Gatekeeper OPA blocks non-compliant VMs at th
 
 | Policy | Rule | Example violation |
 |--------|------|-------------------|
-| Naming convention | Name must match `^[a-z]{2,4}-[a-z]+-[0-9]{2}$` | `badname`, `my-super-long-vm`, `VM-01` |
+| Naming convention | Name must match `^[a-z]{2,4}-[a-z]+-[0-9]{2}$` | `badname`, `my-super-long-vm`, `toolong-name-999` |
 | Resource limits | Max 8 CPU, 16 GiB RAM, 100 GiB disk | 32 cores, 64 GiB RAM |
 | Required labels | Must have `managed-by`, `environment`, `cost-center` | Unchecking "Include required labels" |
 
