@@ -26,8 +26,10 @@ data:
     p, role:default/platform-admin, policy-entity, create, allow
     p, role:default/platform-admin, policy-entity, update, allow
     p, role:default/platform-admin, policy-entity, delete, allow
+    p, role:default/platform-admin, argocd.view.read, read, allow
 
     p, role:default/app-owner, catalog-entity, read, allow
+    p, role:default/app-owner, argocd.view.read, read, allow
     p, role:default/app-owner, catalog-entity, update, allow
     p, role:default/app-owner, catalog.entity.create, create, allow
     p, role:default/app-owner, catalog.location.create, create, allow
@@ -37,10 +39,12 @@ data:
     p, role:default/app-owner, scaffolder.task.read, read, allow
 
     p, role:default/security-admin, catalog-entity, read, allow
+    p, role:default/security-admin, argocd.view.read, read, allow
     p, role:default/security-admin, scaffolder-template, read, allow
     p, role:default/security-admin, scaffolder.task.read, read, allow
 
     p, role:default/requestor, catalog-entity, read, allow
+    p, role:default/requestor, argocd.view.read, read, allow
     p, role:default/requestor, catalog.entity.create, create, allow
     p, role:default/requestor, catalog.location.create, create, allow
     p, role:default/requestor, scaffolder-template, read, allow
