@@ -1,0 +1,162 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+  namespace: keycloak
+data:
+  virt-portal-realm.json: |
+    {
+      "realm": "virt-portal",
+      "enabled": true,
+      "registrationAllowed": false,
+      "loginWithEmailAllowed": true,
+      "sslRequired": "none",
+      "roles": {
+        "realm": [
+          {"name": "requestor", "description": "Can order VMs"},
+          {"name": "app-owner", "description": "Can approve VM requests"},
+          {"name": "security-admin", "description": "Can approve security reviews"},
+          {"name": "platform-admin", "description": "Full platform access"}
+        ]
+      },
+      "groups": [
+        {"name": "requestors", "realmRoles": ["requestor"]},
+        {"name": "app-owners", "realmRoles": ["app-owner"]},
+        {"name": "security-admins", "realmRoles": ["security-admin"]},
+        {"name": "platform-admins", "realmRoles": ["platform-admin"]}
+      ],
+      "clientScopes": [
+        {
+          "name": "openid",
+          "protocol": "openid-connect",
+          "attributes": {"include.in.token.scope": "true"}
+        },
+        {
+          "name": "profile",
+          "protocol": "openid-connect",
+          "attributes": {"include.in.token.scope": "true"},
+          "protocolMappers": [
+            {
+              "name": "username",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-attribute-mapper",
+              "config": {
+                "claim.name": "preferred_username",
+                "user.attribute": "username",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true",
+                "jsonType.label": "String"
+              }
+            },
+            {
+              "name": "full name",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-full-name-mapper",
+              "config": {
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true"
+              }
+            }
+          ]
+        },
+        {
+          "name": "email",
+          "protocol": "openid-connect",
+          "attributes": {"include.in.token.scope": "true"},
+          "protocolMappers": [
+            {
+              "name": "email",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-attribute-mapper",
+              "config": {
+                "claim.name": "email",
+                "user.attribute": "email",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true",
+                "jsonType.label": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "attributes": {"include.in.token.scope": "true"},
+          "protocolMappers": [
+            {
+              "name": "groups",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "config": {
+                "claim.name": "groups",
+                "full.path": "false",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true"
+              }
+            }
+          ]
+        }
+      ],
+      "clients": [
+        {
+          "clientId": "rhdh",
+          "enabled": true,
+          "protocol": "openid-connect",
+          "publicClient": false,
+          "secret": "__KEYCLOAK_CLIENT_SECRET__",
+          "redirectUris": [
+            "https://backstage-rhdh.__BASE_DOMAIN__/api/auth/oidc/handler/frame"
+          ],
+          "webOrigins": [
+            "https://backstage-rhdh.__BASE_DOMAIN__"
+          ],
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": true,
+          "serviceAccountsEnabled": true,
+          "defaultClientScopes": ["openid", "profile", "email", "groups"]
+        }
+      ],
+      "users": [
+        {
+          "username": "vm-requestor",
+          "enabled": true,
+          "email": "requestor@demo.local",
+          "firstName": "VM",
+          "lastName": "Requestor",
+          "credentials": [{"type": "password", "value": "__DEMO_PASSWORD__", "temporary": false}],
+          "groups": ["requestors"]
+        },
+        {
+          "username": "app-owner",
+          "enabled": true,
+          "email": "owner@demo.local",
+          "firstName": "App",
+          "lastName": "Owner",
+          "credentials": [{"type": "password", "value": "__DEMO_PASSWORD__", "temporary": false}],
+          "groups": ["app-owners"]
+        },
+        {
+          "username": "security-admin",
+          "enabled": true,
+          "email": "security@demo.local",
+          "firstName": "Security",
+          "lastName": "Admin",
+          "credentials": [{"type": "password", "value": "__DEMO_PASSWORD__", "temporary": false}],
+          "groups": ["security-admins"]
+        },
+        {
+          "username": "platform-admin",
+          "enabled": true,
+          "email": "platform@demo.local",
+          "firstName": "Platform",
+          "lastName": "Admin",
+          "credentials": [{"type": "password", "value": "__DEMO_PASSWORD__", "temporary": false}],
+          "groups": ["platform-admins"]
+        }
+      ]
+    }

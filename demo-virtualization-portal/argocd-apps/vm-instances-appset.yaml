@@ -1,0 +1,39 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-scm-token
+  namespace: openshift-gitops
+stringData:
+  token: __GITLAB_TOKEN__
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: vm-instances
+  namespace: openshift-gitops
+spec:
+  generators:
+    - scmProvider:
+        gitlab:
+          group: vm-instances
+          api: http://gitlab.gitlab.svc.cluster.local
+          tokenRef:
+            secretName: gitlab-scm-token
+            key: token
+        cloneProtocol: https
+  template:
+    metadata:
+      name: vm-{{repository}}
+    spec:
+      project: default
+      source:
+        repoURL: http://gitlab.gitlab.svc.cluster.local/{{organization}}/{{repository}}.git
+        targetRevision: '{{branch}}'
+        path: vm-manifests
+      destination:
+        server: https://kubernetes.default.svc
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true

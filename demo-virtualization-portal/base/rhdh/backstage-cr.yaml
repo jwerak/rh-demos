@@ -11,6 +11,9 @@ spec:
       configMaps:
         - name: app-config-rhdh
     dynamicPluginsConfigMapName: dynamic-plugins-rhdh
+    extraFiles:
+      configMaps:
+        - name: rbac-policies-rhdh
     extraEnvs:
       secrets:
         - name: rhdh-secrets

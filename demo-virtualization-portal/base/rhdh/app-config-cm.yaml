@@ -26,14 +26,51 @@ data:
               subject: external-access
 
     auth:
-      environment: development
+      environment: production
+      session:
+        secret: ${SESSION_SECRET}
       providers:
-        guest:
-          dangerouslyAllowOutsideDevelopment: true
+        oidc:
+          production:
+            metadataUrl: https://keycloak.__BASE_DOMAIN__/realms/virt-portal/.well-known/openid-configuration
+            clientId: ${KEYCLOAK_CLIENT_ID}
+            clientSecret: ${KEYCLOAK_CLIENT_SECRET}
+            prompt: auto
+            additionalScopes:
+              - groups
+            signIn:
+              resolvers:
+                - resolver: preferredUsernameMatchingUserEntityName
+    signInPage: oidc
+
+    permission:
+      enabled: true
+      rbac:
+        admin:
+          users:
+            - name: user:default/platform-admin
+        pluginsWithPermission:
+          - catalog
+          - scaffolder
+          - permission
+        policies-csv-file: /opt/app-root/src/rbac-policies.csv
+        policyFileReload: true
 
     catalog:
       rules:
-        - allow: [Component, System, API, Resource, Location, Template]
+        - allow: [Component, System, API, Resource, Location, Template, User, Group]
+      providers:
+        keycloakOrg:
+          default:
+            baseUrl: https://keycloak.__BASE_DOMAIN__
+            loginRealm: virt-portal
+            realm: virt-portal
+            clientId: ${KEYCLOAK_CLIENT_ID}
+            clientSecret: ${KEYCLOAK_CLIENT_SECRET}
+            schedule:
+              frequency: { minutes: 5 }
+              timeout: { minutes: 3 }
+              initialDelay: { seconds: 30 }
       locations:
         - type: url
           target: https://gitlab.__BASE_DOMAIN__/demo/templates/-/blob/main/catalog-info.yaml

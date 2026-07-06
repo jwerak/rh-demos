@@ -1,0 +1,49 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rbac-policies-rhdh
+  namespace: rhdh
+data:
+  rbac-policies.csv: |
+    g, group:default/platform-admins, role:default/platform-admin
+    g, group:default/app-owners, role:default/app-owner
+    g, group:default/security-admins, role:default/security-admin
+    g, group:default/requestors, role:default/requestor
+
+    p, role:default/platform-admin, catalog-entity, read, allow
+    p, role:default/platform-admin, catalog-entity, update, allow
+    p, role:default/platform-admin, catalog-entity, delete, allow
+    p, role:default/platform-admin, catalog.entity.create, create, allow
+    p, role:default/platform-admin, catalog.location.create, create, allow
+    p, role:default/platform-admin, catalog.location.read, read, allow
+    p, role:default/platform-admin, scaffolder-template, read, allow
+    p, role:default/platform-admin, scaffolder-action, use, allow
+    p, role:default/platform-admin, scaffolder.task.create, create, allow
+    p, role:default/platform-admin, scaffolder.task.read, read, allow
+    p, role:default/platform-admin, scaffolder.task.cancel, use, allow
+    p, role:default/platform-admin, policy-entity, read, allow
+    p, role:default/platform-admin, policy-entity, create, allow
+    p, role:default/platform-admin, policy-entity, update, allow
+    p, role:default/platform-admin, policy-entity, delete, allow
+
+    p, role:default/app-owner, catalog-entity, read, allow
+    p, role:default/app-owner, catalog-entity, update, allow
+    p, role:default/app-owner, catalog.entity.create, create, allow
+    p, role:default/app-owner, catalog.location.create, create, allow
+    p, role:default/app-owner, scaffolder-template, read, allow
+    p, role:default/app-owner, scaffolder-action, use, allow
+    p, role:default/app-owner, scaffolder.task.create, create, allow
+    p, role:default/app-owner, scaffolder.task.read, read, allow
+
+    p, role:default/security-admin, catalog-entity, read, allow
+    p, role:default/security-admin, scaffolder-template, read, allow
+    p, role:default/security-admin, scaffolder.task.read, read, allow
+
+    p, role:default/requestor, catalog-entity, read, allow
+    p, role:default/requestor, catalog.entity.create, create, allow
+    p, role:default/requestor, catalog.location.create, create, allow
+    p, role:default/requestor, scaffolder-template, read, allow
+    p, role:default/requestor, scaffolder-action, use, allow
+    p, role:default/requestor, scaffolder.task.create, create, allow
+    p, role:default/requestor, scaffolder.task.read, read, allow

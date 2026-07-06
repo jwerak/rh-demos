@@ -14,6 +14,8 @@ echo ""
 : "${BACKEND_SECRET:?ERROR: BACKEND_SECRET must be set}"
 : "${GITHUB_REPO:?ERROR: GITHUB_REPO must be set}"
 : "${GIT_REVISION:?ERROR: GIT_REVISION must be set}"
+: "${KEYCLOAK_ADMIN_PASSWORD:?ERROR: KEYCLOAK_ADMIN_PASSWORD must be set}"
+: "${KEYCLOAK_CLIENT_SECRET:?ERROR: KEYCLOAK_CLIENT_SECRET must be set}"
 
 DEMO_PASSWORD="${DEMO_PASSWORD:-$(openssl rand -base64 12)}"
 
@@ -32,6 +34,8 @@ apply_templated() {
     -e "s|__GITLAB_ADMIN_PASSWORD__|${GITLAB_ADMIN_PASSWORD}|g" \
     -e "s|__GITLAB_TOKEN__|${GITLAB_TOKEN}|g" \
     -e "s|__DEMO_PASSWORD__|${DEMO_PASSWORD}|g" \
+    -e "s|__KEYCLOAK_ADMIN_PASSWORD__|${KEYCLOAK_ADMIN_PASSWORD}|g" \
+    -e "s|__KEYCLOAK_CLIENT_SECRET__|${KEYCLOAK_CLIENT_SECRET}|g" \
     "$file" | oc apply -f -
 }
 
@@ -62,6 +66,19 @@ done
 
 echo "Waiting for ArgoCD server..."
 oc wait deployment/openshift-gitops-server -n openshift-gitops --for=condition=Available --timeout=300s 2>/dev/null || true
+
+echo "Enabling ApplicationSet controller..."
+oc patch argocd openshift-gitops -n openshift-gitops --type merge \
+  -p '{"spec":{"applicationSet":{"resources":{"limits":{"cpu":"1","memory":"1Gi"},"requests":{"cpu":"250m","memory":"256Mi"}}}}}' 2>/dev/null || true
+
+echo "Waiting for ApplicationSet controller..."
+for i in $(seq 1 30); do
+  if oc get pods -n openshift-gitops -l app.kubernetes.io/name=openshift-gitops-applicationset-controller 2>/dev/null | grep -q Running; then
+    echo "ApplicationSet controller is ready."
+    break
+  fi
+  sleep 5
+done
 echo ""
 
 # Phase 2: Deploy RHDH Operator via ArgoCD
@@ -103,12 +120,34 @@ for i in $(seq 1 60); do
 done
 echo ""
 
+# Phase 3b: Deploy Keycloak
+echo "--- Phase 3b: Deploying Keycloak ---"
+for f in namespace realm-cm deployment service route; do
+  apply_templated "${BASE_DIR}/base/keycloak/${f}.yaml"
+done
+
+echo "Waiting for Keycloak readiness..."
+for i in $(seq 1 60); do
+  if curl -ksS -o /dev/null -w "%{http_code}" "https://keycloak.${BASE_DOMAIN}/realms/master" 2>/dev/null | grep -q 200; then
+    echo "Keycloak is ready."
+    break
+  fi
+  if [ "$i" -eq 60 ]; then
+    echo "WARNING: Keycloak not responding after 5 minutes. Continuing..."
+  fi
+  sleep 5
+done
+
+"${SCRIPT_DIR}/configure-keycloak.sh"
+echo ""
+
 # Phase 4: Deploy RHDH
 echo "--- Phase 4: Deploying RHDH ---"
 apply_templated "${BASE_DIR}/base/rhdh/namespace.yaml"
 apply_templated "${BASE_DIR}/base/rhdh/secrets.yaml"
 apply_templated "${BASE_DIR}/base/rhdh/app-config-cm.yaml"
 apply_templated "${BASE_DIR}/base/rhdh/dynamic-plugins-cm.yaml"
+apply_templated "${BASE_DIR}/base/rhdh/rbac-policies-cm.yaml"
 apply_templated "${BASE_DIR}/base/rhdh/backstage-cr.yaml"
 
 echo "Waiting for RHDH deployment..."
@@ -129,17 +168,25 @@ echo "--- Phase 5: Seeding GitLab ---"
 "${SCRIPT_DIR}/seed-gitlab.sh"
 echo ""
 
-# Phase 6: Deploy demo environments
+# Phase 6: Deploy demo environments + VM ApplicationSet
 echo "--- Phase 6: Deploying demo environments ---"
 apply_templated "${BASE_DIR}/argocd-apps/phase3-demo-env.yaml"
+echo ""
+
+echo "--- Phase 6b: Deploying VM ApplicationSet (GitLab SCM Provider) ---"
+apply_templated "${BASE_DIR}/argocd-apps/vm-instances-appset.yaml"
+echo "  ApplicationSet 'vm-instances' watches GitLab group for new VM repos."
 echo ""
 
 echo "=== Deployment Complete ==="
 echo ""
 echo "Access:"
-echo "  RHDH:    https://backstage-rhdh.${BASE_DOMAIN}"
-echo "  GitLab:  https://gitlab.${BASE_DOMAIN}"
-echo "  ArgoCD:  https://$(oc get route openshift-gitops-server -n openshift-gitops -o jsonpath='{.spec.host}' 2>/dev/null || echo 'openshift-gitops-server-openshift-gitops.'${BASE_DOMAIN})"
+echo "  RHDH:     https://backstage-rhdh.${BASE_DOMAIN}"
+echo "  GitLab:   https://gitlab.${BASE_DOMAIN}"
+echo "  Keycloak: https://keycloak.${BASE_DOMAIN}"
+echo "  ArgoCD:   https://$(oc get route openshift-gitops-server -n openshift-gitops -o jsonpath='{.spec.host}' 2>/dev/null || echo 'openshift-gitops-server-openshift-gitops.'${BASE_DOMAIN})"
 echo ""
-echo "GitLab admin: root / ${GITLAB_ADMIN_PASSWORD}"
-echo "Demo users:   Run ./scripts/create-demo-users.sh"
+echo "GitLab admin:   root / ${GITLAB_ADMIN_PASSWORD}"
+echo "Keycloak admin: admin / ${KEYCLOAK_ADMIN_PASSWORD}"
+echo "Demo users (password: ${DEMO_PASSWORD}):"
+echo "  vm-requestor, app-owner, security-admin, platform-admin"

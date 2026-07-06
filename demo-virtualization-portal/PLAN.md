@@ -213,9 +213,67 @@ Validační checklist:
 - [x] RHDH UI se načte, guest login funguje
 - [x] "Create VM" šablona je viditelná v RHDH katalogu (Kind: Template)
 - [x] Vytvořit VM přes šablonu → repo se objeví v GitLab pod vm-instances skupinou
-- [ ] ArgoCD vytvoří Application pro nový repo (⏳ vyžaduje ApplicationSet s GitLab SCM Provider — Phase B)
-- [ ] `oc get vm -n vm-dev` — VM běží (⏳ závisí na ArgoCD SCM Provider)
+- [x] ArgoCD vytvoří Application pro nový repo (ApplicationSet s GitLab SCM Provider — `argocd-apps/vm-instances-appset.yaml`)
+- [x] `oc get vm -n vm-dev` — VM běží (test-vm-01: Running/Ready)
 
-### Krok 3: Orchestration (Phase B)
-### Krok 4: Full Demo (Phase C)
-(nezměněno)
+### Krok 3: Auth + RBAC (Phase B) ✅ HOTOVO (2026-07-06)
+
+Keycloak + RHDH OIDC + RBAC → demo users s různými rolemi.
+
+- [x] Deploy Keycloak (dev mode) — `base/keycloak/` (namespace, realm-cm, deployment, service, route)
+- [x] Demo users: vm-requestor, app-owner, security-admin, platform-admin (groups: requestors, app-owners, security-admins, platform-admins)
+- [x] RHDH OIDC — `auth.providers.oidc` s `additionalScopes: [groups]`, `signInPage: oidc`, Keycloak user provisioning via `catalog.providers.keycloakOrg`
+- [x] RBAC — `permission.enabled: true`, frontend RBAC plugin enabled
+- [x] `scripts/configure-keycloak.sh` — post-import script pro OIDC scopes + service account roles (nutné protože dev mode H2 ztrácí API změny při restartu)
+
+Poučení z implementace:
+- Keycloak realm import NEVYTVÁŘÍ built-in scopes (openid, profile, email) — nutno vytvořit via admin API po startu
+- RHDH 1.10 OIDC provider používá `additionalScopes` ne `scope` (breaking change)
+- Service account klienta potřebuje `realm-management` role (view-users, view-realm, query-groups, query-users) pro Keycloak catalog provider
+- Keycloak dev mode (`start-dev`) ztrácí data při restartu podu — `configure-keycloak.sh` musí běžet po každém restartu
+
+### Krok 4: Scénář A — Standardní objednávka VM (Phase B)
+
+MR-based approval: template vytvoří MR v GitLabu → owner schválí → security schválí → merge → ArgoCD sync → VM.
+
+- [ ] Upravit Create VM template — `publish:gitlab` + `publish:gitlab:merge-request`
+- [ ] GitLab approval rules — `vm-instances` group: 2 approvals (app-owners + security-admins)
+- [ ] Protected branch `main` — no direct push, MR required
+- [ ] Post-provisioning: ServiceMonitor, OADP Schedule v skeleton manifests
+- [ ] CMDB: catalog-info.yaml + RHDH catalog annotations
+
+### Krok 5: Scénář B — Požadavek porušující politiku (Phase B)
+
+Gatekeeper OPA policies blokují VM které porušují naming/limity/labely.
+
+- [ ] Deploy Gatekeeper (`gatekeeper-operator-product`)
+- [ ] ConstraintTemplates: naming convention, resource limits, required labels
+- [ ] Policy violation → ArgoCD SyncFailed → viditelné v RHDH
+- [ ] Exception workflow: oprava přes nový MR → approval → sync
+
+### Krok 6: Scénář C — Změna existující služby (Phase B)
+
+"Resize VM" template: MR se změnou CPU/RAM → approval → ArgoCD sync.
+
+- [ ] Nová šablona `templates/resize-vm/`
+- [ ] Quota validace v šabloně
+- [ ] MR diff ukazuje staré → nové hodnoty
+- [ ] Audit trail v Git historii
+
+### Krok 7: Scénář D — Vyřazení služby (Phase B)
+
+"Decommission VM" template: smaže manifesty → approval → ArgoCD prune → CMDB cleanup.
+
+- [ ] Nová šablona `templates/decommission-vm/`
+- [ ] Backup check před smazáním
+- [ ] GitLab repo archivace
+- [ ] RHDH catalog entity removal
+
+### Krok 8: SonataFlow Orchestrator (Phase C — optional)
+
+Enterprise workflow engine jako enhancement nad MR-based approval.
+
+- [ ] Install Serverless + SonataFlow operators
+- [ ] SonataFlowPlatform + Data Index
+- [ ] Approval workflow (owner → security → provision)
+- [ ] RHDH Orchestrator plugin UI
