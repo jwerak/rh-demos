@@ -244,37 +244,123 @@ MR-based approval: template vytvoří MR v GitLabu → owner schválí → secur
 - [ ] Upravit Create VM template — `publish:gitlab` + `publish:gitlab:merge-request`
 - [ ] GitLab approval rules — `vm-instances` group: 2 approvals (app-owners + security-admins)
 - [ ] Protected branch `main` — no direct push, MR required
-- [ ] Post-provisioning: ServiceMonitor, OADP Schedule v skeleton manifests
-- [ ] CMDB: catalog-info.yaml + RHDH catalog annotations
+- [ ] Post-provisioning v skeleton manifests:
+  - [ ] CMDB: catalog-info.yaml s annotations (owner, env, created, cost-center) → RHDH katalog = CMDB
+  - [ ] DNS: cloud-init hostname + Service (SSH) — již v skeleton, ověřit
+  - [ ] Monitoring: přidat `ServiceMonitor` CR do `vm-manifests/`
+  - [ ] Backup: přidat OADP `Schedule` CR nebo `VirtualMachineSnapshot` do `vm-manifests/`
 
 ### Krok 5: Scénář B — Požadavek porušující politiku (Phase B)
 
 Gatekeeper OPA policies blokují VM které porušují naming/limity/labely.
 
 - [ ] Deploy Gatekeeper (`gatekeeper-operator-product`)
-- [ ] ConstraintTemplates: naming convention, resource limits, required labels
-- [ ] Policy violation → ArgoCD SyncFailed → viditelné v RHDH
+- [ ] ConstraintTemplates + Constraints:
+  - [ ] Naming convention: VM name musí matchovat `^[a-z]{2,4}-[a-z]+-[0-9]{2}$`
+  - [ ] Resource limits: max 8 CPU, 16 GiB RAM, 100 GiB disk
+  - [ ] Required labels: `app.kubernetes.io/managed-by`, `environment`, `cost-center`
+- [ ] Template validace (client-side prevention): pattern, enum omezení v parametrech
+- [ ] Policy violation → ArgoCD SyncFailed → viditelné v RHDH + ArgoCD UI
 - [ ] Exception workflow: oprava přes nový MR → approval → sync
+- [ ] Audit: Gatekeeper audit controller + OCP audit logs
 
 ### Krok 6: Scénář C — Změna existující služby (Phase B)
 
 "Resize VM" template: MR se změnou CPU/RAM → approval → ArgoCD sync.
 
-- [ ] Nová šablona `templates/resize-vm/`
-- [ ] Quota validace v šabloně
-- [ ] MR diff ukazuje staré → nové hodnoty
-- [ ] Audit trail v Git historii
+- [ ] Nová šablona `templates/resize-vm/template.yaml`
+  - [ ] Parametry: vmName (picker), newCpuCores, newMemoryGi, newDiskSizeGi
+  - [ ] Fetch aktuální manifest z GitLab, modifikace, MR
+- [ ] Quota validace: ResourceQuota check v šabloně
+- [ ] MR diff ukazuje staré → nové hodnoty → approval → merge
+- [ ] Audit trail v Git historii + RHDH catalog update
 
 ### Krok 7: Scénář D — Vyřazení služby (Phase B)
 
-"Decommission VM" template: smaže manifesty → approval → ArgoCD prune → CMDB cleanup.
+"Decommission VM" template: smaže manifesty → approval → ArgoCD prune → cleanup.
 
-- [ ] Nová šablona `templates/decommission-vm/`
-- [ ] Backup check před smazáním
-- [ ] GitLab repo archivace
+- [ ] Nová šablona `templates/decommission-vm/template.yaml`
+  - [ ] Parametry: vmName (picker), reason, confirmBackup (checkbox)
+  - [ ] Verify backup exists (VirtualMachineSnapshot check)
+- [ ] MR smaže manifesty z repo → approval → merge → ArgoCD prune
+- [ ] GitLab repo archivace (read-only)
 - [ ] RHDH catalog entity removal
 
-### Krok 8: SonataFlow Orchestrator (Phase C — optional)
+### Krok 8: Blueprinty / šablony služeb (Phase B)
+
+PTK téma: vytvoření nové šablony, změna existující, verzování, publikace.
+
+- [ ] Přidat další šablony do katalogu:
+  - [ ] "Create VM" (existuje), "Resize VM" (krok 6), "Decommission VM" (krok 7)
+  - [ ] "Create Database VM" — varianta s PostgreSQL/MySQL pre-configured
+- [ ] Verzování šablon: Git tags v `demo/templates` repo, catalog odkaz na konkrétní verzi
+- [ ] Správce šablon: platform-admin může editovat šablony přes GitLab, RHDH automaticky refreshne
+- [ ] `templates/catalog-info.yaml` — Location odkazující na všechny šablony
+
+### Krok 9: Oddělení uživatelů, týmů a aplikací (Phase B)
+
+PTK téma: tenant model, viditelnost omezená na vlastní zdroje.
+
+- [ ] RHDH RBAC conditional policies: `IS_ENTITY_OWNER` — uživatel vidí jen vlastní entity
+- [ ] Keycloak skupiny mapované na RHDH ownership: requestors → requestor-owned VMs
+- [ ] OCP namespaces per team: vm-dev-team-a, vm-dev-team-b (volitelně)
+- [ ] GitLab subgroups per team v `vm-instances/` (vm-instances/team-a/, vm-instances/team-b/)
+
+### Krok 10: Kvóty a limity zdrojů (Phase B)
+
+PTK téma: limity na vCPU/RAM/storage/počet VM, vynucování, workflow navyšování.
+
+- [ ] ResourceQuota per namespace (vm-dev, vm-staging, vm-prod) — již existuje, rozšířit
+- [ ] LimitRange pro VMs: min/max CPU, RAM per VM
+- [ ] Gatekeeper constraint: max počet VM per team/namespace
+- [ ] "Request Quota Increase" šablona — MR do `base/demo-env/quotas.yaml` → approval
+- [ ] Template validace: check zda nový VM překročí kvótu před submitem
+
+### Krok 11: Návaznost na IaC (Phase B)
+
+PTK téma: Terraform, Ansible, API. Vazba portál → blueprint → definice v kódu.
+
+- [ ] Demonstrace stávajícího GitOps flow: RHDH template → Git repo → ArgoCD → K8s resources
+- [ ] Ansible integration: přidat AAP Job Template volání do post-provisioning (volitelně)
+- [ ] API přístup: RHDH Scaffolder API endpoint pro programatické vytváření VM
+  - [ ] `curl -X POST .../api/scaffolder/v2/tasks` s parametry
+- [ ] Custom blueprint: ukázat jak vytvořit novou šablonu od nuly a publikovat do katalogu
+
+### Krok 12: Návaznost na CORE a EDGE (Phase B)
+
+PTK téma: nasazování do CORE a EDGE lokalit.
+
+- [ ] Multi-cluster ArgoCD: environment parameter v šabloně (core/edge)
+- [ ] ACM integration (volitelně): Placement + ManagedClusterSet pro edge clustery
+- [ ] Demo: vytvořit VM s environment=vm-prod (CORE) vs dedicated edge namespace
+- [ ] Slide: architektura ACM hub → managed clusters (CORE + EDGE)
+
+### Krok 13: Architektura portálu — prezentace (Phase B)
+
+PTK požadavek: vysvětlit architekturu minimálně v rozsahu:
+
+| Komponenta | Implementace | Status |
+|---|---|---|
+| Komponenty portálu | RHDH (Backstage) + Keycloak + GitLab + ArgoCD | ✅ |
+| Workflow engine | GitLab MR approval (Phase B), SonataFlow (Phase C) | ⏳ |
+| Katalog služeb | RHDH Software Catalog | ✅ |
+| API vrstva | RHDH REST API (Catalog, Scaffolder, Permission) | ✅ |
+| Integrační konektory | GitLab integration, Keycloak provider, ArgoCD plugin | ✅ |
+| IaC repozitáře | GitLab `vm-instances/` group, ArgoCD ApplicationSet | ✅ |
+| CI/CD pipeline | ArgoCD GitOps sync (continuous delivery) | ✅ |
+| Policy-as-Code | Gatekeeper OPA ConstraintTemplates | ⏳ krok 5 |
+| Secret/Vault | K8s Secrets + Keycloak credentials | ✅ |
+| Monitoring a logging | OCP built-in (Prometheus, Loki) + ServiceMonitor | ⏳ krok 4 |
+| Databáze portálu | RHDH PostgreSQL (local DB), Keycloak H2 (dev) | ✅ |
+| HA režim portálu | RHDH: multiple replicas, Keycloak: single (demo) | slide |
+| Zálohování portálu | OADP (already on cluster) | slide |
+| DR portálu | GitOps-based rebuild from Git repos | slide |
+| Správa šablon | GitLab `demo/templates` repo, RHDH auto-discovery | ✅ |
+| Správa verzí | Git versioning, GitLab tags | ⏳ krok 8 |
+| Auditní úložiště | Git history + Gatekeeper audit + OCP audit logs | ⏳ krok 5 |
+| Dostupnost 99%, RTO/RPO 24-48h | OCP HA + OADP backup + GitOps rebuild | slide |
+
+### Krok 14: SonataFlow Orchestrator (Phase C — optional)
 
 Enterprise workflow engine jako enhancement nad MR-based approval.
 
