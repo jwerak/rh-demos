@@ -231,6 +231,11 @@ Poučení z implementace:
 - RHDH 1.10 OIDC provider používá `additionalScopes` ne `scope` (breaking change)
 - Service account klienta potřebuje `realm-management` role (view-users, view-realm, query-groups, query-users) pro Keycloak catalog provider
 - Keycloak dev mode (`start-dev`) ztrácí data při restartu podu — `configure-keycloak.sh` musí běžet po každém restartu
+- RBAC deny-by-default: `scaffolder-action` permission nutný pro `fetch:template`, `publish:gitlab` atd.
+- RBAC: `catalog.entity.create` + `catalog.location.create` nutné pro `catalog:register` akci
+- RBAC frontend plugin (`backstage-community-plugin-rbac`) je jen UI, backend je built-in v RHDH 1.10
+- ArgoCD ApplicationSet controller musí být explicitně povolen v ArgoCD CR (`spec.applicationSet`)
+- ArgoCD RBAC: `scopes: [groups,name]` nutné pro mapování uživatelů (ne jen skupin)
 
 ### Krok 4: Scénář A — Standardní objednávka VM (Phase B)
 
