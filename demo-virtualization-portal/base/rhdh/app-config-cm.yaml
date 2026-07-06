@@ -77,6 +77,15 @@ data:
           rules:
             - allow: [Location, Template]
 
+    argocd:
+      appLocatorMethods:
+        - type: config
+          instances:
+            - name: openshift-gitops
+              url: https://openshift-gitops-server.openshift-gitops.svc.cluster.local
+              username: ${ARGOCD_USERNAME}
+              password: ${ARGOCD_PASSWORD}
+
     integrations:
       gitlab:
         - host: gitlab.__BASE_DOMAIN__
