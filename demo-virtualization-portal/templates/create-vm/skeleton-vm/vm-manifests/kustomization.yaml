@@ -6,6 +6,8 @@ resources:
   - cloudinit-secret.yaml
   - virtualmachine.yaml
   - service.yaml
+  - servicemonitor.yaml
+  - vm-snapshot.yaml
 
 commonLabels:
   app.kubernetes.io/managed-by: argocd

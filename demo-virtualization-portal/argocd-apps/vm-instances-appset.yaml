@@ -22,6 +22,7 @@ spec:
             secretName: gitlab-scm-token
             key: token
         cloneProtocol: https
+        requeueAfterSeconds: 30
   template:
     metadata:
       name: vm-{{repository}}

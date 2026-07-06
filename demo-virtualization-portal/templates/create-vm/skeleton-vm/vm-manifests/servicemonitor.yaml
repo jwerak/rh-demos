@@ -1,0 +1,17 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ${{ values.vmName }}
+  namespace: ${{ values.environment }}
+  labels:
+    app: ${{ values.vmName }}
+    app.kubernetes.io/name: ${{ values.vmName }}
+    app.kubernetes.io/part-of: virt-portal
+spec:
+  selector:
+    matchLabels:
+      app: ${{ values.vmName }}
+  endpoints:
+    - port: ssh
+      interval: 30s

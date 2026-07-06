@@ -237,18 +237,26 @@ Poučení z implementace:
 - ArgoCD ApplicationSet controller musí být explicitně povolen v ArgoCD CR (`spec.applicationSet`)
 - ArgoCD RBAC: `scopes: [groups,name]` nutné pro mapování uživatelů (ne jen skupin)
 
-### Krok 4: Scénář A — Standardní objednávka VM (Phase B)
+### Krok 4: Scénář A — Standardní objednávka VM (Phase B) ✅ HOTOVO (2026-07-06)
 
 MR-based approval: template vytvoří MR v GitLabu → owner schválí → security schválí → merge → ArgoCD sync → VM.
 
-- [ ] Upravit Create VM template — `publish:gitlab` + `publish:gitlab:merge-request`
-- [ ] GitLab approval rules — `vm-instances` group: 2 approvals (app-owners + security-admins)
-- [ ] Protected branch `main` — no direct push, MR required
-- [ ] Post-provisioning v skeleton manifests:
-  - [ ] CMDB: catalog-info.yaml s annotations (owner, env, created, cost-center) → RHDH katalog = CMDB
-  - [ ] DNS: cloud-init hostname + Service (SSH) — již v skeleton, ověřit
-  - [ ] Monitoring: přidat `ServiceMonitor` CR do `vm-manifests/`
-  - [ ] Backup: přidat OADP `Schedule` CR nebo `VirtualMachineSnapshot` do `vm-manifests/`
+- [x] Upravit Create VM template — `publish:gitlab` + `publish:gitlab:merge-request`
+- [x] GitLab approval rules — `vm-instances` group: 2 approvals (app-owners + security-admins)
+- [x] Protected branch `main` — no direct push, MR required
+- [x] Post-provisioning v skeleton manifests:
+  - [x] CMDB: catalog-info.yaml s annotations (owner, env, created, cost-center) → RHDH katalog = CMDB
+  - [x] DNS: cloud-init hostname + Service (SSH) — již v skeleton, ověřeno
+  - [x] Monitoring: `ServiceMonitor` CR v `vm-manifests/`
+  - [x] Backup: `VirtualMachineSnapshot` CR v `vm-manifests/`
+
+Poučení z implementace:
+- Skeleton rozdělen na `skeleton-init/` (catalog-info → main) a `skeleton-vm/` (vm-manifests → MR branch)
+- `publish:gitlab` vždy pushuje na `defaultBranch` — proto split skeleton pattern
+- `publish:gitlab:merge-request` vytvoří branch z main a otevře MR — ArgoCD sync až po merge
+- GitLab users (app-owner, security-admin) vytváří `seed-gitlab.sh` s Maintainer rolí v `vm-instances` skupině
+- `costCenter` parametr přidán pro chargeback/billing (CC-001..CC-003, CC-SHARED)
+- CMDB anotace v catalog-info.yaml: `virt-portal/cost-center`, `virt-portal/environment`, `virt-portal/cpu-cores` atd.
 
 ### Krok 5: Scénář B — Požadavek porušující politiku (Phase B)
 

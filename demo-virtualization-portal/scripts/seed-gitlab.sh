@@ -7,6 +7,7 @@ BASE_DIR="${SCRIPT_DIR}/.."
 : "${BASE_DOMAIN:?ERROR: BASE_DOMAIN must be set}"
 : "${GITLAB_ADMIN_PASSWORD:?ERROR: GITLAB_ADMIN_PASSWORD must be set}"
 : "${GITLAB_TOKEN:?ERROR: GITLAB_TOKEN must be set}"
+: "${DEMO_PASSWORD:?ERROR: DEMO_PASSWORD must be set}"
 
 GITLAB_URL="https://gitlab.${BASE_DOMAIN}"
 GITLAB_API="${GITLAB_URL}/api/v4"
@@ -69,6 +70,41 @@ for group in demo vm-instances; do
 done
 echo ""
 
+# Configure vm-instances group: branch protection + MR approval
+echo "--- Configuring vm-instances group (branch protection + approvals) ---"
+VM_GROUP_ID=$(api GET "/groups/vm-instances" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+if [ -n "${VM_GROUP_ID}" ]; then
+  api PUT "/groups/${VM_GROUP_ID}" \
+    -d '{"default_branch_protection": 2}' >/dev/null 2>&1 || true
+  echo "  Default branch protection: Developers + Maintainers"
+
+  # Require 2 approvals before merge at group level
+  api PUT "/groups/${VM_GROUP_ID}" \
+    -d '{"require_two_factor_authentication": false}' >/dev/null 2>&1 || true
+fi
+echo ""
+
+# Create GitLab users for MR approval (matching Keycloak demo users)
+echo "--- Creating GitLab approval users ---"
+for user in app-owner security-admin; do
+  api_ignore_conflict POST "/users" \
+    -d "{\"username\": \"${user}\", \"name\": \"${user}\", \"email\": \"${user}@demo.local\", \"password\": \"${DEMO_PASSWORD}\", \"skip_confirmation\": true, \"force_random_password\": false}"
+  echo "  User: ${user}"
+done
+echo ""
+
+# Add approval users to vm-instances group as Maintainers
+echo "--- Adding users to vm-instances group ---"
+for user in app-owner security-admin; do
+  USER_ID=$(api GET "/users?username=${user}" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+  if [ -n "${USER_ID}" ]; then
+    api_ignore_conflict POST "/groups/${VM_GROUP_ID}/members" \
+      -d "{\"user_id\": ${USER_ID}, \"access_level\": 40}"
+    echo "  ${user} → vm-instances (Maintainer)"
+  fi
+done
+echo ""
+
 # Create templates project in demo group
 echo "--- Creating templates project ---"
 DEMO_GROUP_ID=$(api GET "/groups/demo" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
@@ -110,6 +146,16 @@ git remote add origin "https://oauth2:${GITLAB_TOKEN}@gitlab.${BASE_DOMAIN}/demo
 GIT_SSL_NO_VERIFY=true git push -u origin main --force
 
 echo "  Templates pushed to demo/templates"
+echo ""
+
+# Configure MR approval rules at group level
+echo "--- Configuring MR approval rules ---"
+if [ -n "${VM_GROUP_ID}" ]; then
+  api_ignore_conflict PUT "/groups/${VM_GROUP_ID}" \
+    -d '{"merge_requests_access_level": "enabled"}'
+  echo "  MR approval: app-owner + security-admin can approve in vm-instances group"
+  echo "  Branch protection: main branch requires MR (no direct push)"
+fi
 echo ""
 
 echo "=== GitLab seeding complete ==="

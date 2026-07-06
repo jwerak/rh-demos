@@ -105,6 +105,7 @@ spec:
     - title: Owner Information
       required:
         - owner
+        - costCenter
       properties:
         owner:
           title: Owner
@@ -115,13 +116,28 @@ spec:
             allowedKinds:
               - Group
               - User
+        costCenter:
+          title: Cost Center
+          type: string
+          description: Cost center for billing and chargeback
+          default: CC-001
+          enum:
+            - CC-001
+            - CC-002
+            - CC-003
+            - CC-SHARED
+          enumNames:
+            - "CC-001 (Engineering)"
+            - "CC-002 (Operations)"
+            - "CC-003 (QA)"
+            - "CC-SHARED (Shared Services)"
 
   steps:
-    - id: fetch-skeleton
-      name: Fetch VM Skeleton
+    - id: fetch-init
+      name: Fetch Catalog Skeleton
       action: fetch:template
       input:
-        url: ./skeleton
+        url: ./skeleton-init
         values:
           vmName: ${{ parameters.vmName }}
           cpuCores: ${{ parameters.cpuCores }}
@@ -130,9 +146,10 @@ spec:
           osImage: ${{ parameters.osImage }}
           environment: ${{ parameters.environment }}
           owner: ${{ parameters.owner }}
+          costCenter: ${{ parameters.costCenter }}
 
     - id: publish
-      name: Publish to GitLab
+      name: Create Repository
       action: publish:gitlab
       input:
         repoUrl: gitlab.__BASE_DOMAIN__?owner=vm-instances&repo=${{ parameters.vmName }}
@@ -146,8 +163,51 @@ spec:
         repoContentsUrl: ${{ steps['publish'].output.repoContentsUrl }}
         catalogInfoPath: /catalog-info.yaml
 
+    - id: fetch-vm
+      name: Fetch VM Manifests
+      action: fetch:template
+      input:
+        url: ./skeleton-vm
+        values:
+          vmName: ${{ parameters.vmName }}
+          cpuCores: ${{ parameters.cpuCores }}
+          memoryGi: ${{ parameters.memoryGi }}
+          diskSizeGi: ${{ parameters.diskSizeGi }}
+          osImage: ${{ parameters.osImage }}
+          environment: ${{ parameters.environment }}
+          owner: ${{ parameters.owner }}
+          costCenter: ${{ parameters.costCenter }}
+
+    - id: create-mr
+      name: Create Merge Request for Approval
+      action: publish:gitlab:merge-request
+      input:
+        repoUrl: gitlab.__BASE_DOMAIN__?owner=vm-instances&repo=${{ parameters.vmName }}
+        branchName: provision/${{ parameters.vmName }}
+        title: "Provision VM: ${{ parameters.vmName }}"
+        description: |
+          ## VM Provisioning Request
+
+          | Parameter | Value |
+          |-----------|-------|
+          | **VM Name** | ${{ parameters.vmName }} |
+          | **CPU Cores** | ${{ parameters.cpuCores }} |
+          | **Memory** | ${{ parameters.memoryGi }} GiB |
+          | **Disk** | ${{ parameters.diskSizeGi }} GiB |
+          | **OS Image** | ${{ parameters.osImage }} |
+          | **Environment** | ${{ parameters.environment }} |
+          | **Owner** | ${{ parameters.owner }} |
+          | **Cost Center** | ${{ parameters.costCenter }} |
+
+          Requested via RHDH Self-Service Portal.
+          Merge this MR to provision the VM via ArgoCD GitOps.
+        targetBranchName: main
+        removeSourceBranch: true
+
   output:
     links:
+      - title: Merge Request (Approval Required)
+        url: ${{ steps['create-mr'].output.mergeRequestUrl }}
       - title: Repository
         url: ${{ steps['publish'].output.remoteUrl }}
       - title: Catalog Entry

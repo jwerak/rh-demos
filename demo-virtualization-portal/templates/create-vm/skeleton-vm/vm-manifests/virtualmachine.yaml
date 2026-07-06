@@ -10,6 +10,7 @@ metadata:
     app.kubernetes.io/part-of: virt-portal
     app.kubernetes.io/component: vm
     environment: ${{ values.environment }}
+    cost-center: ${{ values.costCenter }}
 spec:
   runStrategy: Always
   template:

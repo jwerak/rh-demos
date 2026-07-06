@@ -1,0 +1,15 @@
+---
+apiVersion: snapshot.kubevirt.io/v1beta1
+kind: VirtualMachineSnapshot
+metadata:
+  name: ${{ values.vmName }}-initial
+  namespace: ${{ values.environment }}
+  labels:
+    app: ${{ values.vmName }}
+    app.kubernetes.io/name: ${{ values.vmName }}
+    app.kubernetes.io/part-of: virt-portal
+spec:
+  source:
+    apiGroup: kubevirt.io
+    kind: VirtualMachine
+    name: ${{ values.vmName }}
