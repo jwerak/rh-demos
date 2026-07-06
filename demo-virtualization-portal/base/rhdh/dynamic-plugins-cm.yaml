@@ -26,3 +26,23 @@ data:
                 mountPoints:
                   - mountPoint: admin.page.rbac/cards
                     importName: RbacPage
+              backstage-community.plugin-argocd:
+                mountPoints:
+                  - mountPoint: entity.page.cd/cards
+                    importName: ArgocdDeploymentLifecycle
+                    config:
+                      layout:
+                        gridColumnEnd: "span 12"
+                      if:
+                        anyOf:
+                          - hasAnnotation: argocd/app-name
+                          - hasAnnotation: argocd/app-selector
+                  - mountPoint: entity.page.overview/cards
+                    importName: ArgocdDeploymentSummary
+                    config:
+                      layout:
+                        gridColumnEnd: "span 8"
+                      if:
+                        anyOf:
+                          - hasAnnotation: argocd/app-name
+                          - hasAnnotation: argocd/app-selector
