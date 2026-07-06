@@ -1,0 +1,28 @@
+---
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: vmnamingconvention
+spec:
+  crd:
+    spec:
+      names:
+        kind: VmNamingConvention
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            namePattern:
+              type: string
+              description: Regex pattern for VM names
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package vmnamingconvention
+
+        violation[{"msg": msg}] {
+          name := input.review.object.metadata.name
+          pattern := input.parameters.namePattern
+          not re_match(pattern, name)
+          msg := sprintf("VM name '%v' does not match naming convention '%v'. Expected format: prefix-name-number (e.g. dev-web-01, qa-db-03)", [name, pattern])
+        }

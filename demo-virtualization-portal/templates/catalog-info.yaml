@@ -7,3 +7,4 @@ metadata:
 spec:
   targets:
     - ./create-vm/template.yaml
+    - ./create-vm-policy-test/template.yaml

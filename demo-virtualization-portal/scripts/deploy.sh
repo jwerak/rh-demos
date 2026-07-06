@@ -178,6 +178,70 @@ apply_templated "${BASE_DIR}/argocd-apps/vm-instances-appset.yaml"
 echo "  ApplicationSet 'vm-instances' watches GitLab group for new VM repos."
 echo ""
 
+# Phase 7: Gatekeeper OPA Policies
+echo "--- Phase 7: Installing Gatekeeper OPA ---"
+oc apply -k "${BASE_DIR}/base/gatekeeper/operator/"
+
+echo "Waiting for Gatekeeper Operator CSV..."
+for i in $(seq 1 60); do
+  if oc get csv -n openshift-gatekeeper-system -l operators.coreos.com/gatekeeper-operator-product.openshift-gatekeeper-system -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q Succeeded; then
+    echo "Gatekeeper Operator is ready."
+    break
+  fi
+  if [ "$i" -eq 60 ]; then
+    echo "WARNING: Gatekeeper Operator not ready after 5 minutes. Continuing..."
+  fi
+  sleep 5
+done
+
+echo "Creating Gatekeeper instance..."
+oc apply -f "${BASE_DIR}/base/gatekeeper/instance/gatekeeper.yaml"
+
+echo "Waiting for Gatekeeper controller..."
+for i in $(seq 1 60); do
+  if oc get pods -n openshift-gatekeeper-system -l control-plane=controller-manager 2>/dev/null | grep -q Running; then
+    echo "Gatekeeper controller is running."
+    break
+  fi
+  if [ "$i" -eq 60 ]; then
+    echo "WARNING: Gatekeeper controller not ready after 5 minutes. Continuing..."
+  fi
+  sleep 5
+done
+
+echo "Waiting for Gatekeeper webhook..."
+for i in $(seq 1 30); do
+  if oc get pods -n openshift-gatekeeper-system -l control-plane=audit-controller 2>/dev/null | grep -q Running; then
+    echo "Gatekeeper audit controller is running."
+    break
+  fi
+  sleep 5
+done
+
+echo "Applying ConstraintTemplates..."
+for f in vm-naming-template vm-resource-limits-template vm-required-labels-template; do
+  oc apply -f "${BASE_DIR}/base/gatekeeper/policies/${f}.yaml"
+done
+
+echo "Waiting for ConstraintTemplates to be established..."
+for i in $(seq 1 30); do
+  READY=$(oc get constrainttemplates -o jsonpath='{range .items[*]}{.status.created}{"\n"}{end}' 2>/dev/null | grep -c true || echo 0)
+  if [ "${READY}" -ge 3 ]; then
+    echo "All 3 ConstraintTemplates are established."
+    break
+  fi
+  if [ "$i" -eq 30 ]; then
+    echo "WARNING: Not all ConstraintTemplates ready after 150s. Continuing..."
+  fi
+  sleep 5
+done
+
+echo "Applying Constraints..."
+for f in vm-naming vm-resource-limits vm-required-labels; do
+  oc apply -f "${BASE_DIR}/base/gatekeeper/policies/${f}.yaml"
+done
+echo ""
+
 echo "=== Deployment Complete ==="
 echo ""
 echo "Access:"

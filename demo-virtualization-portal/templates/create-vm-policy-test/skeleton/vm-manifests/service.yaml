@@ -1,0 +1,16 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${{ values.vmName }}-ssh
+  namespace: ${{ values.environment }}
+  labels:
+    app: ${{ values.vmName }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: ssh
+      port: 22
+      targetPort: 22
+  selector:
+    kubevirt.io/domain: ${{ values.vmName }}

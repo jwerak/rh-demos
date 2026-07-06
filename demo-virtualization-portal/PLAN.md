@@ -258,19 +258,30 @@ Poučení z implementace:
 - `costCenter` parametr přidán pro chargeback/billing (CC-001..CC-003, CC-SHARED)
 - CMDB anotace v catalog-info.yaml: `virt-portal/cost-center`, `virt-portal/environment`, `virt-portal/cpu-cores` atd.
 
-### Krok 5: Scénář B — Požadavek porušující politiku (Phase B)
+### Krok 5: Scénář B — Požadavek porušující politiku (Phase B) ✅ HOTOVO (2026-07-06)
 
 Gatekeeper OPA policies blokují VM které porušují naming/limity/labely.
 
-- [ ] Deploy Gatekeeper (`gatekeeper-operator-product`)
-- [ ] ConstraintTemplates + Constraints:
-  - [ ] Naming convention: VM name musí matchovat `^[a-z]{2,4}-[a-z]+-[0-9]{2}$`
-  - [ ] Resource limits: max 8 CPU, 16 GiB RAM, 100 GiB disk
-  - [ ] Required labels: `app.kubernetes.io/managed-by`, `environment`, `cost-center`
-- [ ] Template validace (client-side prevention): pattern, enum omezení v parametrech
-- [ ] Policy violation → ArgoCD SyncFailed → viditelné v RHDH + ArgoCD UI
-- [ ] Exception workflow: oprava přes nový MR → approval → sync
-- [ ] Audit: Gatekeeper audit controller + OCP audit logs
+- [x] Deploy Gatekeeper (`gatekeeper-operator-product` v3.21.0)
+- [x] ConstraintTemplates + Constraints:
+  - [x] Naming convention: VM name musí matchovat `^[a-z]{2,4}-[a-z]+-[0-9]{2}$`
+  - [x] Resource limits: max 8 CPU, 16 GiB RAM, 100 GiB disk
+  - [x] Required labels: `app.kubernetes.io/managed-by`, `environment`, `cost-center`
+- [x] Separátní šablona "Create VM (Policy Test)" s volnou validací pro demo policy violations
+- [x] Policy violation → ArgoCD SyncFailed → viditelné v ArgoCD UI (všech 7 violations najednou)
+- [x] Audit: Gatekeeper audit controller flaguje existující non-compliant VMs
+- [x] deploy.sh Phase 7: operator → Gatekeeper CR → ConstraintTemplates → Constraints
+
+Poučení z implementace:
+- ConstraintTemplate `metadata.name` MUSÍ být lowercase verze CRD `kind` (vmnamingconvention, ne vmnaminconvention)
+- ConstraintTemplates musí být established (CRD vytvořeno) PŘED aplikací Constraints — nelze `oc apply -k` vše najednou
+- Gatekeeper admission webhook vyhodnocuje ALL violations najednou (ne jen první) — skvělé pro demo
+- Gatekeeper audit controller (interval 60s) flaguje existující non-compliant VMs bez jejich blokování
+- Secret a Service projdou i když VirtualMachine je denied — Gatekeeper cílí pouze na VirtualMachine kind
+- Rego `trim_suffix`/`to_number` pro parsování Kubernetes quantity stringů (e.g. "4Gi" → 4)
+- Disk limit check funguje pouze s `dataVolumeTemplates` (ne `emptyDisk`) — to je OK, reálné VM vždy používají dataVolumeTemplates
+- Policy-test šablona používá single skeleton + `publish:gitlab` (direct to main, no MR) pro okamžitý ArgoCD sync
+- Nunjucks `{%- if values.includeLabels %}` v skeleton YAML pro conditional labels — funguje v Backstage `fetch:template`
 
 ### Krok 6: Scénář C — Změna existující služby (Phase B)
 

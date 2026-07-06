@@ -1,0 +1,151 @@
+---
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: create-vm-policy-test
+  title: "Create VM (Policy Test)"
+  description: |
+    Create a VM with minimal frontend validation to demonstrate Gatekeeper OPA policy enforcement.
+    Allows non-compliant values — Gatekeeper blocks them at the cluster level via ArgoCD SyncFailed.
+  tags:
+    - vm
+    - policy-test
+    - gatekeeper
+spec:
+  owner: platform-team
+  type: vm
+
+  parameters:
+    - title: VM Configuration (No Frontend Restrictions)
+      description: |
+        This template has no frontend pattern/enum restrictions.
+        Gatekeeper OPA policies enforce naming convention, resource limits, and required labels.
+      required:
+        - vmName
+        - cpuCores
+        - memoryGi
+        - diskSizeGi
+        - osImage
+        - environment
+      properties:
+        vmName:
+          title: VM Name
+          type: string
+          description: "Any name — Gatekeeper enforces: ^[a-z]{2,4}-[a-z]+-[0-9]{2}$ (e.g. dev-web-01)"
+          ui:autofocus: true
+        cpuCores:
+          title: CPU Cores
+          type: integer
+          description: "Any value — Gatekeeper enforces: max 8 cores"
+          default: 2
+          minimum: 1
+        memoryGi:
+          title: Memory (GiB)
+          type: integer
+          description: "Any value — Gatekeeper enforces: max 16 GiB"
+          default: 4
+          minimum: 1
+        diskSizeGi:
+          title: Disk Size (GiB)
+          type: integer
+          description: "Any value — Gatekeeper enforces: max 100 GiB"
+          default: 20
+          minimum: 10
+        osImage:
+          title: OS Image
+          type: string
+          default: rhel9
+          enum:
+            - rhel9
+            - rhel8
+            - fedora
+          enumNames:
+            - "RHEL 9"
+            - "RHEL 8"
+            - "Fedora"
+        environment:
+          title: Environment
+          type: string
+          default: vm-dev
+          enum:
+            - vm-dev
+            - vm-staging
+            - vm-prod
+          enumNames:
+            - "Development"
+            - "Staging"
+            - "Production"
+
+    - title: Labels & Ownership
+      required:
+        - owner
+        - costCenter
+      properties:
+        owner:
+          title: Owner
+          type: string
+          description: Team or user responsible for this VM
+          ui:field: OwnerPicker
+          ui:options:
+            allowedKinds:
+              - Group
+              - User
+        costCenter:
+          title: Cost Center
+          type: string
+          default: CC-001
+          enum:
+            - CC-001
+            - CC-002
+            - CC-003
+            - CC-SHARED
+          enumNames:
+            - "CC-001 (Engineering)"
+            - "CC-002 (Operations)"
+            - "CC-003 (QA)"
+            - "CC-SHARED (Shared Services)"
+        includeLabels:
+          title: Include required labels
+          type: boolean
+          description: "Uncheck to omit managed-by/environment/cost-center labels — will violate Gatekeeper policy"
+          default: true
+
+  steps:
+    - id: fetch
+      name: Fetch Skeleton
+      action: fetch:template
+      input:
+        url: ./skeleton
+        values:
+          vmName: ${{ parameters.vmName }}
+          cpuCores: ${{ parameters.cpuCores }}
+          memoryGi: ${{ parameters.memoryGi }}
+          diskSizeGi: ${{ parameters.diskSizeGi }}
+          osImage: ${{ parameters.osImage }}
+          environment: ${{ parameters.environment }}
+          owner: ${{ parameters.owner }}
+          costCenter: ${{ parameters.costCenter }}
+          includeLabels: ${{ parameters.includeLabels }}
+
+    - id: publish
+      name: Publish to GitLab (Direct to Main)
+      action: publish:gitlab
+      input:
+        repoUrl: gitlab.__BASE_DOMAIN__?owner=vm-instances&repo=${{ parameters.vmName }}
+        defaultBranch: main
+        repoVisibility: public
+
+    - id: register
+      name: Register in Catalog
+      action: catalog:register
+      input:
+        repoContentsUrl: ${{ steps['publish'].output.repoContentsUrl }}
+        catalogInfoPath: /catalog-info.yaml
+
+  output:
+    links:
+      - title: Repository
+        url: ${{ steps['publish'].output.remoteUrl }}
+      - title: Catalog Entry
+        icon: catalog
+        entityRef: ${{ steps['register'].output.entityRef }}

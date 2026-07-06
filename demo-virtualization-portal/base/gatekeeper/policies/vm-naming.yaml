@@ -1,0 +1,16 @@
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VmNamingConvention
+metadata:
+  name: vm-naming
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["kubevirt.io"]
+        kinds: ["VirtualMachine"]
+    namespaceSelector:
+      matchLabels:
+        app.kubernetes.io/part-of: virt-portal
+  parameters:
+    namePattern: "^[a-z]{2,4}-[a-z]+-[0-9]{2}$"

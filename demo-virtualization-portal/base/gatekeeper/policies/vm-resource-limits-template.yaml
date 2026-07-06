@@ -1,0 +1,48 @@
+---
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: vmresourcelimits
+spec:
+  crd:
+    spec:
+      names:
+        kind: VmResourceLimits
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            maxCpu:
+              type: integer
+              description: Maximum number of CPU cores
+            maxMemoryGi:
+              type: integer
+              description: Maximum memory in GiB
+            maxDiskGi:
+              type: integer
+              description: Maximum disk size in GiB
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package vmresourcelimits
+
+        violation[{"msg": msg}] {
+          cores := input.review.object.spec.template.spec.domain.cpu.cores
+          cores > input.parameters.maxCpu
+          msg := sprintf("VM CPU cores %v exceeds maximum allowed %v", [cores, input.parameters.maxCpu])
+        }
+
+        violation[{"msg": msg}] {
+          mem_str := input.review.object.spec.template.spec.domain.resources.requests.memory
+          mem_gi := to_number(trim_suffix(mem_str, "Gi"))
+          mem_gi > input.parameters.maxMemoryGi
+          msg := sprintf("VM memory %vGi exceeds maximum allowed %vGi", [mem_gi, input.parameters.maxMemoryGi])
+        }
+
+        violation[{"msg": msg}] {
+          dv := input.review.object.spec.dataVolumeTemplates[_]
+          disk_str := dv.spec.storage.resources.requests.storage
+          disk_gi := to_number(trim_suffix(disk_str, "Gi"))
+          disk_gi > input.parameters.maxDiskGi
+          msg := sprintf("VM disk size %vGi exceeds maximum allowed %vGi", [disk_gi, input.parameters.maxDiskGi])
+        }

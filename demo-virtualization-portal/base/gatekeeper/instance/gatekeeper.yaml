@@ -1,0 +1,12 @@
+---
+apiVersion: operator.gatekeeper.sh/v1alpha1
+kind: Gatekeeper
+metadata:
+  name: gatekeeper
+spec:
+  audit:
+    auditInterval: "60s"
+    replicas: 1
+  validatingWebhook: Enabled
+  webhook:
+    replicas: 2

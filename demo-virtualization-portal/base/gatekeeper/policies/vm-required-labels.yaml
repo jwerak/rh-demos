@@ -1,0 +1,19 @@
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VmRequiredLabels
+metadata:
+  name: vm-required-labels
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: ["kubevirt.io"]
+        kinds: ["VirtualMachine"]
+    namespaceSelector:
+      matchLabels:
+        app.kubernetes.io/part-of: virt-portal
+  parameters:
+    labels:
+      - app.kubernetes.io/managed-by
+      - environment
+      - cost-center
