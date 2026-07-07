@@ -22,7 +22,7 @@ metadata:
     - title: OpenShift Console
       url: https://console-openshift-console.__BASE_DOMAIN__/k8s/ns/${{ values.environment }}/kubevirt.io~v1~VirtualMachine/${{ values.vmName }}
     - title: Resize VM
-      url: https://backstage-rhdh.__BASE_DOMAIN__/create/templates/default/resize-vm
+      url: https://backstage-rhdh.__BASE_DOMAIN__/create/templates/default/resize-vm?formData=%7B%22vmName%22%3A%22${{ values.vmName }}%22%2C%22environment%22%3A%22${{ values.environment }}%22%2C%22osImage%22%3A%22${{ values.osImage }}%22%2C%22cpuCores%22%3A${{ values.cpuCores }}%2C%22memoryGi%22%3A${{ values.memoryGi }}%2C%22diskSizeGi%22%3A${{ values.diskSizeGi }}%2C%22costCenter%22%3A%22${{ values.costCenter }}%22%7D
       icon: edit
 spec:
   type: vm
