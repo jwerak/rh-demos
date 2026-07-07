@@ -1,0 +1,183 @@
+---
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: resize-vm
+  title: Resize Virtual Machine
+  description: Change CPU, memory, or disk size of an existing VM via merge request
+  tags:
+    - vm
+    - openshift-virtualization
+    - resize
+spec:
+  owner: platform-team
+  type: vm
+
+  parameters:
+    - title: VM Identity
+      description: Identify the VM to resize. Enter the current values for environment, OS image, owner, and cost center.
+      required:
+        - vmName
+        - osImage
+        - environment
+      properties:
+        vmName:
+          title: VM Name
+          type: string
+          description: Name of the existing virtual machine to resize
+          pattern: "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
+          ui:autofocus: true
+        environment:
+          title: Environment (current)
+          type: string
+          description: Current deployment environment of the VM
+          default: vm-dev
+          enum:
+            - vm-dev
+            - vm-staging
+            - vm-prod
+          enumNames:
+            - "Development"
+            - "Staging"
+            - "Production"
+        osImage:
+          title: OS Image (current)
+          type: string
+          description: Current OS image of the VM
+          default: rhel9
+          enum:
+            - rhel9
+            - rhel8
+            - fedora
+          enumNames:
+            - "RHEL 9"
+            - "RHEL 8"
+            - "Fedora"
+
+    - title: New Resources
+      description: Set the new resource values for the VM. Disk size can only grow — shrinking is not supported by Kubernetes storage.
+      required:
+        - cpuCores
+        - memoryGi
+        - diskSizeGi
+      properties:
+        cpuCores:
+          title: CPU Cores
+          type: integer
+          description: New number of vCPU cores
+          default: 2
+          enum:
+            - 1
+            - 2
+            - 4
+            - 8
+          enumNames:
+            - "1 core"
+            - "2 cores"
+            - "4 cores"
+            - "8 cores"
+        memoryGi:
+          title: Memory (GiB)
+          type: integer
+          description: New amount of RAM in GiB
+          default: 4
+          enum:
+            - 2
+            - 4
+            - 8
+            - 16
+          enumNames:
+            - "2 GiB"
+            - "4 GiB"
+            - "8 GiB"
+            - "16 GiB"
+        diskSizeGi:
+          title: Disk Size (GiB)
+          type: integer
+          description: New root disk size in GiB (can only grow, not shrink)
+          default: 30
+          enum:
+            - 20
+            - 30
+            - 50
+            - 100
+          enumNames:
+            - "20 GiB"
+            - "30 GiB"
+            - "50 GiB"
+            - "100 GiB"
+
+    - title: Owner Information
+      description: Enter the current owner and cost center of the VM.
+      required:
+        - owner
+        - costCenter
+      properties:
+        owner:
+          title: Owner (current)
+          type: string
+          description: Team or user responsible for this VM
+          ui:field: OwnerPicker
+          ui:options:
+            allowedKinds:
+              - Group
+              - User
+        costCenter:
+          title: Cost Center (current)
+          type: string
+          description: Current cost center for billing and chargeback
+          default: CC-001
+          enum:
+            - CC-001
+            - CC-002
+            - CC-003
+            - CC-SHARED
+          enumNames:
+            - "CC-001 (Engineering)"
+            - "CC-002 (Operations)"
+            - "CC-003 (QA)"
+            - "CC-SHARED (Shared Services)"
+
+  steps:
+    - id: fetch
+      name: Prepare Updated Manifests
+      action: fetch:template
+      input:
+        url: ./skeleton
+        values:
+          vmName: ${{ parameters.vmName }}
+          cpuCores: ${{ parameters.cpuCores }}
+          memoryGi: ${{ parameters.memoryGi }}
+          diskSizeGi: ${{ parameters.diskSizeGi }}
+          osImage: ${{ parameters.osImage }}
+          environment: ${{ parameters.environment }}
+          owner: ${{ parameters.owner }}
+          costCenter: ${{ parameters.costCenter }}
+
+    - id: create-mr
+      name: Create Resize Merge Request
+      action: publish:gitlab:merge-request
+      input:
+        repoUrl: gitlab.gitlab.svc.cluster.local?owner=vm-instances&repo=${{ parameters.vmName }}
+        branchName: resize/${{ parameters.vmName }}
+        commitAction: update
+        title: "Resize VM: ${{ parameters.vmName }}"
+        description: |
+          ## VM Resize Request
+
+          | Parameter | New Value |
+          |-----------|-----------|
+          | **VM Name** | ${{ parameters.vmName }} |
+          | **CPU Cores** | ${{ parameters.cpuCores }} |
+          | **Memory** | ${{ parameters.memoryGi }} GiB |
+          | **Disk** | ${{ parameters.diskSizeGi }} GiB |
+
+          Requested via RHDH Self-Service Portal.
+          Merge this MR to apply the resize via ArgoCD GitOps.
+        targetBranchName: main
+        removeSourceBranch: true
+
+  output:
+    links:
+      - title: Merge Request (Approval Required)
+        url: ${{ steps['create-mr'].output.mergeRequestUrl }}

@@ -283,16 +283,27 @@ Poučení z implementace:
 - Policy-test šablona používá single skeleton + `publish:gitlab` (direct to main, no MR) pro okamžitý ArgoCD sync
 - Nunjucks `{%- if values.includeLabels %}` v skeleton YAML pro conditional labels — funguje v Backstage `fetch:template`
 
-### Krok 6: Scénář C — Změna existující služby (Phase B)
+### Krok 6: Scénář C — Změna existující služby (Phase B) ✅ HOTOVO (2026-07-07)
 
-"Resize VM" template: MR se změnou CPU/RAM → approval → ArgoCD sync.
+"Resize VM" template: MR se změnou CPU/RAM/disk → approval → ArgoCD sync.
 
-- [ ] Nová šablona `templates/resize-vm/template.yaml`
-  - [ ] Parametry: vmName (picker), newCpuCores, newMemoryGi, newDiskSizeGi
-  - [ ] Fetch aktuální manifest z GitLab, modifikace, MR
-- [ ] Quota validace: ResourceQuota check v šabloně
-- [ ] MR diff ukazuje staré → nové hodnoty → approval → merge
-- [ ] Audit trail v Git historii + RHDH catalog update
+- [x] Nová šablona `templates/resize-vm/template.yaml` (2 kroky: fetch:template + publish:gitlab:merge-request)
+  - [x] Parametry: vmName, environment, osImage, cpuCores, memoryGi, diskSizeGi, owner, costCenter
+  - [x] Skeleton regeneruje catalog-info.yaml + virtualmachine.yaml s novými hodnotami
+- [x] MR diff ukazuje staré → nové hodnoty → approval → merge
+- [x] Audit trail v Git historii + RHDH catalog update (virt-portal/* anotace)
+- [x] Entity page link: "Resize VM" odkaz na stránce VM entity v RHDH
+
+Poučení z implementace:
+- Backstage scaffolder nemůže fetch/patch existující soubory z remote repo — nutno regenerovat celé soubory ze skeleton
+- `publish:gitlab:merge-request` používá GitLab Commits API s file-level `update` — soubory mimo workspace zůstávají nedotčeny
+- `commitAction: update` NUTNÝ v template — bez něj plugin defaultuje na `auto` režim, který nejprve listuje soubory přes Gitbeaker; pokud listing selže (fetch failed), fallback na `create` akci, která failne na existujících souborech
+- Všechny parametry (včetně environment, osImage, owner) jsou povinné, protože skeleton regeneruje celé soubory
+- Entity page link (`/create/templates/default/resize-vm`) přidán do catalog-info.yaml skeleton pro přístup z VM detail page
+- Quota validace přesunuta do Gatekeeper policies (automaticky validuje při ArgoCD sync)
+- `integrations.gitlab[host=svc].baseUrl` MUSÍ být `http://gitlab.gitlab.svc.cluster.local` (ne externí HTTPS URL) — Backstage plugin GitLab scaffolder používá `baseUrl` (ne `apiBaseUrl`) pro inicializaci Gitbeaker klienta, a RHDH pod nedosáhne na externí URL
+- Po merge MR je nutný ArgoCD refresh (`argocd.argoproj.io/refresh=hard`) nebo počkat na polling interval
+- Template output `mergeRequestUrl` se neresolvuje (Gitbeaker checkpoint issue) — MR URL je ale správně viditelná v GitLab
 
 ### Krok 7: Scénář D — Vyřazení služby (Phase B)
 

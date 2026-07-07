@@ -1,0 +1,65 @@
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: ${{ values.vmName }}
+  namespace: ${{ values.environment }}
+  labels:
+    app: ${{ values.vmName }}
+    app.kubernetes.io/name: ${{ values.vmName }}
+    app.kubernetes.io/part-of: virt-portal
+    app.kubernetes.io/component: vm
+    environment: ${{ values.environment }}
+    cost-center: ${{ values.costCenter }}
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: ${{ values.vmName }}
+        app: ${{ values.vmName }}
+        app.kubernetes.io/name: ${{ values.vmName }}
+        app.kubernetes.io/part-of: virt-portal
+    spec:
+      domain:
+        cpu:
+          cores: ${{ values.cpuCores }}
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources:
+          requests:
+            memory: ${{ values.memoryGi }}Gi
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: ${{ values.vmName }}-rootdisk
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            secretRef:
+              name: ${{ values.vmName }}-cloudinit
+  dataVolumeTemplates:
+    - metadata:
+        name: ${{ values.vmName }}-rootdisk
+      spec:
+        sourceRef:
+          kind: DataSource
+          name: ${{ values.osImage }}
+          namespace: openshift-virtualization-os-images
+        storage:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: ${{ values.diskSizeGi }}Gi

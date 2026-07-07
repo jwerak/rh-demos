@@ -95,4 +95,4 @@ data:
         - host: gitlab.gitlab.svc.cluster.local
           token: ${GITLAB_TOKEN}
           apiBaseUrl: http://gitlab.gitlab.svc.cluster.local/api/v4
-          baseUrl: https://gitlab.__BASE_DOMAIN__
+          baseUrl: http://gitlab.gitlab.svc.cluster.local
