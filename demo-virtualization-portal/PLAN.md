@@ -304,6 +304,15 @@ Poučení z implementace:
 - `integrations.gitlab[host=svc].baseUrl` MUSÍ být `http://gitlab.gitlab.svc.cluster.local` (ne externí HTTPS URL) — Backstage plugin GitLab scaffolder používá `baseUrl` (ne `apiBaseUrl`) pro inicializaci Gitbeaker klienta, a RHDH pod nedosáhne na externí URL
 - Po merge MR je nutný ArgoCD refresh (`argocd.argoproj.io/refresh=hard`) nebo počkat na polling interval
 - Template output `mergeRequestUrl` se neresolvuje (Gitbeaker checkpoint issue) — MR URL je ale správně viditelná v GitLab
+- Entity page link používá `formData` query parametr pro pre-fill všech hodnot (vmName, environment, osImage, cpuCores, memoryGi, diskSizeGi, costCenter)
+- Backstage entity links vyžadují absolutní URL — relativní cesty (`/create/...`) failnou na validaci
+
+**TODO — Resize VM neaplikuje změny na běžící VM:**
+- VM spec (desired) se aktualizuje, ale VMI (running instance) zůstává na starých hodnotách
+- VM condition `RestartRequired: True` — "a non-live-updatable field was changed in the template spec"
+- VM condition `LiveMigratable: False (DisksNotLiveMigratable)` — PVC používá ReadWriteOnce, live migration vyžaduje ReadWriteMany
+- Řešení: buď přidat restart krok do resize flow (ArgoCD post-sync hook, nebo `virtctl restart` krok v šabloně), nebo změnit PVC na RWX storage class
+- Investigace: zjistit zda CPU/RAM hotplug funguje s `spec.domain.cpu.maxSockets` a `maxGuest` memory (KubeVirt live update features)
 
 ### Krok 7: Scénář D — Vyřazení služby (Phase B)
 
