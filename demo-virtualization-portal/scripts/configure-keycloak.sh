@@ -10,6 +10,19 @@ KC_API="${KC_URL}/admin/realms/virt-portal"
 
 echo "=== Configuring Keycloak ==="
 
+echo "Waiting for virt-portal realm..."
+for i in $(seq 1 60); do
+  if curl -ksS -o /dev/null -w "%{http_code}" "${KC_URL}/realms/virt-portal" 2>/dev/null | grep -q 200; then
+    echo "virt-portal realm is ready."
+    break
+  fi
+  if [ "$i" -eq 60 ]; then
+    echo "ERROR: virt-portal realm not available after 5 minutes."
+    exit 1
+  fi
+  sleep 5
+done
+
 # Get admin token
 ADMIN_TOKEN=$(curl -ksS -X POST "${KC_URL}/realms/master/protocol/openid-connect/token" \
   -d "client_id=admin-cli" -d "grant_type=password" \

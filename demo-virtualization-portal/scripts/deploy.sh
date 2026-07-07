@@ -18,6 +18,7 @@ echo ""
 : "${KEYCLOAK_CLIENT_SECRET:?ERROR: KEYCLOAK_CLIENT_SECRET must be set}"
 
 DEMO_PASSWORD="${DEMO_PASSWORD:-$(openssl rand -base64 12)}"
+ARGOCD_PASSWORD=""
 
 echo "Base Domain:    ${BASE_DOMAIN}"
 echo "GitHub Repo:    ${GITHUB_REPO}"
@@ -67,6 +68,10 @@ done
 
 echo "Waiting for ArgoCD server..."
 oc wait deployment/openshift-gitops-server -n openshift-gitops --for=condition=Available --timeout=300s 2>/dev/null || true
+
+echo "Configuring ArgoCD RBAC (readonly for all authenticated users)..."
+oc patch argocd openshift-gitops -n openshift-gitops --type merge \
+  -p '{"spec":{"rbac":{"defaultPolicy":"role:readonly","policy":"g, system:cluster-admins, role:admin\ng, cluster-admins, role:admin\n","scopes":"[groups]"}}}' 2>/dev/null || true
 
 echo "Enabling ApplicationSet controller..."
 oc patch argocd openshift-gitops -n openshift-gitops --type merge \

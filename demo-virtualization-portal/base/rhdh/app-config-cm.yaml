@@ -16,7 +16,7 @@ data:
         origin: https://backstage-rhdh.__BASE_DOMAIN__
       reading:
         allow:
-          - host: "gitlab.gitlab.svc"
+          - host: "gitlab.gitlab.svc.cluster.local"
           - host: "gitlab.__BASE_DOMAIN__"
       auth:
         externalAccess:
@@ -32,7 +32,7 @@ data:
       providers:
         oidc:
           production:
-            metadataUrl: https://keycloak.__BASE_DOMAIN__/realms/virt-portal/.well-known/openid-configuration
+            metadataUrl: http://keycloak.keycloak.svc.cluster.local:8080/realms/virt-portal/.well-known/openid-configuration
             clientId: ${KEYCLOAK_CLIENT_ID}
             clientSecret: ${KEYCLOAK_CLIENT_SECRET}
             prompt: auto
@@ -62,7 +62,7 @@ data:
       providers:
         keycloakOrg:
           default:
-            baseUrl: https://keycloak.__BASE_DOMAIN__
+            baseUrl: http://keycloak.keycloak.svc.cluster.local:8080
             loginRealm: virt-portal
             realm: virt-portal
             clientId: ${KEYCLOAK_CLIENT_ID}
@@ -73,7 +73,7 @@ data:
               initialDelay: { seconds: 30 }
       locations:
         - type: url
-          target: https://gitlab.__BASE_DOMAIN__/demo/templates/-/blob/main/catalog-info.yaml
+          target: http://gitlab.gitlab.svc.cluster.local/demo/templates/-/blob/main/catalog-info.yaml
           rules:
             - allow: [Location, Template]
 
@@ -90,5 +90,9 @@ data:
       gitlab:
         - host: gitlab.__BASE_DOMAIN__
           token: ${GITLAB_TOKEN}
-          apiBaseUrl: https://gitlab.__BASE_DOMAIN__/api/v4
+          apiBaseUrl: http://gitlab.gitlab.svc.cluster.local/api/v4
+          baseUrl: https://gitlab.__BASE_DOMAIN__
+        - host: gitlab.gitlab.svc.cluster.local
+          token: ${GITLAB_TOKEN}
+          apiBaseUrl: http://gitlab.gitlab.svc.cluster.local/api/v4
           baseUrl: https://gitlab.__BASE_DOMAIN__

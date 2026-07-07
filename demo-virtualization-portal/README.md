@@ -2,14 +2,122 @@
 
 Self-service VM portal: RHDH 1.10 + GitLab CE + ArgoCD + OpenShift Virtualization + Gatekeeper OPA.
 
-## Access URLs
+## Prerequisites
 
-After deployment (`./scripts/deploy.sh`):
+### Cluster Requirements
+
+- **OpenShift 4.14+** with cluster-admin access
+- **OpenShift Virtualization** operator installed and configured (HyperConverged CR deployed)
+- At least one DataSource in `openshift-virtualization-os-images` namespace (e.g. `rhel9`, `rhel8`, `fedora`)
+- Sufficient cluster resources: GitLab alone requires 4 CPU / 8 GiB RAM
+
+### Tools
+
+| Tool | Purpose |
+|------|---------|
+| `oc` | OpenShift CLI (logged in as cluster-admin) |
+| `curl` | GitLab API calls (seed-gitlab.sh) |
+| `htpasswd` | Demo user creation (create-demo-users.sh) — from `httpd-tools` |
+| `git` | Push templates to GitLab |
+| `openssl` | Generate secrets if not provided |
+| `python3` | Parse Keycloak API responses |
+
+### DNS Setup
+
+Create a wildcard A record: `*.<base-domain>` → OpenShift router IP.
+
+To find the router IP:
+```bash
+dig +short console-openshift-console.$(oc get ingress.config cluster -o jsonpath='{.spec.domain}')
+```
+
+**NOTE**: Do NOT use CNAME to `apps.<cluster>` — the bare apps domain has no A record. Use an A record instead.
+
+The following subdomains will be created:
+- `backstage-rhdh.<base-domain>` — RHDH portal
+- `gitlab.<base-domain>` — GitLab CE
+- `keycloak.<base-domain>` — Keycloak SSO
+
+---
+
+## Deployment
+
+### 1. Configure Environment
+
+```bash
+cd demo-virtualization-portal
+cp .env.sample .env
+# Edit .env with your values — all variables are required
+vi .env
+source .env
+```
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `BASE_DOMAIN` | Custom domain for routes (wildcard DNS must point to router) | `virt-portal.example.com` |
+| `GITLAB_ADMIN_PASSWORD` | GitLab root password | `MySecurePass123` |
+| `GITLAB_TOKEN` | GitLab PAT for RHDH (must start with `glpat-`) | `glpat-rhdh-portal-token` |
+| `BACKEND_SECRET` | RHDH backend auth secret | `openssl rand -base64 32` |
+| `DEMO_PASSWORD` | Password for Keycloak demo users | `DemoPass123` |
+| `KEYCLOAK_ADMIN_PASSWORD` | Keycloak admin password | `KcAdmin123` |
+| `KEYCLOAK_CLIENT_SECRET` | OIDC client secret for RHDH | any random string |
+| `GITHUB_REPO` | This repo's Git URL (for ArgoCD) | `https://github.com/user/rh-demos.git` |
+| `GIT_REVISION` | Git branch for ArgoCD | `master` |
+
+### 2. Deploy
+
+```bash
+./scripts/deploy.sh
+```
+
+The script runs 7 phases:
+
+| Phase | What it does | Duration |
+|-------|-------------|----------|
+| 0 | Verify `oc login` | instant |
+| 1 | Install OpenShift GitOps Operator + RBAC | ~2 min |
+| 2 | Deploy RHDH Operator via ArgoCD | ~3 min |
+| 3 | Deploy GitLab CE (on-cluster) | ~5 min |
+| 3b | Deploy Keycloak + configure OIDC | ~2 min |
+| 4 | Deploy RHDH (Backstage CR + config) | ~3 min |
+| 5 | Seed GitLab (PAT, groups, users, templates) | ~1 min |
+| 6 | Deploy demo environments + VM ApplicationSet | instant |
+| 7 | Install Gatekeeper OPA + policies | ~3 min |
+
+Total: ~20 minutes on a healthy cluster.
+
+### 3. (Optional) Create OpenShift Demo Users
+
+If you want htpasswd-based users in OpenShift (separate from Keycloak users):
+
+```bash
+./scripts/create-demo-users.sh
+```
+
+### 4. Verify
 
 ```bash
 source .env
 
-# Portal
+# Check ArgoCD applications
+oc get applications.argoproj.io -n openshift-gitops
+
+# Check RHDH
+oc get backstage -n rhdh
+
+# Check demo namespaces
+oc get ns | grep vm-
+
+# Check Gatekeeper
+oc get constraints
+```
+
+---
+
+## Access URLs
+
+```bash
+source .env
 echo "RHDH:     https://backstage-rhdh.${BASE_DOMAIN}"
 echo "GitLab:   https://gitlab.${BASE_DOMAIN}"
 echo "Keycloak: https://keycloak.${BASE_DOMAIN}"
@@ -18,12 +126,12 @@ echo "ArgoCD:   https://$(oc get route openshift-gitops-server -n openshift-gito
 
 **Demo users** (login via Keycloak OIDC in RHDH):
 
-| User | Password | Role | Can do |
-|------|----------|------|--------|
-| `vm-requestor` | `$DEMO_PASSWORD` | requestor | Create VM requests |
-| `app-owner` | `$DEMO_PASSWORD` | approver | Approve MRs in GitLab |
-| `security-admin` | `$DEMO_PASSWORD` | approver | Approve MRs in GitLab |
-| `platform-admin` | `$DEMO_PASSWORD` | admin | Full RHDH access, RBAC management |
+| User             | Password         | Role      | Can do                            |
+| ---------------- | ---------------- | --------- | --------------------------------- |
+| `vm-requestor`   | `$DEMO_PASSWORD` | requestor | Create VM requests                |
+| `app-owner`      | `$DEMO_PASSWORD` | approver  | Approve MRs in GitLab             |
+| `security-admin` | `$DEMO_PASSWORD` | approver  | Approve MRs in GitLab             |
+| `platform-admin` | `$DEMO_PASSWORD` | admin     | Full RHDH access, RBAC management |
 
 **GitLab admin**: `root` / `$GITLAB_ADMIN_PASSWORD`
 **ArgoCD admin**: `admin` / `oc extract secret/openshift-gitops-cluster -n openshift-gitops --to=- --keys=admin.password 2>/dev/null`
@@ -34,9 +142,9 @@ echo "ArgoCD:   https://$(oc get route openshift-gitops-server -n openshift-gito
 
 The portal has two VM creation templates, each demonstrating a different governance model:
 
-| Template | Enforcement | How it works |
-|----------|-------------|--------------|
-| **Create Virtual Machine** | MR-based approval (humans review) | Creates GitLab MR → app-owner + security-admin approve → merge → ArgoCD syncs → VM created |
+| Template                    | Enforcement                       | How it works                                                                                |
+| --------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------- |
+| **Create Virtual Machine**  | MR-based approval (humans review) | Creates GitLab MR → app-owner + security-admin approve → merge → ArgoCD syncs → VM created  |
 | **Create VM (Policy Test)** | Gatekeeper OPA (automated policy) | Publishes directly to main → ArgoCD syncs immediately → Gatekeeper webhook allows or denies |
 
 ---
@@ -77,11 +185,11 @@ Shows automated policy-as-code — Gatekeeper OPA blocks non-compliant VMs at th
 
 ### Three Policies in Effect
 
-| Policy | Rule | Example violation |
-|--------|------|-------------------|
-| Naming convention | Name must match `^[a-z]{2,4}-[a-z]+-[0-9]{2}$` | `badname`, `my-super-long-vm`, `toolong-name-999` |
-| Resource limits | Max 8 CPU, 16 GiB RAM, 100 GiB disk | 32 cores, 64 GiB RAM |
-| Required labels | Must have `managed-by`, `environment`, `cost-center` | Unchecking "Include required labels" |
+| Policy            | Rule                                                 | Example violation                                 |
+| ----------------- | ---------------------------------------------------- | ------------------------------------------------- |
+| Naming convention | Name must match `^[a-z]{2,4}-[a-z]+-[0-9]{2}$`       | `badname`, `my-super-long-vm`, `toolong-name-999` |
+| Resource limits   | Max 8 CPU, 16 GiB RAM, 100 GiB disk                  | 32 cores, 64 GiB RAM                              |
+| Required labels   | Must have `managed-by`, `environment`, `cost-center` | Unchecking "Include required labels"              |
 
 ### Steps — Valid VM (passes all policies)
 
@@ -136,11 +244,11 @@ The denial is **not visible in RHDH** — RHDH only tracks the Git repo creation
 
 **See it here:**
 
-| Where | How |
-|-------|-----|
-| **ArgoCD UI** | Applications → `vm-<name>` → Sync Status shows OutOfSync, click for error details |
-| **CLI** | `oc get application vm-<name> -n openshift-gitops -o yaml \| grep -A 20 operationState` |
-| **CLI (short)** | `oc get applications -n openshift-gitops` — look for `OutOfSync` status |
+| Where           | How                                                                                     |
+| --------------- | --------------------------------------------------------------------------------------- |
+| **ArgoCD UI**   | Applications → `vm-<name>` → Sync Status shows OutOfSync, click for error details       |
+| **CLI**         | `oc get application vm-<name> -n openshift-gitops -o yaml \| grep -A 20 operationState` |
+| **CLI (short)** | `oc get applications -n openshift-gitops` — look for `OutOfSync` status                 |
 
 ### Steps — Fix a Violation (Exception Workflow)
 
@@ -233,6 +341,40 @@ oc delete application vm-<name> -n openshift-gitops
 # Full teardown
 ./scripts/teardown.sh
 ```
+
+---
+
+## Troubleshooting
+
+### GitLab not starting
+
+GitLab needs the `anyuid` SCC. Check the SCC RoleBinding:
+```bash
+oc get rolebinding gitlab-anyuid-scc -n gitlab
+```
+
+GitLab takes 3-5 minutes to start. Check pod logs:
+```bash
+oc logs -n gitlab -l app=gitlab --tail=50
+```
+
+### RHDH login fails
+
+1. Check Keycloak is running: `curl -ks https://keycloak.${BASE_DOMAIN}/realms/virt-portal`
+2. Verify OIDC client secret matches: compare `.env` `KEYCLOAK_CLIENT_SECRET` with the realm config
+3. Check RHDH logs: `oc logs -n rhdh -l rhdh.redhat.com/app=backstage-rhdh --tail=50`
+
+### ArgoCD not discovering VM repos
+
+1. Verify ApplicationSet exists: `oc get applicationset vm-instances -n openshift-gitops`
+2. Check GitLab is accessible internally: `oc exec -n openshift-gitops deploy/openshift-gitops-server -- curl -s http://gitlab.gitlab.svc.cluster.local/api/v4/groups/vm-instances/projects`
+3. Check the `gitlab-scm-token` Secret has the correct token
+
+### Gatekeeper not blocking VMs
+
+1. Verify Gatekeeper is running: `oc get pods -n openshift-gatekeeper-system`
+2. Check constraints exist: `oc get constraints`
+3. Verify namespace labels: `oc get ns vm-dev --show-labels` — must have `app.kubernetes.io/part-of=virt-portal`
 
 ---
 

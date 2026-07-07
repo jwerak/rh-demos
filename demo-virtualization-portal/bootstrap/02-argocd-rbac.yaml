@@ -19,6 +19,20 @@ rules:
     verbs:
       - "*"
   - apiGroups:
+      - snapshot.kubevirt.io
+    resources:
+      - virtualmachinesnapshots
+      - virtualmachinesnapshotcontents
+      - virtualmachinerestores
+    verbs:
+      - "*"
+  - apiGroups:
+      - monitoring.coreos.com
+    resources:
+      - servicemonitors
+    verbs:
+      - "*"
+  - apiGroups:
       - ""
     resources:
       - namespaces

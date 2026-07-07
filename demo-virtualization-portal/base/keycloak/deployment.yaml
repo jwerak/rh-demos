@@ -22,7 +22,8 @@ spec:
           args:
             - start-dev
             - --import-realm
-            - --hostname=keycloak.__BASE_DOMAIN__
+            - --hostname=https://keycloak.__BASE_DOMAIN__
+            - --hostname-backchannel-dynamic=true
             - --hostname-strict=false
             - --proxy-headers=xforwarded
             - --http-enabled=true

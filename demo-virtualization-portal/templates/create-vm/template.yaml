@@ -152,7 +152,7 @@ spec:
       name: Create Repository
       action: publish:gitlab
       input:
-        repoUrl: gitlab.__BASE_DOMAIN__?owner=vm-instances&repo=${{ parameters.vmName }}
+        repoUrl: gitlab.gitlab.svc.cluster.local?owner=vm-instances&repo=${{ parameters.vmName }}
         defaultBranch: main
         repoVisibility: public
 
@@ -182,7 +182,7 @@ spec:
       name: Create Merge Request for Approval
       action: publish:gitlab:merge-request
       input:
-        repoUrl: gitlab.__BASE_DOMAIN__?owner=vm-instances&repo=${{ parameters.vmName }}
+        repoUrl: gitlab.gitlab.svc.cluster.local?owner=vm-instances&repo=${{ parameters.vmName }}
         branchName: provision/${{ parameters.vmName }}
         title: "Provision VM: ${{ parameters.vmName }}"
         description: |

@@ -132,7 +132,7 @@ spec:
       name: Publish to GitLab (Direct to Main)
       action: publish:gitlab
       input:
-        repoUrl: gitlab.__BASE_DOMAIN__?owner=vm-instances&repo=${{ parameters.vmName }}
+        repoUrl: gitlab.gitlab.svc.cluster.local?owner=vm-instances&repo=${{ parameters.vmName }}
         defaultBranch: main
         repoVisibility: public
 
