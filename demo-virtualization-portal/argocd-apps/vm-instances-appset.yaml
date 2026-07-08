@@ -22,6 +22,9 @@ spec:
             secretName: gitlab-scm-token
             key: token
         cloneProtocol: https
+        filters:
+          - branchMatch: ^main$
+            repositoryExclude: .*_deletion_scheduled.*
         requeueAfterSeconds: 30
   template:
     metadata:

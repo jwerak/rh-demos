@@ -40,6 +40,7 @@ spec:
             - "Development"
             - "Staging"
             - "Production"
+          ui:disabled: true
         osImage:
           title: OS Image (current)
           type: string
@@ -53,6 +54,7 @@ spec:
             - "RHEL 9"
             - "RHEL 8"
             - "Fedora"
+          ui:disabled: true
 
     - title: New Resources
       description: Set the new resource values for the VM. Disk size can only grow — shrinking is not supported by Kubernetes storage.

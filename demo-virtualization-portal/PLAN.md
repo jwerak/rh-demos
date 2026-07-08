@@ -307,13 +307,17 @@ Poučení z implementace:
 - Entity page link používá `formData` query parametr pro pre-fill všech hodnot (vmName, environment, osImage, cpuCores, memoryGi, diskSizeGi, costCenter)
 - Backstage entity links vyžadují absolutní URL — relativní cesty (`/create/...`) failnou na validaci
 
-**TODO — Resize VM neaplikuje změny na běžící VM:**
-- VM spec (desired) se aktualizuje, ale VMI (running instance) zůstává na starých hodnotami
-- VM condition `RestartRequired: True` — "a non-live-updatable field was changed in the template spec"
+**✅ FIXED — CPU/RAM hotplug pro live resize bez restartu (2026-07-08):**
+- Příčina: `cpu.cores` a `resources.requests.memory` jsou "non-live-updatable" fields — KubeVirt nastaví `RestartRequired: True`
+- Řešení: VM manifesty přepracovány pro KubeVirt hotplug API:
+  - CPU: `cpu.cores` → `cpu.sockets` + `cores: 1` + `threads: 1` + `maxSockets: 8`
+  - RAM: `resources.requests.memory` → `domain.memory.guest` (KubeVirt automaticky počítá pod resources)
+  - Změna `sockets` nebo `memory.guest` triggeruje live migration → hotplug bez restartu
+- Gatekeeper ConstraintTemplate `vmresourcelimits` aktualizován: `cpu.cores` → `cpu.sockets`, `resources.requests.memory` → `domain.memory.guest`
+- Resize template: `environment` a `osImage` pole nastaveny jako `ui:disabled: true` (nelze měnit při resize)
 - ✅ FIXED: `LiveMigratable: False (DisksNotLiveMigratable)` — všechny skeleton templates opraveny z `ReadWriteOnce` → `ReadWriteMany` (Ceph RBD podporuje RWX v Block mode)
 - Nově vytvořené VM budou live-migratable; existující VM (`dev-web-01`) vyžaduje re-provisioning (smazat a vytvořit znovu přes šablonu)
-- Řešení pro restart: buď přidat restart krok do resize flow (ArgoCD post-sync hook, nebo `virtctl restart` krok v šabloně)
-- Investigace: zjistit zda CPU/RAM hotplug funguje s `spec.domain.cpu.maxSockets` a `maxGuest` memory (KubeVirt live update features)
+- Prerekvizity na clusteru: `vmRolloutStrategy: LiveUpdate` a `workloadUpdateMethods: [LiveMigrate]` v KubeVirt/HyperConverged CR (GA od OCP Virt 4.17, mělo by být defaultně zapnuto)
 - Disk resize nefunguje: když se v Gitu zvětší `diskSizeGi` a ArgoCD syncne nový manifest, PVC velikost se nezvětší — Kubernetes PVC `spec.resources.requests.storage` je immutable po vytvoření, zvětšení vyžaduje volume expansion request přes `status` nebo ruční resize
 
 ### Krok 7: Scénář D — Vyřazení služby (Phase B)

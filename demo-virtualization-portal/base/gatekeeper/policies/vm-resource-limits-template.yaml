@@ -27,13 +27,13 @@ spec:
         package vmresourcelimits
 
         violation[{"msg": msg}] {
-          cores := input.review.object.spec.template.spec.domain.cpu.cores
-          cores > input.parameters.maxCpu
-          msg := sprintf("VM CPU cores %v exceeds maximum allowed %v", [cores, input.parameters.maxCpu])
+          sockets := input.review.object.spec.template.spec.domain.cpu.sockets
+          sockets > input.parameters.maxCpu
+          msg := sprintf("VM CPU sockets %v exceeds maximum allowed %v", [sockets, input.parameters.maxCpu])
         }
 
         violation[{"msg": msg}] {
-          mem_str := input.review.object.spec.template.spec.domain.resources.requests.memory
+          mem_str := input.review.object.spec.template.spec.domain.memory.guest
           mem_gi := to_number(trim_suffix(mem_str, "Gi"))
           mem_gi > input.parameters.maxMemoryGi
           msg := sprintf("VM memory %vGi exceeds maximum allowed %vGi", [mem_gi, input.parameters.maxMemoryGi])

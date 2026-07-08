@@ -23,7 +23,12 @@ spec:
     spec:
       domain:
         cpu:
-          cores: ${{ values.cpuCores }}
+          sockets: ${{ values.cpuCores }}
+          cores: 1
+          threads: 1
+          maxSockets: 8
+        memory:
+          guest: ${{ values.memoryGi }}Gi
         devices:
           disks:
             - name: rootdisk
@@ -35,9 +40,6 @@ spec:
           interfaces:
             - name: default
               masquerade: {}
-        resources:
-          requests:
-            memory: ${{ values.memoryGi }}Gi
       networks:
         - name: default
           pod: {}
