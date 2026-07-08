@@ -5,10 +5,12 @@ Users order VMs through RHDH Software Templates, which publish to GitLab repos d
 
 ## Components
 
-- **RHDH 1.10** (Operator) — Developer portal with Software Templates for VM ordering
+- **RHDH 1.10** (Operator) — Developer portal with Software Templates + Orchestrator for VM ordering
 - **GitLab CE** (on-cluster) — Git server hosting scaffolded VM repos and template catalog
 - **OpenShift GitOps** (ArgoCD) — Watches GitLab groups for new repos, syncs VM manifests
 - **OpenShift Virtualization** — Runs VMs created by ArgoCD from Git-managed manifests
+- **OpenShift Serverless Logic** (SonataFlow) — Workflow engine for approval-based VM provisioning
+- **Keycloak** — OIDC identity provider with role-based groups
 
 ## Architecture: Two Git Servers
 
@@ -33,7 +35,11 @@ ArgoCD syncs VirtualMachine CR → OCP Virt creates VM
 - `base/gitlab/` — GitLab CE Deployment, Service, Route, PVCs, SCC
 - `base/rhdh/` — Backstage CR, app-config, dynamic-plugins
 - `base/demo-env/` — Namespaces, Quotas, NetworkPolicies for vm-dev/staging/prod
-- `templates/` — RHDH Software Templates (Create VM)
+- `base/keycloak/` — Keycloak deployment, realm config (users, groups, OIDC)
+- `base/serverless/` — Serverless + Serverless Logic Operator Subscriptions
+- `base/orchestrator/` — SonataFlowPlatform CR, workflow SonataFlow CRs
+- `templates/` — RHDH Software Templates (Create VM, Resize VM, Policy Test)
+- `workflows/` — SonataFlow workflow definitions (request-vm-approval)
 - `scripts/` — deploy.sh, seed-gitlab.sh, create-demo-users.sh, teardown.sh
 
 ## Key Commands

@@ -85,11 +85,16 @@ fi
 echo ""
 
 # Create GitLab users for MR approval (matching Keycloak demo users)
-echo "--- Creating GitLab approval users ---"
+echo "--- Creating GitLab users ---"
 for user in app-owner security-admin; do
   api_ignore_conflict POST "/users" \
     -d "{\"username\": \"${user}\", \"name\": \"${user}\", \"email\": \"${user}@demo.local\", \"password\": \"${DEMO_PASSWORD}\", \"skip_confirmation\": true, \"force_random_password\": false}"
-  echo "  User: ${user}"
+  echo "  User: ${user} (approval)"
+done
+for user in frontend-dev backend-dev; do
+  api_ignore_conflict POST "/users" \
+    -d "{\"username\": \"${user}\", \"name\": \"${user}\", \"email\": \"${user}@demo.local\", \"password\": \"${DEMO_PASSWORD}\", \"skip_confirmation\": true, \"force_random_password\": false}"
+  echo "  User: ${user} (developer)"
 done
 echo ""
 
@@ -101,6 +106,15 @@ for user in app-owner security-admin; do
     api_ignore_conflict POST "/groups/${VM_GROUP_ID}/members" \
       -d "{\"user_id\": ${USER_ID}, \"access_level\": 40}"
     echo "  ${user} → vm-instances (Maintainer)"
+  fi
+done
+# Add developers as Reporters (can create issues, cannot approve MRs)
+for user in frontend-dev backend-dev; do
+  USER_ID=$(api GET "/users?username=${user}" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+  if [ -n "${USER_ID}" ]; then
+    api_ignore_conflict POST "/groups/${VM_GROUP_ID}/members" \
+      -d "{\"user_id\": ${USER_ID}, \"access_level\": 20}"
+    echo "  ${user} → vm-instances (Reporter)"
   fi
 done
 echo ""
@@ -155,6 +169,29 @@ if [ -n "${VM_GROUP_ID}" ]; then
     -d '{"merge_requests_access_level": "enabled"}'
   echo "  MR approval: app-owner + security-admin can approve in vm-instances group"
   echo "  Branch protection: main branch requires MR (no direct push)"
+fi
+echo ""
+
+# Create vm-approvals project for Orchestrator workflow approval issues
+echo "--- Creating vm-approvals project ---"
+if [ -n "${DEMO_GROUP_ID}" ]; then
+  api_ignore_conflict POST "/projects" \
+    -d "{\"name\": \"vm-approvals\", \"namespace_id\": ${DEMO_GROUP_ID}, \"visibility\": \"public\", \"initialize_with_readme\": true, \"default_branch\": \"main\"}"
+  echo "  Project: demo/vm-approvals"
+
+  # Create approval labels
+  APPROVALS_PROJECT_ID=$(api GET "/projects/demo%2Fvm-approvals" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+  if [ -n "${APPROVALS_PROJECT_ID}" ]; then
+    api_ignore_conflict POST "/projects/${APPROVALS_PROJECT_ID}/labels" \
+      -d '{"name": "approved", "color": "#69D100", "description": "VM request approved"}'
+    api_ignore_conflict POST "/projects/${APPROVALS_PROJECT_ID}/labels" \
+      -d '{"name": "denied", "color": "#D10069", "description": "VM request denied"}'
+    api_ignore_conflict POST "/projects/${APPROVALS_PROJECT_ID}/labels" \
+      -d '{"name": "vm-request", "color": "#428BCA", "description": "VM request issue"}'
+    api_ignore_conflict POST "/projects/${APPROVALS_PROJECT_ID}/labels" \
+      -d '{"name": "pending", "color": "#F0AD4E", "description": "Pending approval"}'
+    echo "  Labels: approved, denied, vm-request, pending"
+  fi
 fi
 echo ""
 

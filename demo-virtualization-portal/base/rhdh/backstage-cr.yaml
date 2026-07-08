@@ -23,5 +23,7 @@ spec:
     route:
       enabled: true
       host: backstage-rhdh.__BASE_DOMAIN__
+  flavours:
+    - name: orchestrator
   database:
     enableLocalDb: true

@@ -86,6 +86,12 @@ data:
               username: ${ARGOCD_USERNAME}
               password: ${ARGOCD_PASSWORD}
 
+    orchestrator:
+      sonataFlowService:
+        baseUrl: http://sonataflow-platform-data-index-service.rhdh.svc.cluster.local
+        port: 80
+        path: /graphql
+
     integrations:
       gitlab:
         - host: gitlab.__BASE_DOMAIN__

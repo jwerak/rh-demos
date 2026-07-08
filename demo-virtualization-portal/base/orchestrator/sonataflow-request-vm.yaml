@@ -1,0 +1,46 @@
+apiVersion: sonataflow.org/v1alpha08
+kind: SonataFlow
+metadata:
+  name: request-vm-approval
+  namespace: rhdh
+  annotations:
+    sonataflow.org/description: "Request VM via GitOps with GitLab-based approval"
+    sonataflow.org/expressionLang: jq
+    sonataflow.org/profile: gitops
+    sonataflow.org/version: "1.0"
+  labels:
+    app: request-vm-approval
+    sonataflow.org/workflow-app: request-vm-approval
+spec:
+  podTemplate:
+    container:
+      image: image-registry.openshift-image-registry.svc:5000/rhdh/wf-request-vm:latest
+      envFrom:
+        - secretRef:
+            name: workflow-credentials
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "250m"
+        limits:
+          memory: "512Mi"
+          cpu: "500m"
+  resources:
+    configMaps:
+      - configMap:
+          name: request-vm-approval-schemas
+        workflowPath: schemas
+      - configMap:
+          name: request-vm-approval-specs
+        workflowPath: specs
+  persistence:
+    postgresql:
+      secretRef:
+        name: sonataflow-db-credentials
+        userKey: POSTGRES_USER
+        passwordKey: POSTGRES_PASSWORD
+      serviceRef:
+        name: backstage-psql-rhdh
+        port: 5432
+        databaseName: backstage_plugin_orchestrator
+        databaseSchema: request-vm-approval

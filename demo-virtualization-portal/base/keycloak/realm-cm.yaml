@@ -17,14 +17,16 @@ data:
           {"name": "requestor", "description": "Can order VMs"},
           {"name": "app-owner", "description": "Can approve VM requests"},
           {"name": "security-admin", "description": "Can approve security reviews"},
-          {"name": "platform-admin", "description": "Full platform access"}
+          {"name": "platform-admin", "description": "Full platform access"},
+          {"name": "developer", "description": "Developer role (frontend/backend)"}
         ]
       },
       "groups": [
         {"name": "requestors", "realmRoles": ["requestor"]},
         {"name": "app-owners", "realmRoles": ["app-owner"]},
         {"name": "security-admins", "realmRoles": ["security-admin"]},
-        {"name": "platform-admins", "realmRoles": ["platform-admin"]}
+        {"name": "platform-admins", "realmRoles": ["platform-admin"]},
+        {"name": "developers", "realmRoles": ["developer"]}
       ],
       "clientScopes": [
         {
@@ -157,6 +159,24 @@ data:
           "lastName": "Admin",
           "credentials": [{"type": "password", "value": "__DEMO_PASSWORD__", "temporary": false}],
           "groups": ["platform-admins"]
+        },
+        {
+          "username": "frontend-dev",
+          "enabled": true,
+          "email": "frontend@demo.local",
+          "firstName": "Frontend",
+          "lastName": "Developer",
+          "credentials": [{"type": "password", "value": "__DEMO_PASSWORD__", "temporary": false}],
+          "groups": ["developers"]
+        },
+        {
+          "username": "backend-dev",
+          "enabled": true,
+          "email": "backend@demo.local",
+          "firstName": "Backend",
+          "lastName": "Developer",
+          "credentials": [{"type": "password", "value": "__DEMO_PASSWORD__", "temporary": false}],
+          "groups": ["developers"]
         }
       ]
     }

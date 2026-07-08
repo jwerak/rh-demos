@@ -1,0 +1,140 @@
+openapi: 3.0.3
+info:
+  title: GitLab API (Minimal)
+  version: "4"
+servers:
+  - url: http://gitlab.gitlab.svc.cluster.local/api/v4
+paths:
+  /projects/{id}/issues:
+    post:
+      operationId: createIssue
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: PRIVATE-TOKEN
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                labels:
+                  type: string
+      responses:
+        "201":
+          description: Issue created
+          content:
+            application/json:
+              schema:
+                type: object
+  /projects/{id}/issues/{issue_iid}:
+    get:
+      operationId: getIssue
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: issue_iid
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: PRIVATE-TOKEN
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Issue details
+          content:
+            application/json:
+              schema:
+                type: object
+  /projects:
+    post:
+      operationId: createProject
+      parameters:
+        - name: PRIVATE-TOKEN
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                namespace_id:
+                  type: integer
+                visibility:
+                  type: string
+                initialize_with_readme:
+                  type: boolean
+                default_branch:
+                  type: string
+      responses:
+        "201":
+          description: Project created
+          content:
+            application/json:
+              schema:
+                type: object
+  /projects/{id}/repository/commits:
+    post:
+      operationId: createCommit
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: PRIVATE-TOKEN
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                branch:
+                  type: string
+                commit_message:
+                  type: string
+                actions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      action:
+                        type: string
+                      file_path:
+                        type: string
+                      content:
+                        type: string
+      responses:
+        "201":
+          description: Commit created
+          content:
+            application/json:
+              schema:
+                type: object

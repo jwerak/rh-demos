@@ -10,6 +10,7 @@ data:
     g, group:default/app-owners, role:default/app-owner
     g, group:default/security-admins, role:default/security-admin
     g, group:default/requestors, role:default/requestor
+    g, group:default/developers, role:default/developer
 
     p, role:default/platform-admin, catalog-entity, read, allow
     p, role:default/platform-admin, catalog-entity, update, allow
@@ -27,6 +28,10 @@ data:
     p, role:default/platform-admin, policy-entity, update, allow
     p, role:default/platform-admin, policy-entity, delete, allow
     p, role:default/platform-admin, argocd.view.read, read, allow
+    p, role:default/platform-admin, orchestrator.workflow, read, allow
+    p, role:default/platform-admin, orchestrator.workflow.use, update, allow
+    p, role:default/platform-admin, orchestrator.workflowAdminView, read, allow
+    p, role:default/platform-admin, orchestrator.instanceAdminView, read, allow
 
     p, role:default/app-owner, catalog-entity, read, allow
     p, role:default/app-owner, argocd.view.read, read, allow
@@ -37,11 +42,15 @@ data:
     p, role:default/app-owner, scaffolder-action, use, allow
     p, role:default/app-owner, scaffolder.task.create, create, allow
     p, role:default/app-owner, scaffolder.task.read, read, allow
+    p, role:default/app-owner, orchestrator.workflow, read, allow
+    p, role:default/app-owner, orchestrator.workflow.use, update, allow
 
     p, role:default/security-admin, catalog-entity, read, allow
     p, role:default/security-admin, argocd.view.read, read, allow
     p, role:default/security-admin, scaffolder-template, read, allow
     p, role:default/security-admin, scaffolder.task.read, read, allow
+    p, role:default/security-admin, orchestrator.workflow, read, allow
+    p, role:default/security-admin, orchestrator.instanceAdminView, read, allow
 
     p, role:default/requestor, catalog-entity, read, allow
     p, role:default/requestor, argocd.view.read, read, allow
@@ -51,3 +60,16 @@ data:
     p, role:default/requestor, scaffolder-action, use, allow
     p, role:default/requestor, scaffolder.task.create, create, allow
     p, role:default/requestor, scaffolder.task.read, read, allow
+    p, role:default/requestor, orchestrator.workflow, read, allow
+    p, role:default/requestor, orchestrator.workflow.use, update, allow
+
+    p, role:default/developer, catalog-entity, read, allow
+    p, role:default/developer, argocd.view.read, read, allow
+    p, role:default/developer, catalog.entity.create, create, allow
+    p, role:default/developer, catalog.location.create, create, allow
+    p, role:default/developer, scaffolder-template, read, allow
+    p, role:default/developer, scaffolder-action, use, allow
+    p, role:default/developer, scaffolder.task.create, create, allow
+    p, role:default/developer, scaffolder.task.read, read, allow
+    p, role:default/developer, orchestrator.workflow, read, allow
+    p, role:default/developer, orchestrator.workflow.use, update, allow

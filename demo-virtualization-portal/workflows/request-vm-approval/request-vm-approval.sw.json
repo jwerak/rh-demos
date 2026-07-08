@@ -1,0 +1,262 @@
+{
+  "id": "request-vm-approval",
+  "version": "1.0",
+  "specVersion": "0.8",
+  "name": "Request VM with Approval",
+  "description": "Request VM via GitOps with GitLab-based approval",
+  "dataInputSchema": "schemas/request-vm-approval__main-schema.json",
+  "extensions": [
+    {
+      "extensionid": "workflow-output-schema",
+      "outputSchema": "schemas/workflow-output-schema.json"
+    }
+  ],
+  "functions": [
+    {
+      "name": "createIssue",
+      "operation": "specs/gitlab-openapi.yaml#createIssue",
+      "type": "rest"
+    },
+    {
+      "name": "getIssue",
+      "operation": "specs/gitlab-openapi.yaml#getIssue",
+      "type": "rest"
+    },
+    {
+      "name": "createProject",
+      "operation": "specs/gitlab-openapi.yaml#createProject",
+      "type": "rest"
+    },
+    {
+      "name": "createCommit",
+      "operation": "specs/gitlab-openapi.yaml#createCommit",
+      "type": "rest"
+    },
+    {
+      "name": "print",
+      "type": "custom",
+      "operation": "sysout"
+    },
+    {
+      "name": "buildManifests",
+      "type": "expression",
+      "operation": "{\n            vm_yaml: \"apiVersion: kubevirt.io/v1\\nkind: VirtualMachine\\nmetadata:\\n  name: \" + .vm_name + \"\\n  namespace: \" + .vm_namespace + \"\\nspec:\\n  runStrategy: Always\\n  dataVolumeTemplates:\\n    - apiVersion: cdi.kubevirt.io/v1beta1\\n      kind: DataVolume\\n      metadata:\\n        name: \" + .vm_name + \"\\n      spec:\\n        sourceRef:\\n          kind: DataSource\\n          name: \" + .vm_image + \"\\n          namespace: openshift-virtualization-os-images\\n        storage:\\n          accessModes: [ReadWriteMany]\\n          resources:\\n            requests:\\n              storage: 30Gi\\n  template:\\n    metadata:\\n      labels:\\n        kubevirt.io/domain: \" + .vm_name + \"\\n    spec:\\n      architecture: amd64\\n      domain:\\n        cpu:\\n          cores: 1\\n          sockets: \" + (.vm_cpu_sockets|tostring) + \"\\n          threads: 1\\n          maxSockets: 8\\n        memory:\\n          guest: \" + .vm_memory + \"\\n        devices:\\n          disks:\\n            - disk:\\n                bus: virtio\\n              name: rootdisk\\n            - disk:\\n                bus: virtio\\n              name: cloudinitdisk\\n          interfaces:\\n            - masquerade: {}\\n              name: default\\n      networks:\\n        - name: default\\n          pod: {}\\n      volumes:\\n        - dataVolume:\\n            name: \" + .vm_name + \"\\n          name: rootdisk\\n        - cloudInitNoCloud:\\n            userData: |\\n              #cloud-config\\n              user: cloud-user\\n              password: demo-pass\\n              chpasswd: { expire: False }\\n              packages: [qemu-guest-agent]\\n              runcmd: [systemctl enable --now qemu-guest-agent]\\n          name: cloudinitdisk\",\n            kustomization_yaml: \"apiVersion: kustomize.config.k8s.io/v1beta1\\nkind: Kustomization\\nresources:\\n  - virtualmachine.yaml\\ncommonLabels:\\n  app.kubernetes.io/managed-by: argocd\\n  demo: virt-portal\\n  environment: \" + .vm_namespace + \"\\n  cost-center: CC-001\"\n        }"
+    },
+    {
+      "name": "successResult",
+      "type": "expression",
+      "operation": "{ \"result\": { \"message\": \"VM \" + .vm_name + \" manifests committed to GitLab. ArgoCD will sync and create the VM.\", \"outputs\": [{\"key\": \"GitLab Repo\", \"value\": $SECRET.GITLAB_URL + \"/vm-instances/\" + .vm_name, \"format\": \"link\"}, {\"key\": \"Approval Issue\", \"value\": $SECRET.GITLAB_URL + \"/demo/vm-approvals/-/issues/\" + (.gitlabIssueResult.iid|tostring), \"format\": \"link\"}] } }"
+    },
+    {
+      "name": "deniedResult",
+      "type": "expression",
+      "operation": "{ \"result\": { \"message\": \"Request denied for VM \" + .vm_name + \" in \" + .vm_namespace + \".\" } }"
+    }
+  ],
+  "start": {
+    "stateName": "Create approval issue"
+  },
+  "states": [
+    {
+      "name": "Create approval issue",
+      "type": "operation",
+      "actions": [
+        {
+          "name": "createIssue",
+          "actionDataFilter": {
+            "toStateData": ".gitlabIssueResult"
+          },
+          "functionRef": {
+            "refName": "createIssue",
+            "arguments": {
+              "id": "$SECRET.GITLAB_PROJECT_ID",
+              "PRIVATE-TOKEN": "$SECRET.GITLAB_TOKEN",
+              "title": "\"[VM Request] \" + .vm_name + \" in \" + .vm_namespace",
+              "description": "\"## VM Request\\n| Param | Value |\\n|---|---|\\n| Name | \" + .vm_name + \" |\\n| Namespace | \" + .vm_namespace + \" |\\n| Image | \" + .vm_image + \" |\\n| CPU | \" + (.vm_cpu_sockets|tostring) + \" |\\n| Memory | \" + .vm_memory + \" |\\n\\nClose with **approved** or **denied** label.\"",
+              "labels": "\"vm-request,pending\""
+            }
+          }
+        }
+      ],
+      "transition": {
+        "nextState": "Poll issue"
+      }
+    },
+    {
+      "name": "Poll issue",
+      "type": "operation",
+      "actions": [
+        {
+          "name": "getIssue",
+          "actionDataFilter": {
+            "toStateData": ".gitlabGetIssueResult"
+          },
+          "functionRef": {
+            "refName": "getIssue",
+            "arguments": {
+              "id": "$SECRET.GITLAB_PROJECT_ID",
+              "issue_iid": ".gitlabIssueResult.iid",
+              "PRIVATE-TOKEN": "$SECRET.GITLAB_TOKEN"
+            }
+          },
+          "sleep": {
+            "before": "PT10S"
+          }
+        }
+      ],
+      "transition": {
+        "nextState": "Check approval"
+      }
+    },
+    {
+      "name": "Check approval",
+      "type": "switch",
+      "dataConditions": [
+        {
+          "name": "Approved",
+          "condition": ".gitlabGetIssueResult.state == \"closed\" and ([.gitlabGetIssueResult.labels[] | select(. == \"approved\")] | length > 0)",
+          "transition": {
+            "nextState": "Build manifests"
+          }
+        },
+        {
+          "name": "Denied",
+          "condition": ".gitlabGetIssueResult.state == \"closed\"",
+          "transition": {
+            "nextState": "Denied"
+          }
+        }
+      ],
+      "defaultCondition": {
+        "transition": {
+          "nextState": "Poll issue"
+        }
+      }
+    },
+    {
+      "name": "Build manifests",
+      "type": "operation",
+      "actions": [
+        {
+          "name": "build",
+          "functionRef": {
+            "refName": "buildManifests"
+          }
+        }
+      ],
+      "transition": {
+        "nextState": "Create repo"
+      }
+    },
+    {
+      "name": "Create repo",
+      "type": "operation",
+      "actions": [
+        {
+          "name": "createRepo",
+          "actionDataFilter": {
+            "toStateData": ".gitlabProjectResult"
+          },
+          "functionRef": {
+            "refName": "createProject",
+            "arguments": {
+              "PRIVATE-TOKEN": "$SECRET.GITLAB_TOKEN",
+              "name": ".vm_name",
+              "namespace_id": "$SECRET.VM_INSTANCES_GROUP_ID",
+              "visibility": "public",
+              "initialize_with_readme": false,
+              "default_branch": "main"
+            }
+          }
+        }
+      ],
+      "transition": {
+        "nextState": "Commit manifests"
+      }
+    },
+    {
+      "name": "Commit manifests",
+      "type": "operation",
+      "actions": [
+        {
+          "name": "commitFiles",
+          "actionDataFilter": {
+            "toStateData": ".commitResult"
+          },
+          "functionRef": {
+            "refName": "createCommit",
+            "arguments": {
+              "id": ".gitlabProjectResult.id",
+              "PRIVATE-TOKEN": "$SECRET.GITLAB_TOKEN",
+              "branch": "main",
+              "commit_message": "\"Provision VM \" + .vm_name + \" in \" + .vm_namespace",
+              "actions": [
+                {
+                  "action": "create",
+                  "file_path": "vm-manifests/kustomization.yaml",
+                  "content": ".kustomization_yaml"
+                },
+                {
+                  "action": "create",
+                  "file_path": "vm-manifests/virtualmachine.yaml",
+                  "content": ".vm_yaml"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "transition": {
+        "nextState": "Success"
+      }
+    },
+    {
+      "name": "Success",
+      "type": "operation",
+      "actions": [
+        {
+          "name": "log",
+          "functionRef": {
+            "refName": "print",
+            "arguments": {
+              "message": "\"VM repo created: \" + .vm_name"
+            }
+          }
+        },
+        {
+          "name": "result",
+          "functionRef": {
+            "refName": "successResult"
+          }
+        }
+      ],
+      "end": {
+        "terminate": true
+      }
+    },
+    {
+      "name": "Denied",
+      "type": "operation",
+      "actions": [
+        {
+          "name": "log",
+          "functionRef": {
+            "refName": "print",
+            "arguments": {
+              "message": "\"VM request denied: \" + .vm_name"
+            }
+          }
+        },
+        {
+          "name": "result",
+          "functionRef": {
+            "refName": "deniedResult"
+          }
+        }
+      ],
+      "end": {
+        "terminate": true
+      }
+    }
+  ]
+}

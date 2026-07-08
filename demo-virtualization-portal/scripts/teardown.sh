@@ -27,6 +27,22 @@ echo "--- Deleting RHDH instance ---"
 oc delete backstage rhdh -n rhdh --ignore-not-found 2>/dev/null || true
 echo ""
 
+echo "--- Deleting Orchestrator resources ---"
+oc delete sonataflow --all -n rhdh --ignore-not-found 2>/dev/null || true
+oc delete sonataflowplatform sonataflow-platform -n rhdh --ignore-not-found 2>/dev/null || true
+oc delete secret workflow-credentials sonataflow-db-credentials -n rhdh --ignore-not-found 2>/dev/null || true
+echo ""
+
+echo "--- Deleting Serverless Logic Operator ---"
+oc delete subscription logic-operator-rhel8 -n openshift-serverless-logic --ignore-not-found 2>/dev/null || true
+oc delete csv -n openshift-serverless-logic -l operators.coreos.com/logic-operator-rhel8.openshift-serverless-logic --ignore-not-found 2>/dev/null || true
+echo ""
+
+echo "--- Deleting Serverless Operator ---"
+oc delete subscription serverless-operator -n openshift-serverless --ignore-not-found 2>/dev/null || true
+oc delete csv -n openshift-serverless -l operators.coreos.com/serverless-operator.openshift-serverless --ignore-not-found 2>/dev/null || true
+echo ""
+
 echo "--- Deleting Gatekeeper policies ---"
 for f in vm-naming vm-resource-limits vm-required-labels; do
   oc delete constraint "${f}" --ignore-not-found 2>/dev/null || true
@@ -43,7 +59,7 @@ oc delete csv -n openshift-gatekeeper-system -l operators.coreos.com/gatekeeper-
 echo ""
 
 echo "--- Deleting namespaces ---"
-for ns in vm-dev vm-staging vm-prod rhdh gitlab keycloak rhdh-operator openshift-gatekeeper-system; do
+for ns in vm-dev vm-staging vm-prod rhdh gitlab keycloak rhdh-operator openshift-gatekeeper-system openshift-serverless openshift-serverless-logic; do
   oc delete namespace "${ns}" --ignore-not-found 2>/dev/null || true
   echo "  Deleted namespace: ${ns}"
 done

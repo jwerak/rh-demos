@@ -1,0 +1,48 @@
+{
+  "title": "Request VM with Approval",
+  "description": "Request a Virtual Machine on OpenShift Virtualization with GitLab-based approval workflow",
+  "type": "object",
+  "properties": {
+    "vm_name": {
+      "title": "VM Name",
+      "type": "string",
+      "description": "Name of the virtual machine (RFC 1123 DNS label)",
+      "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
+    },
+    "vm_namespace": {
+      "title": "Namespace",
+      "type": "string",
+      "description": "Target namespace for the VM",
+      "enum": ["vm-dev", "vm-staging", "vm-prod"],
+      "default": "vm-dev"
+    },
+    "vm_image": {
+      "title": "OS Image",
+      "type": "string",
+      "description": "Operating system DataSource name",
+      "enum": ["rhel9", "rhel8", "fedora"],
+      "default": "rhel9"
+    },
+    "vm_cpu_sockets": {
+      "title": "CPU Sockets",
+      "type": "integer",
+      "description": "Number of CPU sockets",
+      "enum": [1, 2, 4, 8],
+      "default": 1
+    },
+    "vm_memory": {
+      "title": "Memory",
+      "type": "string",
+      "description": "Memory allocation (e.g. 2Gi, 4Gi)",
+      "enum": ["2Gi", "4Gi", "8Gi", "16Gi"],
+      "default": "2Gi"
+    },
+    "recipients": {
+      "title": "Requestor",
+      "type": "string",
+      "description": "RHDH entity reference of the requestor (e.g. user:default/frontend-dev)",
+      "default": ""
+    }
+  },
+  "required": ["vm_name", "vm_namespace", "vm_image", "vm_cpu_sockets", "vm_memory", "recipients"]
+}

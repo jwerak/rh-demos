@@ -387,7 +387,7 @@ PTK požadavek: vysvětlit architekturu minimálně v rozsahu:
 | Komponenta | Implementace | Status |
 |---|---|---|
 | Komponenty portálu | RHDH (Backstage) + Keycloak + GitLab + ArgoCD | ✅ |
-| Workflow engine | GitLab MR approval (Phase B), SonataFlow (Phase C) | ⏳ |
+| Workflow engine | GitLab MR approval (Phase B) ✅ + SonataFlow Orchestrator (Phase C) ⏳ | ⏳ |
 | Katalog služeb | RHDH Software Catalog | ✅ |
 | API vrstva | RHDH REST API (Catalog, Scaffolder, Permission) | ✅ |
 | Integrační konektory | GitLab integration, Keycloak provider, ArgoCD plugin | ✅ |
@@ -405,11 +405,61 @@ PTK požadavek: vysvětlit architekturu minimálně v rozsahu:
 | Auditní úložiště | Git history + Gatekeeper audit + OCP audit logs | ⏳ krok 5 |
 | Dostupnost 99%, RTO/RPO 24-48h | OCP HA + OADP backup + GitOps rebuild | slide |
 
-### Krok 14: SonataFlow Orchestrator (Phase C — optional)
+### Krok 14: SonataFlow Orchestrator (Phase C) — IN PROGRESS
 
 Enterprise workflow engine jako enhancement nad MR-based approval.
 
-- [ ] Install Serverless + SonataFlow operators
-- [ ] SonataFlowPlatform + Data Index
-- [ ] Approval workflow (owner → security → provision)
-- [ ] RHDH Orchestrator plugin UI
+- [x] Vytvořit `base/serverless/` manifesty (namespaces, OperatorGroups, Subscriptions pro Serverless + Serverless Logic)
+- [x] Vytvořit `base/orchestrator/` manifesty (SonataFlowPlatform CR, workflow credentials, SonataFlow CR)
+- [x] Orchestrator plugins via `flavours: [{name: orchestrator}]` v Backstage CR (auto-load z registry.access.redhat.com)
+- [x] Notifications plugins enabled v dynamic-plugins-cm.yaml
+- [x] Přidat `orchestrator.sonataFlowService` sekci do app-config-cm.yaml
+- [x] Rozšířit RBAC o orchestrator permissions pro všechny role
+- [x] Přidat `developers` group + `frontend-dev`, `backend-dev` users do Keycloak
+- [x] Přidat developer uživatele do seed-gitlab.sh (Reporter role v vm-instances)
+- [x] Vytvořit `demo/vm-approvals` GitLab projekt s labels (approved, denied, pending)
+- [x] Vytvořit `workflows/request-vm-approval/` — SonataFlow workflow (YAML, schemas, OpenAPI specs)
+- [x] Přidat Phase 8 + 9 do deploy.sh (operators + orchestrator platform)
+- [x] Aktualizovat teardown.sh
+- [ ] Build workflow container image a deploy SonataFlow CR na clusteru
+- [ ] End-to-end test: developer → Orchestrator UI → GitLab issue → approval → VM created
+
+Architektura:
+```
+User → RHDH Orchestrator UI → SonataFlow Workflow Engine
+                                    │
+                    ┌───────────────┼────────────────┐
+                    ▼               ▼                ▼
+            GitLab Issues    KubeVirt API     RHDH Notifications
+          (approval gate)  (VM create/modify)   (user alerts)
+```
+
+Uživatelský model (rozšířený):
+
+| Role | Orchestrator permissions | Keycloak group |
+|---|---|---|
+| platform-admin | workflow read/use + adminView + instanceAdminView | platform-admins |
+| security-admin | workflow read + instanceAdminView (audit) | security-admins |
+| app-owner | workflow read/use | app-owners |
+| developer | workflow read/use | developers |
+| requestor | workflow read/use | requestors |
+
+Nové demo uživatele: `frontend-dev`, `backend-dev` (developers group)
+
+Approval flow: Workflow vytvoří GitLab issue → approver (app-owner/security-admin) zavře issue s labelem "approved"/"denied" → workflow pokračuje
+
+Prerekvizity:
+- OpenShift Serverless Operator (Knative Eventing)
+- OpenShift Serverless Logic Operator (SonataFlow runtime)
+- Dostatek cluster resources (~4Gi RAM pro Serverless stack)
+
+PostgreSQL: reuse RHDH local PostgreSQL, nová DB `backstage_plugin_orchestrator`
+
+Poučení z implementace:
+- Orchestrator plugins NEJSOU pre-loaded v RHDH 1.10.1 base image — vyžadují `flavours: [{name: orchestrator}]` v Backstage CR
+- Flavour automaticky stáhne OCI images z `registry.access.redhat.com/rhdh/` (frontend, backend, form-widgets, scaffolder-module)
+- `./dynamic-plugins/dist/` prefix funguje pouze pro plugins bundled v base image — Orchestrator tam není
+- Serverless Logic Operator channel je `alpha` (ne `stable` jak dokumentace naznačuje)
+- SonataFlowPlatform Data Index + Job Service vyžadují funkční PostgreSQL DB při startu — jinak CrashLoopBackOff
+- RHDH PostgreSQL pod je StatefulSet `backstage-psql-rhdh-0` (ne Deployment)
+- Credentials v `backstage-psql-secret-rhdh` — user `postgres`, auto-generated password
