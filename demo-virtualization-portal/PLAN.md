@@ -308,11 +308,13 @@ Poučení z implementace:
 - Backstage entity links vyžadují absolutní URL — relativní cesty (`/create/...`) failnou na validaci
 
 **TODO — Resize VM neaplikuje změny na běžící VM:**
-- VM spec (desired) se aktualizuje, ale VMI (running instance) zůstává na starých hodnotách
+- VM spec (desired) se aktualizuje, ale VMI (running instance) zůstává na starých hodnotami
 - VM condition `RestartRequired: True` — "a non-live-updatable field was changed in the template spec"
-- VM condition `LiveMigratable: False (DisksNotLiveMigratable)` — PVC používá ReadWriteOnce, live migration vyžaduje ReadWriteMany
-- Řešení: buď přidat restart krok do resize flow (ArgoCD post-sync hook, nebo `virtctl restart` krok v šabloně), nebo změnit PVC na RWX storage class
+- ✅ FIXED: `LiveMigratable: False (DisksNotLiveMigratable)` — všechny skeleton templates opraveny z `ReadWriteOnce` → `ReadWriteMany` (Ceph RBD podporuje RWX v Block mode)
+- Nově vytvořené VM budou live-migratable; existující VM (`dev-web-01`) vyžaduje re-provisioning (smazat a vytvořit znovu přes šablonu)
+- Řešení pro restart: buď přidat restart krok do resize flow (ArgoCD post-sync hook, nebo `virtctl restart` krok v šabloně)
 - Investigace: zjistit zda CPU/RAM hotplug funguje s `spec.domain.cpu.maxSockets` a `maxGuest` memory (KubeVirt live update features)
+- Disk resize nefunguje: když se v Gitu zvětší `diskSizeGi` a ArgoCD syncne nový manifest, PVC velikost se nezvětší — Kubernetes PVC `spec.resources.requests.storage` je immutable po vytvoření, zvětšení vyžaduje volume expansion request přes `status` nebo ruční resize
 
 ### Krok 7: Scénář D — Vyřazení služby (Phase B)
 

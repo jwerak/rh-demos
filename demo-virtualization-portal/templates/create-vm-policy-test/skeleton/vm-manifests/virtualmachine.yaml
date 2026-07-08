@@ -62,7 +62,7 @@ spec:
           namespace: openshift-virtualization-os-images
         storage:
           accessModes:
-            - ReadWriteOnce
+            - ReadWriteMany
           resources:
             requests:
               storage: ${{ values.diskSizeGi }}Gi

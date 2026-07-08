@@ -160,8 +160,7 @@ spec:
       name: Register in Catalog
       action: catalog:register
       input:
-        repoContentsUrl: ${{ steps['publish'].output.repoContentsUrl }}
-        catalogInfoPath: /catalog-info.yaml
+        catalogInfoUrl: http://gitlab.gitlab.svc.cluster.local/vm-instances/${{ parameters.vmName }}/-/blob/main/catalog-info.yaml
 
     - id: fetch-vm
       name: Fetch VM Manifests
