@@ -382,6 +382,9 @@ oc create secret generic workflow-credentials -n rhdh \
   --from-literal=vm_check_running_max_retries="30" \
   --from-literal=QUARKUS_REST_CLIENT_GITLAB_OPENAPI_YAML_URL="http://gitlab.gitlab.svc.cluster.local/api/v4" \
   --from-literal=QUARKUS_TLS_TRUST_ALL="true" \
+  --from-literal=NOTIFICATIONS_URL="http://backstage-rhdh.rhdh.svc.cluster.local" \
+  --from-literal=BACKEND_SECRET="${BACKEND_SECRET}" \
+  --from-literal=BASE_DOMAIN="${BASE_DOMAIN}" \
   --dry-run=client -o yaml | oc apply -f -
 
 echo "Building workflow image on cluster..."

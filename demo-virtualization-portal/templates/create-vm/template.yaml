@@ -203,6 +203,29 @@ spec:
         targetBranchName: main
         removeSourceBranch: true
 
+    - id: notify-approvers
+      name: Notify Approvers
+      action: http:backstage:request
+      input:
+        method: POST
+        path: /api/notifications
+        headers:
+          Content-Type: application/json
+        body:
+          recipients:
+            type: entity
+            entityRef:
+              - group:default/app-owners
+              - group:default/security-admins
+          payload:
+            title: "VM approval needed: ${{ parameters.vmName }}"
+            description: |
+              Request from ${{ parameters.owner }} for VM **${{ parameters.vmName }}** in ${{ parameters.environment }}
+              (${{ parameters.osImage }}, ${{ parameters.cpuCores }} CPU, ${{ parameters.memoryGi }}GiB RAM, ${{ parameters.diskSizeGi }}GiB disk)
+            link: ${{ steps['create-mr'].output.mergeRequestUrl }}
+            severity: normal
+            topic: VM Approval
+
   output:
     links:
       - title: Merge Request (Approval Required)

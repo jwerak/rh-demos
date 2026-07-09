@@ -24,6 +24,12 @@ data:
         disabled: false
       - package: ./dynamic-plugins/dist/backstage-plugin-notifications
         disabled: false
+      - package: ./dynamic-plugins/dist/backstage-plugin-signals
+        disabled: false
+      - package: ./dynamic-plugins/dist/backstage-plugin-signals-backend-dynamic
+        disabled: false
+      - package: ./dynamic-plugins/dist/roadiehq-scaffolder-backend-module-http-request-dynamic
+        disabled: false
         pluginConfig:
           dynamicPlugins:
             frontend:

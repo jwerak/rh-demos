@@ -33,6 +33,11 @@
       "type": "rest"
     },
     {
+      "name": "createNotification",
+      "operation": "specs/notifications-openapi.yaml#createNotification",
+      "type": "rest"
+    },
+    {
       "name": "print",
       "type": "custom",
       "operation": "sysout"
@@ -74,6 +79,34 @@
               "title": "\"[VM Request] \" + .vm_name + \" in \" + .vm_namespace",
               "description": "\"## VM Request\\n| Param | Value |\\n|---|---|\\n| Name | \" + .vm_name + \" |\\n| Namespace | \" + .vm_namespace + \" |\\n| Image | \" + .vm_image + \" |\\n| CPU | \" + (.vm_cpu_sockets|tostring) + \" |\\n| Memory | \" + .vm_memory + \" |\\n\\nClose with **approved** or **denied** label.\"",
               "labels": "\"vm-request,pending\""
+            }
+          }
+        }
+      ],
+      "transition": {
+        "nextState": "Notify approvers"
+      }
+    },
+    {
+      "name": "Notify approvers",
+      "type": "operation",
+      "actions": [
+        {
+          "name": "notify",
+          "functionRef": {
+            "refName": "createNotification",
+            "arguments": {
+              "recipients": {
+                "type": "entity",
+                "entityRef": ["group:default/app-owners", "group:default/security-admins"]
+              },
+              "payload": {
+                "title": "\"VM approval needed: \" + .vm_name",
+                "description": "\"Request from \" + .recipients + \" for VM \" + .vm_name + \" in \" + .vm_namespace + \" (\" + .vm_image + \", \" + (.vm_cpu_sockets|tostring) + \" CPU, \" + .vm_memory + \" RAM)\"",
+                "link": "\"https://gitlab.\" + $SECRET.BASE_DOMAIN + \"/demo/vm-approvals/-/issues/\" + (.gitlabIssueResult.iid|tostring)",
+                "severity": "normal",
+                "topic": "VM Approval"
+              }
             }
           }
         }
