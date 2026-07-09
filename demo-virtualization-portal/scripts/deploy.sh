@@ -388,10 +388,18 @@ oc create secret generic workflow-credentials -n rhdh \
   --dry-run=client -o yaml | oc apply -f -
 
 echo "Building workflow image on cluster..."
+WF_BUILD_DIR=$(mktemp -d)
+cp "${BASE_DIR}/workflows/request-vm-approval/Dockerfile" "${WF_BUILD_DIR}/"
+mkdir -p "${WF_BUILD_DIR}/src/main/resources/schemas" "${WF_BUILD_DIR}/src/main/resources/specs"
+cp "${BASE_DIR}/workflows/request-vm-approval/application.properties" "${WF_BUILD_DIR}/src/main/resources/"
+cp "${BASE_DIR}/workflows/request-vm-approval/"*.json "${WF_BUILD_DIR}/src/main/resources/"
+cp "${BASE_DIR}/workflows/request-vm-approval/schemas/"* "${WF_BUILD_DIR}/src/main/resources/schemas/"
+cp "${BASE_DIR}/workflows/request-vm-approval/specs/"* "${WF_BUILD_DIR}/src/main/resources/specs/"
 oc new-build --binary --strategy=docker --name=wf-request-vm-build -n rhdh \
   --to=wf-request-vm:latest 2>/dev/null || true
 oc start-build wf-request-vm-build -n rhdh \
-  --from-dir="${BASE_DIR}/workflows/request-vm-approval" --wait 2>/dev/null
+  --from-dir="${WF_BUILD_DIR}" --wait 2>/dev/null
+rm -rf "${WF_BUILD_DIR}"
 echo "  Workflow image built and pushed."
 
 echo "Creating workflow ConfigMaps..."
