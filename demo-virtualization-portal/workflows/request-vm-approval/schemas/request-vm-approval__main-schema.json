@@ -1,48 +1,49 @@
 {
   "title": "Request VM with Approval",
-  "description": "Request a Virtual Machine on OpenShift Virtualization with GitLab-based approval workflow",
+  "description": "Track MR-based approval for a VM provisioning request",
   "type": "object",
   "properties": {
     "vm_name": {
       "title": "VM Name",
       "type": "string",
-      "description": "Name of the virtual machine (RFC 1123 DNS label)",
-      "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
+      "description": "Name of the virtual machine"
     },
-    "vm_namespace": {
-      "title": "Namespace",
+    "environment": {
+      "title": "Environment",
       "type": "string",
       "description": "Target namespace for the VM",
-      "enum": ["vm-dev", "vm-staging", "vm-prod"],
-      "default": "vm-dev"
+      "enum": ["vm-dev", "vm-staging", "vm-prod"]
     },
-    "vm_image": {
+    "os_image": {
       "title": "OS Image",
       "type": "string",
-      "description": "Operating system DataSource name",
-      "enum": ["rhel9", "rhel8", "fedora"],
-      "default": "rhel9"
+      "description": "Operating system image"
     },
-    "vm_cpu_sockets": {
-      "title": "CPU Sockets",
+    "cpu_cores": {
+      "title": "CPU Cores",
       "type": "integer",
-      "description": "Number of CPU sockets",
-      "enum": [1, 2, 4, 8],
-      "default": 1
+      "description": "Number of CPU cores"
     },
-    "vm_memory": {
-      "title": "Memory",
-      "type": "string",
-      "description": "Memory allocation (e.g. 2Gi, 4Gi)",
-      "enum": ["2Gi", "4Gi", "8Gi", "16Gi"],
-      "default": "2Gi"
+    "memory_gi": {
+      "title": "Memory (GiB)",
+      "type": "integer",
+      "description": "Memory in GiB"
     },
-    "recipients": {
-      "title": "Requestor",
+    "owner": {
+      "title": "Owner",
       "type": "string",
-      "description": "RHDH entity reference of the requestor (e.g. user:default/frontend-dev)",
-      "default": ""
+      "description": "RHDH entity reference of the requestor"
+    },
+    "project_id": {
+      "title": "GitLab Project ID",
+      "type": "integer",
+      "description": "GitLab project ID for the VM repo"
+    },
+    "merge_request_url": {
+      "title": "Merge Request URL",
+      "type": "string",
+      "description": "GitLab MR URL for approval"
     }
   },
-  "required": ["vm_name", "vm_namespace", "vm_image", "vm_cpu_sockets", "vm_memory", "recipients"]
+  "required": ["vm_name", "environment", "project_id", "merge_request_url"]
 }

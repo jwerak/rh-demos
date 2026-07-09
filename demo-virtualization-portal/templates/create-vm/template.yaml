@@ -203,28 +203,20 @@ spec:
         targetBranchName: main
         removeSourceBranch: true
 
-    - id: notify-approvers
-      name: Notify Approvers
-      action: http:backstage:request
+    - id: run-approval-workflow
+      name: Start Approval Workflow
+      action: orchestrator:workflow:run
       input:
-        method: POST
-        path: /api/notifications
-        headers:
-          Content-Type: application/json
-        body:
-          recipients:
-            type: entity
-            entityRef:
-              - group:default/app-owners
-              - group:default/security-admins
-          payload:
-            title: "VM approval needed: ${{ parameters.vmName }}"
-            description: |
-              Request from ${{ parameters.owner }} for VM **${{ parameters.vmName }}** in ${{ parameters.environment }}
-              (${{ parameters.osImage }}, ${{ parameters.cpuCores }} CPU, ${{ parameters.memoryGi }}GiB RAM, ${{ parameters.diskSizeGi }}GiB disk)
-            link: ${{ steps['create-mr'].output.mergeRequestUrl }}
-            severity: normal
-            topic: VM Approval
+        workflow_id: request-vm-approval
+        parameters:
+          vm_name: ${{ parameters.vmName }}
+          environment: ${{ parameters.environment }}
+          os_image: ${{ parameters.osImage }}
+          cpu_cores: ${{ parameters.cpuCores }}
+          memory_gi: ${{ parameters.memoryGi }}
+          owner: ${{ parameters.owner }}
+          project_id: ${{ steps['publish'].output.projectId }}
+          merge_request_url: ${{ steps['create-mr'].output.mergeRequestUrl }}
 
   output:
     links:

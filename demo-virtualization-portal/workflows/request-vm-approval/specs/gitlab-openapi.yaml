@@ -64,6 +64,32 @@ paths:
             application/json:
               schema:
                 type: object
+  /projects/{id}/merge_requests/{merge_request_iid}:
+    get:
+      operationId: getMergeRequest
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: merge_request_iid
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: PRIVATE-TOKEN
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Merge request details
+          content:
+            application/json:
+              schema:
+                type: object
   /projects:
     post:
       operationId: createProject
