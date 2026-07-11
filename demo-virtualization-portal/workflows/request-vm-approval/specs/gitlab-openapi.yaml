@@ -72,7 +72,7 @@ paths:
           in: path
           required: true
           schema:
-            type: integer
+            type: string
         - name: merge_request_iid
           in: path
           required: true

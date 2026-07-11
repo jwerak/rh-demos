@@ -45,5 +45,5 @@
       "description": "GitLab MR URL for approval"
     }
   },
-  "required": ["vm_name", "environment", "project_id", "merge_request_url"]
+  "required": ["vm_name", "environment", "merge_request_url"]
 }

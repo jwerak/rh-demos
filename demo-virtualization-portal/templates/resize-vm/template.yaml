@@ -179,6 +179,20 @@ spec:
         targetBranchName: main
         removeSourceBranch: true
 
+    - id: run-approval-workflow
+      name: Start Approval Workflow
+      action: orchestrator:workflow:run
+      input:
+        workflow_id: request-vm-approval
+        parameters:
+          vm_name: ${{ parameters.vmName }}
+          environment: ${{ parameters.environment }}
+          os_image: ${{ parameters.osImage }}
+          cpu_cores: ${{ parameters.cpuCores }}
+          memory_gi: ${{ parameters.memoryGi }}
+          owner: ${{ parameters.owner }}
+          merge_request_url: ${{ steps['create-mr'].output.mergeRequestUrl }}
+
   output:
     links:
       - title: Merge Request (Approval Required)

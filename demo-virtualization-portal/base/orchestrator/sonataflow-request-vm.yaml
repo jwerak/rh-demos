@@ -33,10 +33,10 @@ spec:
         operation: sysout
       - name: extractMrIid
         type: expression
-        operation: '{ mr_iid: (.merge_request_url | split("/") | .[-1] | tonumber) }'
+        operation: '{ mr_iid: (.merge_request_url | split("/") | .[-1] | tonumber), project_path: (.merge_request_url | split("/-/") | .[0] | split("//") | .[1] | split("/") | .[1:] | join("%2F")) }'
       - name: successResult
         type: expression
-        operation: '{ "result": { "message": "VM " + .vm_name + " approved — MR merged. ArgoCD will sync and create the VM.", "outputs": [{"key": "Merge Request", "value": .merge_request_url, "format": "link"}] } }'
+        operation: '{ "result": { "message": "VM " + .vm_name + " approved — MR merged. ArgoCD will sync the changes.", "outputs": [{"key": "Merge Request", "value": .merge_request_url, "format": "link"}] } }'
       - name: deniedResult
         type: expression
         operation: '{ "result": { "message": "Request denied for VM " + .vm_name + " in " + .environment + ". MR was closed without merging." } }'
@@ -78,7 +78,7 @@ spec:
             functionRef:
               refName: getMergeRequest
               arguments:
-                id: .project_id
+                id: .project_path
                 merge_request_iid: .mr_iid
                 PRIVATE-TOKEN: $SECRET.GITLAB_TOKEN
             sleep:

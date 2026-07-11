@@ -3,7 +3,7 @@
   "version": "1.0",
   "specVersion": "0.8",
   "name": "Request VM with Approval",
-  "description": "Track MR-based approval for VM provisioning — notify approvers and poll until merged or closed",
+  "description": "Track MR-based approval for VM changes — notify approvers and poll until merged or closed",
   "dataInputSchema": "schemas/request-vm-approval__main-schema.json",
   "extensions": [
     {
@@ -30,12 +30,12 @@
     {
       "name": "extractMrIid",
       "type": "expression",
-      "operation": "{ mr_iid: (.merge_request_url | split(\"/\") | .[-1] | tonumber) }"
+      "operation": "{ mr_iid: (.merge_request_url | split(\"/\") | .[-1] | tonumber), project_path: (.merge_request_url | split(\"/-/\") | .[0] | split(\"//\") | .[1] | split(\"/\") | .[1:] | join(\"%2F\")) }"
     },
     {
       "name": "successResult",
       "type": "expression",
-      "operation": "{ \"result\": { \"message\": \"VM \" + .vm_name + \" approved — MR merged. ArgoCD will sync and create the VM.\", \"outputs\": [{\"key\": \"Merge Request\", \"value\": .merge_request_url, \"format\": \"link\"}] } }"
+      "operation": "{ \"result\": { \"message\": \"VM \" + .vm_name + \" approved — MR merged. ArgoCD will sync the changes.\", \"outputs\": [{\"key\": \"Merge Request\", \"value\": .merge_request_url, \"format\": \"link\"}] } }"
     },
     {
       "name": "deniedResult",
@@ -102,7 +102,7 @@
           "functionRef": {
             "refName": "getMergeRequest",
             "arguments": {
-              "id": ".project_id",
+              "id": ".project_path",
               "merge_request_iid": ".mr_iid",
               "PRIVATE-TOKEN": "$SECRET.GITLAB_TOKEN"
             }
