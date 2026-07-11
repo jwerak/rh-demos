@@ -34,6 +34,9 @@ spec:
             - name: rootdisk
               disk:
                 bus: virtio
+            - name: datadisk
+              disk:
+                bus: virtio
             - name: cloudinitdisk
               disk:
                 bus: virtio
@@ -47,6 +50,9 @@ spec:
         - name: rootdisk
           dataVolume:
             name: ${{ values.vmName }}-rootdisk
+        - name: datadisk
+          persistentVolumeClaim:
+            claimName: ${{ values.vmName }}-data
         - name: cloudinitdisk
           cloudInitNoCloud:
             secretRef:

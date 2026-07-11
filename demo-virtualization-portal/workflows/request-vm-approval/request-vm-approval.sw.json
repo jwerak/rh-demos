@@ -1,6 +1,6 @@
 {
   "id": "request-vm-approval",
-  "version": "2.0",
+  "version": "1.0",
   "specVersion": "0.8",
   "name": "Request VM with Approval",
   "description": "Track MR-based approval for VM provisioning — notify approvers and poll until merged or closed",

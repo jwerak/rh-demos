@@ -295,8 +295,8 @@ echo ""
 echo "--- Phase 9: Deploying Orchestrator Platform ---"
 
 echo "Extracting RHDH PostgreSQL credentials..."
-PG_USER=$(oc get secret backstage-psql-secret-rhdh -n rhdh -o jsonpath='{.data.POSTGRES_USER}' 2>/dev/null | base64 -d)
-PG_PASS=$(oc get secret backstage-psql-secret-rhdh -n rhdh -o jsonpath='{.data.POSTGRES_PASSWORD}' 2>/dev/null | base64 -d)
+PG_USER=$(oc get secret backstage-psql-secret-rhdh -n rhdh -o jsonpath='{.data.POSTGRES_USER}' 2>/dev/null | base64 -d || true)
+PG_PASS=$(oc get secret backstage-psql-secret-rhdh -n rhdh -o jsonpath='{.data.POSTGRES_PASSWORD}' 2>/dev/null | base64 -d || true)
 
 if [ -z "$PG_USER" ] || [ -z "$PG_PASS" ]; then
   echo "WARNING: Could not extract RHDH PostgreSQL credentials. Orchestrator persistence may fail."

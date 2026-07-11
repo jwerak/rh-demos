@@ -4,6 +4,7 @@ kind: Kustomization
 
 resources:
   - cloudinit-secret.yaml
+  - data-pvc.yaml
   - virtualmachine.yaml
   - service.yaml
   - servicemonitor.yaml

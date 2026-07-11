@@ -8,6 +8,7 @@ metadata:
     backstage.io/managed-by-location: url:https://gitlab.__BASE_DOMAIN__/vm-instances/${{ values.vmName }}/-/raw/main/catalog-info.yaml
     backstage.io/managed-by-origin-location: url:https://gitlab.__BASE_DOMAIN__/vm-instances/${{ values.vmName }}/-/raw/main/catalog-info.yaml
     argocd/app-name: vm-${{ values.vmName }}
+    orchestrator.io/workflows: '[]'
     virt-portal/cost-center: ${{ values.costCenter }}
     virt-portal/environment: ${{ values.environment }}
     virt-portal/os-image: ${{ values.osImage }}
@@ -19,6 +20,9 @@ metadata:
     - ${{ values.osImage }}
     - ${{ values.environment }}
   links:
+    - title: Approval MR
+      url: https://gitlab.__BASE_DOMAIN__/vm-instances/${{ values.vmName }}/-/merge_requests/1
+      icon: dashboard
     - title: OpenShift Console
       url: https://console-openshift-console.__BASE_DOMAIN__/k8s/ns/${{ values.environment }}/kubevirt.io~v1~VirtualMachine/${{ values.vmName }}
     - title: Resize VM

@@ -94,9 +94,9 @@ spec:
             - "8 GiB"
             - "16 GiB"
         diskSizeGi:
-          title: Disk Size (GiB)
+          title: Data Disk Size (GiB)
           type: integer
-          description: New root disk size in GiB (can only grow, not shrink)
+          description: New data disk size in GiB (can only grow, not shrink)
           default: 30
           enum:
             - 20
@@ -172,7 +172,7 @@ spec:
           | **VM Name** | ${{ parameters.vmName }} |
           | **CPU Cores** | ${{ parameters.cpuCores }} |
           | **Memory** | ${{ parameters.memoryGi }} GiB |
-          | **Disk** | ${{ parameters.diskSizeGi }} GiB |
+          | **Data Disk** | ${{ parameters.diskSizeGi }} GiB |
 
           Requested via RHDH Self-Service Portal.
           Merge this MR to apply the resize via ArgoCD GitOps.

@@ -12,6 +12,119 @@ metadata:
     app: request-vm-approval
     sonataflow.org/workflow-app: request-vm-approval
 spec:
+  flow:
+    start:
+      stateName: Extract MR IID
+    dataInputSchema:
+      failOnValidationErrors: false
+      schema: schemas/request-vm-approval__main-schema.json
+    extensions:
+      - extensionid: workflow-output-schema
+        outputSchema: schemas/workflow-output-schema.json
+    functions:
+      - name: getMergeRequest
+        operation: specs/gitlab-openapi.yaml#getMergeRequest
+        type: rest
+      - name: createNotification
+        operation: specs/notifications-openapi.yaml#createNotification
+        type: rest
+      - name: print
+        type: custom
+        operation: sysout
+      - name: extractMrIid
+        type: expression
+        operation: '{ mr_iid: (.merge_request_url | split("/") | .[-1] | tonumber) }'
+      - name: successResult
+        type: expression
+        operation: '{ "result": { "message": "VM " + .vm_name + " approved — MR merged. ArgoCD will sync and create the VM.", "outputs": [{"key": "Merge Request", "value": .merge_request_url, "format": "link"}] } }'
+      - name: deniedResult
+        type: expression
+        operation: '{ "result": { "message": "Request denied for VM " + .vm_name + " in " + .environment + ". MR was closed without merging." } }'
+    states:
+      - name: Extract MR IID
+        type: operation
+        actions:
+          - name: extract
+            functionRef:
+              refName: extractMrIid
+        transition:
+          nextState: Notify approvers
+      - name: Notify approvers
+        type: operation
+        actions:
+          - name: notify
+            functionRef:
+              refName: createNotification
+              arguments:
+                recipients:
+                  type: entity
+                  entityRef:
+                    - group:default/app-owners
+                    - group:default/security-admins
+                payload:
+                  title: '"VM approval needed: " + .vm_name'
+                  description: '"Request from " + .owner + " for VM " + .vm_name + " in " + .environment + " (" + .os_image + ", " + (.cpu_cores|tostring) + " CPU, " + (.memory_gi|tostring) + "GiB RAM). Review the MR and merge to approve."'
+                  link: .merge_request_url
+                  severity: normal
+                  topic: VM Approval
+        transition:
+          nextState: Poll MR
+      - name: Poll MR
+        type: operation
+        actions:
+          - name: getMR
+            actionDataFilter:
+              toStateData: .mrStatus
+            functionRef:
+              refName: getMergeRequest
+              arguments:
+                id: .project_id
+                merge_request_iid: .mr_iid
+                PRIVATE-TOKEN: $SECRET.GITLAB_TOKEN
+            sleep:
+              before: PT10S
+        transition:
+          nextState: Check MR status
+      - name: Check MR status
+        type: switch
+        dataConditions:
+          - name: Merged
+            condition: '.mrStatus.state == "merged"'
+            transition:
+              nextState: Success
+          - name: Closed
+            condition: '.mrStatus.state == "closed"'
+            transition:
+              nextState: Denied
+        defaultCondition:
+          transition:
+            nextState: Poll MR
+      - name: Success
+        type: operation
+        actions:
+          - name: log
+            functionRef:
+              refName: print
+              arguments:
+                message: '"VM MR merged: " + .vm_name'
+          - name: result
+            functionRef:
+              refName: successResult
+        end:
+          terminate: true
+      - name: Denied
+        type: operation
+        actions:
+          - name: log
+            functionRef:
+              refName: print
+              arguments:
+                message: '"VM MR closed (denied): " + .vm_name'
+          - name: result
+            functionRef:
+              refName: deniedResult
+        end:
+          terminate: true
   podTemplate:
     container:
       image: image-registry.openshift-image-registry.svc:5000/rhdh/wf-request-vm:latest
