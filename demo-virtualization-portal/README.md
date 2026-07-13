@@ -219,9 +219,9 @@ Shows the full VM lifecycle completion — retiring a VM through approval and Gi
      ```bash
      source .env
      curl -ks -X DELETE -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-       "https://gitlab.${BASE_DOMAIN}/api/v4/projects/vm-instances%2F<vm-name>?permanently_remove=true&full_path=vm-instances/<vm-name>"
+       "https://gitlab.${BASE_DOMAIN}/api/v4/projects/vm-instances%2F<vm-name>"
      ```
-   > **Note**: GitLab CE defers deletion by default (up to 7 days). The CLI command uses `permanently_remove=true` for immediate deletion. The GUI does not have this option — set `deletion_adjourned_period` to `0` in GitLab admin settings (**Admin Area** → **Settings** → **General** → **Visibility and access controls**) for immediate deletion via GUI.
+   Deletion is immediate — `seed-gitlab.sh` sets `deletion_adjourned_period` to 0 via rails runner (the API enforces min 1, but rails bypasses this).
 
 ### What to highlight
 
@@ -386,7 +386,7 @@ EOF
 # Delete a VM repo from GitLab (immediately, triggers ArgoCD Application removal)
 source .env
 curl -ks -X DELETE -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://gitlab.${BASE_DOMAIN}/api/v4/projects/vm-instances%2F<vm-name>?permanently_remove=true&full_path=vm-instances/<vm-name>"
+  "https://gitlab.${BASE_DOMAIN}/api/v4/projects/vm-instances%2F<vm-name>"
 
 # Or delete the ArgoCD application directly
 oc delete application vm-<name> -n openshift-gitops
