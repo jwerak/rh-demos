@@ -73,6 +73,10 @@ echo "Configuring ArgoCD RBAC (readonly for all authenticated users)..."
 oc patch argocd openshift-gitops -n openshift-gitops --type merge \
   -p '{"spec":{"rbac":{"defaultPolicy":"role:readonly","policy":"g, system:cluster-admins, role:admin\ng, cluster-admins, role:admin\n","scopes":"[groups]"}}}' 2>/dev/null || true
 
+echo "Setting Application sync interval to 30s..."
+oc patch argocd openshift-gitops -n openshift-gitops --type merge \
+  -p '{"spec":{"controller":{"appSync":"30s"}}}' 2>/dev/null || true
+
 echo "Enabling ApplicationSet controller..."
 oc patch argocd openshift-gitops -n openshift-gitops --type merge \
   -p '{"spec":{"applicationSet":{"resources":{"limits":{"cpu":"1","memory":"1Gi"},"requests":{"cpu":"250m","memory":"256Mi"}}}}}' 2>/dev/null || true
