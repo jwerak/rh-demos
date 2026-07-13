@@ -1,0 +1,25 @@
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${{ values.vmName }}
+  description: "[DECOMMISSIONED] VM ${{ values.vmName }}"
+  annotations:
+    backstage.io/managed-by-location: url:https://gitlab.__BASE_DOMAIN__/vm-instances/${{ values.vmName }}/-/raw/main/catalog-info.yaml
+    backstage.io/managed-by-origin-location: url:https://gitlab.__BASE_DOMAIN__/vm-instances/${{ values.vmName }}/-/raw/main/catalog-info.yaml
+    argocd/app-name: vm-${{ values.vmName }}
+    virt-portal/environment: ${{ values.environment }}
+    virt-portal/decommission-reason: ${{ values.reason }}
+    virt-portal/decommissioned-by: ${{ values.owner }}
+  tags:
+    - vm
+    - decommissioned
+    - ${{ values.environment }}
+  links:
+    - title: OpenShift Console
+      url: https://console-openshift-console.__BASE_DOMAIN__/k8s/ns/${{ values.environment }}/kubevirt.io~v1~VirtualMachine/${{ values.vmName }}
+spec:
+  type: vm
+  lifecycle: decommissioned
+  owner: ${{ values.owner }}
+  system: virt-portal

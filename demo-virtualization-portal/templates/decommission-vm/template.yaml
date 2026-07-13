@@ -1,0 +1,125 @@
+---
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: decommission-vm
+  title: Decommission Virtual Machine
+  description: Retire an existing VM via merge request — removes all K8s resources through ArgoCD prune
+  tags:
+    - vm
+    - openshift-virtualization
+    - decommission
+spec:
+  owner: platform-team
+  type: vm
+
+  parameters:
+    - title: Decommission Details
+      description: Identify the VM to decommission. Confirm that a backup snapshot exists before proceeding.
+      required:
+        - vmName
+        - environment
+        - reason
+        - confirmBackup
+      properties:
+        vmName:
+          title: VM Name
+          type: string
+          description: Name of the virtual machine to decommission
+          pattern: "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
+          ui:autofocus: true
+        environment:
+          title: Environment
+          type: string
+          description: Deployment environment of the VM
+          default: vm-dev
+          enum:
+            - vm-dev
+            - vm-staging
+            - vm-prod
+          enumNames:
+            - "Development"
+            - "Staging"
+            - "Production"
+          ui:disabled: true
+        reason:
+          title: Reason for Decommission
+          type: string
+          description: Explain why this VM is being retired (visible in MR and audit trail)
+          ui:widget: textarea
+        confirmBackup:
+          title: Confirm Backup Exists
+          type: boolean
+          description: I confirm that a VirtualMachineSnapshot backup exists for this VM
+          ui:widget: checkbox
+
+    - title: Owner Information
+      description: Confirm the current owner of the VM.
+      required:
+        - owner
+      properties:
+        owner:
+          title: Owner
+          type: string
+          description: Team or user responsible for this VM
+          ui:field: OwnerPicker
+          ui:options:
+            allowedKinds:
+              - Group
+              - User
+
+  steps:
+    - id: fetch
+      name: Prepare Decommission Manifests
+      action: fetch:template
+      input:
+        url: ./skeleton
+        values:
+          vmName: ${{ parameters.vmName }}
+          environment: ${{ parameters.environment }}
+          reason: ${{ parameters.reason }}
+          owner: ${{ parameters.owner }}
+
+    - id: create-mr
+      name: Create Decommission Merge Request
+      action: publish:gitlab:merge-request
+      input:
+        repoUrl: gitlab.gitlab.svc.cluster.local?owner=vm-instances&repo=${{ parameters.vmName }}
+        branchName: decommission/${{ parameters.vmName }}
+        commitAction: update
+        title: "Decommission VM: ${{ parameters.vmName }}"
+        description: |
+          ## VM Decommission Request
+
+          | Parameter | Value |
+          |-----------|-------|
+          | **VM Name** | ${{ parameters.vmName }} |
+          | **Environment** | ${{ parameters.environment }} |
+          | **Reason** | ${{ parameters.reason }} |
+          | **Requested by** | ${{ parameters.owner }} |
+
+          ### What happens after merge
+
+          1. ArgoCD syncs the empty kustomization — all K8s resources are pruned (VM, Service, PVC, Secret, ServiceMonitor, VirtualMachineSnapshot)
+          2. RHDH catalog entity is updated to `lifecycle: decommissioned`
+          3. This GitLab repo can be archived manually after decommission is complete
+
+          Requested via RHDH Self-Service Portal.
+        targetBranchName: main
+        removeSourceBranch: true
+
+    - id: run-approval-workflow
+      name: Start Approval Workflow
+      action: orchestrator:workflow:run
+      input:
+        workflow_id: request-vm-approval
+        parameters:
+          vm_name: ${{ parameters.vmName }}
+          environment: ${{ parameters.environment }}
+          owner: ${{ parameters.owner }}
+          merge_request_url: ${{ steps['create-mr'].output.mergeRequestUrl }}
+
+  output:
+    links:
+      - title: Merge Request (Approval Required)
+        url: ${{ steps['create-mr'].output.mergeRequestUrl }}

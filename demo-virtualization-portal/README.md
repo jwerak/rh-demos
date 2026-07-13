@@ -142,10 +142,12 @@ echo "ArgoCD:   https://$(oc get route openshift-gitops-server -n openshift-gito
 
 The portal has two VM creation templates, each demonstrating a different governance model:
 
-| Template                    | Enforcement                       | How it works                                                                                |
-| --------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------- |
-| **Create Virtual Machine**  | MR-based approval (humans review) | Creates GitLab MR → app-owner + security-admin approve → merge → ArgoCD syncs → VM created  |
-| **Create VM (Policy Test)** | Gatekeeper OPA (automated policy) | Publishes directly to main → ArgoCD syncs immediately → Gatekeeper webhook allows or denies |
+| Template                       | Enforcement                       | How it works                                                                                |
+| ------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------- |
+| **Create Virtual Machine**     | MR-based approval (humans review) | Creates GitLab MR → app-owner + security-admin approve → merge → ArgoCD syncs → VM created  |
+| **Resize Virtual Machine**     | MR-based approval (humans review) | Creates MR with updated CPU/RAM/disk → approve → merge → ArgoCD syncs → VM live-resized     |
+| **Decommission Virtual Machine** | MR-based approval (humans review) | Creates MR that empties kustomization → approve → merge → ArgoCD prunes all K8s resources   |
+| **Create VM (Policy Test)**    | Gatekeeper OPA (automated policy) | Publishes directly to main → ArgoCD syncs immediately → Gatekeeper webhook allows or denies |
 
 ---
 
@@ -179,7 +181,55 @@ Shows the human approval workflow — two approvers must review and merge before
 
 ---
 
-## Demo Scenario B: Gatekeeper Policy Enforcement (Create VM — Policy Test)
+## Demo Scenario B: Resize VM (Resize Virtual Machine)
+
+Shows live VM resizing through the same MR-based approval workflow.
+
+### Steps
+
+1. **Navigate to a VM** in the RHDH catalog → click **Decommission VM** or **Resize VM** link on the entity page
+2. Or go to **Create** → select **Resize Virtual Machine**
+3. Fill in the VM name, then set new CPU/RAM/disk values
+4. Click **Create** — RHDH creates a MR that updates the VM manifests
+5. **Show the MR diff** — old vs new resource values are clearly visible
+6. **Approve and merge** as `app-owner` / `security-admin`
+7. ArgoCD syncs the updated manifests → KubeVirt live-migrates the VM with new resources (no restart needed if hotplug prerequisites are met)
+
+---
+
+## Demo Scenario C: Decommission VM (Decommission Virtual Machine)
+
+Shows the full VM lifecycle completion — retiring a VM through approval and GitOps pruning.
+
+### Steps
+
+1. **Navigate to a VM** in the RHDH catalog → click the **Decommission VM** link on the entity page
+2. Or go to **Create** → select **Decommission Virtual Machine**
+3. Fill in the VM name, provide a reason, and confirm the backup checkbox
+4. Click **Create** — RHDH creates a MR that:
+   - Empties `vm-manifests/kustomization.yaml` (removes all resource references)
+   - Updates `catalog-info.yaml` to `lifecycle: decommissioned` with decommission metadata
+5. **Show the MR diff** — resources removed from kustomization, lifecycle changed
+6. **Approve and merge** as `app-owner` / `security-admin`
+7. ArgoCD syncs the empty kustomization → `prune: true` deletes all K8s resources (VM, Service, PVC, Secret, ServiceMonitor, VirtualMachineSnapshot)
+8. **RHDH catalog** shows the entity as decommissioned (historical record)
+9. **Delete the GitLab repo** to remove the ArgoCD Application:
+   ```bash
+   source .env
+   curl -ks -X DELETE -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+     "https://gitlab.${BASE_DOMAIN}/api/v4/projects/vm-instances%2F<vm-name>?permanently_remove=true&full_path=vm-instances/<vm-name>"
+   ```
+
+### What to highlight
+
+- Complete VM lifecycle: create → resize → decommission — all through Git
+- Decommission requires approval — same two-person rule as creation
+- Audit trail preserved: Git history shows who decommissioned, when, and why
+- RHDH catalog entity remains as historical record with `lifecycle: decommissioned`
+
+---
+
+## Demo Scenario D: Gatekeeper Policy Enforcement (Create VM — Policy Test)
 
 Shows automated policy-as-code — Gatekeeper OPA blocks non-compliant VMs at the Kubernetes API level. No human approval needed; the policies enforce compliance automatically.
 
@@ -330,10 +380,10 @@ EOF
 ## Cleanup
 
 ```bash
-# Delete a test VM repo from GitLab (triggers ArgoCD prune)
+# Delete a VM repo from GitLab (immediately, triggers ArgoCD Application removal)
 source .env
 curl -ks -X DELETE -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://gitlab.${BASE_DOMAIN}/api/v4/projects/vm-instances%2F<vm-name>"
+  "https://gitlab.${BASE_DOMAIN}/api/v4/projects/vm-instances%2F<vm-name>?permanently_remove=true&full_path=vm-instances/<vm-name>"
 
 # Or delete the ArgoCD application directly
 oc delete application vm-<name> -n openshift-gitops

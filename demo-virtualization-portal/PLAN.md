@@ -320,16 +320,33 @@ Poučení z implementace:
 - Prerekvizity na clusteru: `vmRolloutStrategy: LiveUpdate` a `workloadUpdateMethods: [LiveMigrate]` v KubeVirt/HyperConverged CR (GA od OCP Virt 4.17, mělo by být defaultně zapnuto)
 - Disk resize nefunguje: když se v Gitu zvětší `diskSizeGi` a ArgoCD syncne nový manifest, PVC velikost se nezvětší — Kubernetes PVC `spec.resources.requests.storage` je immutable po vytvoření, zvětšení vyžaduje volume expansion request přes `status` nebo ruční resize
 
-### Krok 7: Scénář D — Vyřazení služby (Phase B)
+### Krok 7: Scénář D — Vyřazení služby (Phase B) ✅ HOTOVO (2026-07-13)
 
-"Decommission VM" template: smaže manifesty → approval → ArgoCD prune → cleanup.
+"Decommission VM" template: MR vyprázdní kustomization → approval → ArgoCD prune → lifecycle: decommissioned.
 
-- [ ] Nová šablona `templates/decommission-vm/template.yaml`
-  - [ ] Parametry: vmName (picker), reason, confirmBackup (checkbox)
-  - [ ] Verify backup exists (VirtualMachineSnapshot check)
-- [ ] MR smaže manifesty z repo → approval → merge → ArgoCD prune
-- [ ] GitLab repo archivace (read-only)
-- [ ] RHDH catalog entity removal
+- [x] Nová šablona `templates/decommission-vm/template.yaml`
+  - [x] Parametry: vmName, environment (disabled), reason (textarea), confirmBackup (checkbox), owner (OwnerPicker)
+  - [x] 3 kroky: fetch:template + publish:gitlab:merge-request + orchestrator:workflow:run
+- [x] MR aktualizuje 2 soubory:
+  - [x] `vm-manifests/kustomization.yaml` → empty (no resources) → ArgoCD prune=true smaže všechny K8s zdroje
+  - [x] `catalog-info.yaml` → lifecycle: decommissioned + decommission anotace (reason, decommissioned-by)
+- [x] Entity page link: "Decommission VM" odkaz na stránce VM entity (create-vm + resize-vm skeleton)
+- [x] Registrace šablony v `templates/catalog-info.yaml`
+- [x] GitLab repo smazání — po merge MR smazat repo přes GitLab API (`permanently_remove=true`)
+
+Poučení z implementace:
+- `commitAction: update` v `publish:gitlab:merge-request` aktualizuje pouze soubory ve workspace, ostatní zůstávají v repo jako historický záznam
+- Prázdná `kustomization.yaml` (bez `resources:`) → `kustomize build` produkuje zero output → ArgoCD s `prune: true` smaže všechny dříve sledované K8s zdroje
+- Catalog entity se NEODSTRAŇUJE — aktualizuje se na `lifecycle: decommissioned` jako auditní záznam
+- Gatekeeper policies neblokují DELETE — pouze CREATE/UPDATE, žádné změny politik nepotřebné
+- RBAC nevyžaduje `catalog-entity, delete` — entity se pouze aktualizuje, ne maže
+- Entity page link pre-filluje `vmName` a `environment` přes `formData` query parametr (stejný pattern jako Resize VM link)
+- Prázdná `kustomization.yaml` (bez `resources:` pole) selže na `kustomize build` — nutné `resources: []` explicitně
+- `repositoryExclude` a `includeArchived` v SCM Provider NEJSOU podporované v OpenShift GitOps 1.x — nelze filtrovat archivované repos
+- GitLab CE odloží smazání projektu (pending deletion) — nutný `permanently_remove=true` parametr pro okamžité smazání
+- GitLab při pending deletion přejmenuje repo (přidá `-deletion_scheduled-<id>`) — podtržítka nejsou validní v K8s jménech, ApplicationSet controller se zasekne v error loop
+- Po smazání repo nutný restart ApplicationSet controlleru pokud se zasekl v error loop
+- `allowEmpty: true` v syncPolicy nutný aby ArgoCD auto-prunul i když výsledek je 0 resources
 
 ### Krok 8: Blueprinty / šablony služeb (Phase B)
 

@@ -24,7 +24,6 @@ spec:
         cloneProtocol: https
         filters:
           - branchMatch: ^main$
-            repositoryExclude: .*_deletion_scheduled.*
         requeueAfterSeconds: 30
   template:
     metadata:
@@ -41,3 +40,4 @@ spec:
         automated:
           prune: true
           selfHeal: true
+          allowEmpty: true

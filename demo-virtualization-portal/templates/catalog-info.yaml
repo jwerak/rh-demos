@@ -9,3 +9,4 @@ spec:
     - ./create-vm/template.yaml
     - ./create-vm-policy-test/template.yaml
     - ./resize-vm/template.yaml
+    - ./decommission-vm/template.yaml

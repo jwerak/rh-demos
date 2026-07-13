@@ -38,7 +38,7 @@ ArgoCD syncs VirtualMachine CR → OCP Virt creates VM
 - `base/keycloak/` — Keycloak deployment, realm config (users, groups, OIDC)
 - `base/serverless/` — Serverless + Serverless Logic Operator Subscriptions
 - `base/orchestrator/` — SonataFlowPlatform CR, workflow SonataFlow CRs
-- `templates/` — RHDH Software Templates (Create VM, Resize VM, Policy Test)
+- `templates/` — RHDH Software Templates (Create VM, Resize VM, Decommission VM, Policy Test)
 - `workflows/` — SonataFlow workflow definitions (request-vm-approval)
 - `scripts/` — deploy.sh, seed-gitlab.sh, create-demo-users.sh, teardown.sh
 
