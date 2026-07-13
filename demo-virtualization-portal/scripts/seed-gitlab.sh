@@ -61,6 +61,13 @@ oc exec -n gitlab "${GITLAB_POD}" -- gitlab-rails runner "
 " 2>/dev/null || echo "  Token may already exist."
 echo ""
 
+# Configure GitLab admin settings
+echo "--- Configuring GitLab admin settings ---"
+api PUT "/application/settings" \
+  -d '{"deletion_adjourned_period": 1}' >/dev/null 2>&1 || true
+echo "  Project deletion delay: 1 day (minimum for CE)"
+echo ""
+
 # Create groups
 echo "--- Creating groups ---"
 for group in demo vm-instances; do
