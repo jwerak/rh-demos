@@ -61,13 +61,6 @@ oc exec -n gitlab "${GITLAB_POD}" -- gitlab-rails runner "
 " 2>/dev/null || echo "  Token may already exist."
 echo ""
 
-# Configure GitLab admin settings
-echo "--- Configuring GitLab admin settings ---"
-oc exec -n gitlab "${GITLAB_POD}" -- timeout 120 gitlab-rails runner \
-  "ApplicationSetting.current.update_column(:deletion_adjourned_period, 0)" 2>/dev/null || true
-echo "  Project deletion delay: 0 (immediate, via rails — API enforces min 1)"
-echo ""
-
 # Create groups
 echo "--- Creating groups ---"
 for group in demo vm-instances; do
