@@ -13,7 +13,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
+            type: integer
         - name: PRIVATE-TOKEN
           in: header
           required: true
@@ -46,7 +46,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
+            type: integer
         - name: issue_iid
           in: path
           required: true
@@ -72,7 +72,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
+            type: integer
         - name: merge_request_iid
           in: path
           required: true
@@ -86,6 +86,58 @@ paths:
       responses:
         "200":
           description: Merge request details
+          content:
+            application/json:
+              schema:
+                type: object
+  /projects/{id}/merge_requests/{merge_request_iid}/approvals:
+    get:
+      operationId: getMergeRequestApprovals
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: merge_request_iid
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: PRIVATE-TOKEN
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Merge request approval status
+          content:
+            application/json:
+              schema:
+                type: object
+  /projects/{id}/merge_requests/{merge_request_iid}/merge:
+    put:
+      operationId: mergeMergeRequest
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: merge_request_iid
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: PRIVATE-TOKEN
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Merge request merged
           content:
             application/json:
               schema:

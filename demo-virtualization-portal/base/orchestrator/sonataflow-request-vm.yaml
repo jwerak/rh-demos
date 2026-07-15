@@ -4,7 +4,7 @@ metadata:
   name: request-vm-approval
   namespace: rhdh
   annotations:
-    sonataflow.org/description: "Request VM via GitOps with GitLab-based approval"
+    sonataflow.org/description: "Dual-approval workflow — polls GitLab MR approvals, requires both app-owner and security-admin, then merges automatically"
     sonataflow.org/expressionLang: jq
     sonataflow.org/profile: gitops
     sonataflow.org/version: "1.0"
@@ -25,6 +25,12 @@ spec:
       - name: getMergeRequest
         operation: specs/gitlab-openapi.yaml#getMergeRequest
         type: rest
+      - name: getMergeRequestApprovals
+        operation: specs/gitlab-openapi.yaml#getMergeRequestApprovals
+        type: rest
+      - name: mergeMergeRequest
+        operation: specs/gitlab-openapi.yaml#mergeMergeRequest
+        type: rest
       - name: createNotification
         operation: specs/notifications-openapi.yaml#createNotification
         type: rest
@@ -33,10 +39,13 @@ spec:
         operation: sysout
       - name: extractMrIid
         type: expression
-        operation: '{ mr_iid: (.merge_request_url | split("/") | .[-1] | tonumber), project_path: (.merge_request_url | split("/-/") | .[0] | split("//") | .[1] | split("/") | .[1:] | join("%2F")) }'
+        operation: '{ mr_iid: (.merge_request_url | split("/") | .[-1] | tonumber) }'
+      - name: checkDualApproval
+        type: expression
+        operation: '{ dual_approved: (if .approvalStatus.approved_by then ([.approvalStatus.approved_by[].user.username] | (index("app-owner") != null) and (index("security-admin") != null)) else false end) }'
       - name: successResult
         type: expression
-        operation: '{ "result": { "message": "VM " + .vm_name + " approved — MR merged. ArgoCD will sync the changes.", "outputs": [{"key": "Merge Request", "value": .merge_request_url, "format": "link"}] } }'
+        operation: '{ "result": { "message": "VM " + .vm_name + " approved — both app-owner and security-admin approved. MR merged, ArgoCD will sync the changes.", "outputs": [{"key": "Merge Request", "value": .merge_request_url, "format": "link"}] } }'
       - name: deniedResult
         type: expression
         operation: '{ "result": { "message": "Request denied for VM " + .vm_name + " in " + .environment + ". MR was closed without merging." } }'
@@ -63,13 +72,13 @@ spec:
                     - group:default/security-admins
                 payload:
                   title: '"VM approval needed: " + .vm_name'
-                  description: '"Request from " + .owner + " for VM " + .vm_name + " in " + .environment + " (" + .os_image + ", " + (.cpu_cores|tostring) + " CPU, " + (.memory_gi|tostring) + "GiB RAM). Review the MR and merge to approve."'
+                  description: '"Request from " + .owner + " for VM " + .vm_name + " in " + .environment + " (" + .os_image + ", " + (.cpu_cores|tostring) + " CPU, " + (.memory_gi|tostring) + "GiB RAM). Review the MR and click Approve in GitLab. Both app-owner and security-admin approval required."'
                   link: .merge_request_url
                   severity: normal
                   topic: VM Approval
         transition:
-          nextState: Poll MR
-      - name: Poll MR
+          nextState: Poll approval status
+      - name: Poll approval status
         type: operation
         actions:
           - name: getMR
@@ -78,27 +87,60 @@ spec:
             functionRef:
               refName: getMergeRequest
               arguments:
-                id: .project_path
+                id: .project_id
                 merge_request_iid: .mr_iid
                 PRIVATE-TOKEN: $SECRET.GITLAB_TOKEN
             sleep:
               before: PT10S
+          - name: getApprovals
+            actionDataFilter:
+              toStateData: .approvalStatus
+            functionRef:
+              refName: getMergeRequestApprovals
+              arguments:
+                id: .project_id
+                merge_request_iid: .mr_iid
+                PRIVATE-TOKEN: $SECRET.GITLAB_TOKEN
+          - name: evalApprovals
+            functionRef:
+              refName: checkDualApproval
         transition:
-          nextState: Check MR status
-      - name: Check MR status
+          nextState: Check approval status
+      - name: Check approval status
         type: switch
         dataConditions:
-          - name: Merged
-            condition: '.mrStatus.state == "merged"'
-            transition:
-              nextState: Success
           - name: Closed
             condition: '.mrStatus.state == "closed"'
             transition:
               nextState: Denied
+          - name: Already merged
+            condition: '.mrStatus.state == "merged"'
+            transition:
+              nextState: Success
+          - name: Dual approved
+            condition: '.dual_approved == true'
+            transition:
+              nextState: Merge MR
         defaultCondition:
           transition:
-            nextState: Poll MR
+            nextState: Poll approval status
+      - name: Merge MR
+        type: operation
+        actions:
+          - name: log
+            functionRef:
+              refName: print
+              arguments:
+                message: '"Dual approval received, merging MR for VM: " + .vm_name'
+          - name: merge
+            functionRef:
+              refName: mergeMergeRequest
+              arguments:
+                id: .project_id
+                merge_request_iid: .mr_iid
+                PRIVATE-TOKEN: $SECRET.GITLAB_TOKEN
+        transition:
+          nextState: Success
       - name: Success
         type: operation
         actions:

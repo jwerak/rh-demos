@@ -78,9 +78,8 @@ if [ -n "${VM_GROUP_ID}" ]; then
     -d '{"default_branch_protection": 2}' >/dev/null 2>&1 || true
   echo "  Default branch protection: Developers + Maintainers"
 
-  # Require 2 approvals before merge at group level
-  api PUT "/groups/${VM_GROUP_ID}" \
-    -d '{"require_two_factor_authentication": false}' >/dev/null 2>&1 || true
+  # Dual approval enforced by SonataFlow workflow (not GitLab CE — CE lacks approval rules).
+  # Workflow polls GET .../approvals, requires both app-owner + security-admin, then merges via API.
 fi
 echo ""
 
@@ -98,14 +97,14 @@ for user in frontend-dev backend-dev; do
 done
 echo ""
 
-# Add approval users to vm-instances group as Maintainers
+# Add approval users to vm-instances group as Developers (can Approve MRs, cannot Merge protected branches)
 echo "--- Adding users to vm-instances group ---"
 for user in app-owner security-admin; do
   USER_ID=$(api GET "/users?username=${user}" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
   if [ -n "${USER_ID}" ]; then
     api_ignore_conflict POST "/groups/${VM_GROUP_ID}/members" \
-      -d "{\"user_id\": ${USER_ID}, \"access_level\": 40}"
-    echo "  ${user} → vm-instances (Maintainer)"
+      -d "{\"user_id\": ${USER_ID}, \"access_level\": 30}"
+    echo "  ${user} → vm-instances (Developer — can approve, workflow merges)"
   fi
 done
 # Add developers as Reporters (can create issues, cannot approve MRs)
@@ -167,8 +166,8 @@ echo "--- Configuring MR approval rules ---"
 if [ -n "${VM_GROUP_ID}" ]; then
   api_ignore_conflict PUT "/groups/${VM_GROUP_ID}" \
     -d '{"merge_requests_access_level": "enabled"}'
-  echo "  MR approval: app-owner + security-admin can approve in vm-instances group"
-  echo "  Branch protection: main branch requires MR (no direct push)"
+  echo "  MR approval: app-owner + security-admin can approve (Developer role)"
+  echo "  Branch protection: main branch requires MR (only workflow PAT can merge)"
 fi
 echo ""
 
