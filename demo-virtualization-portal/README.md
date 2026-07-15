@@ -13,14 +13,14 @@ Self-service VM portal: RHDH 1.10 + GitLab CE + ArgoCD + OpenShift Virtualizatio
 
 ### Tools
 
-| Tool | Purpose |
-|------|---------|
-| `oc` | OpenShift CLI (logged in as cluster-admin) |
-| `curl` | GitLab API calls (seed-gitlab.sh) |
+| Tool       | Purpose                                                        |
+| ---------- | -------------------------------------------------------------- |
+| `oc`       | OpenShift CLI (logged in as cluster-admin)                     |
+| `curl`     | GitLab API calls (seed-gitlab.sh)                              |
 | `htpasswd` | Demo user creation (create-demo-users.sh) — from `httpd-tools` |
-| `git` | Push templates to GitLab |
-| `openssl` | Generate secrets if not provided |
-| `python3` | Parse Keycloak API responses |
+| `git`      | Push templates to GitLab                                       |
+| `openssl`  | Generate secrets if not provided                               |
+| `python3`  | Parse Keycloak API responses                                   |
 
 ### DNS Setup
 
@@ -52,17 +52,17 @@ vi .env
 source .env
 ```
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `BASE_DOMAIN` | Custom domain for routes (wildcard DNS must point to router) | `virt-portal.example.com` |
-| `GITLAB_ADMIN_PASSWORD` | GitLab root password | `MySecurePass123` |
-| `GITLAB_TOKEN` | GitLab PAT for RHDH (must start with `glpat-`) | `glpat-rhdh-portal-token` |
-| `BACKEND_SECRET` | RHDH backend auth secret | `openssl rand -base64 32` |
-| `DEMO_PASSWORD` | Password for Keycloak demo users | `DemoPass123` |
-| `KEYCLOAK_ADMIN_PASSWORD` | Keycloak admin password | `KcAdmin123` |
-| `KEYCLOAK_CLIENT_SECRET` | OIDC client secret for RHDH | any random string |
-| `GITHUB_REPO` | This repo's Git URL (for ArgoCD) | `https://github.com/user/rh-demos.git` |
-| `GIT_REVISION` | Git branch for ArgoCD | `master` |
+| Variable                  | Description                                                  | Example                                |
+| ------------------------- | ------------------------------------------------------------ | -------------------------------------- |
+| `BASE_DOMAIN`             | Custom domain for routes (wildcard DNS must point to router) | `virt-portal.example.com`              |
+| `GITLAB_ADMIN_PASSWORD`   | GitLab root password                                         | `MySecurePass123`                      |
+| `GITLAB_TOKEN`            | GitLab PAT for RHDH (must start with `glpat-`)               | `glpat-rhdh-portal-token`              |
+| `BACKEND_SECRET`          | RHDH backend auth secret                                     | `openssl rand -base64 32`              |
+| `DEMO_PASSWORD`           | Password for Keycloak demo users                             | `DemoPass123`                          |
+| `KEYCLOAK_ADMIN_PASSWORD` | Keycloak admin password                                      | `KcAdmin123`                           |
+| `KEYCLOAK_CLIENT_SECRET`  | OIDC client secret for RHDH                                  | any random string                      |
+| `GITHUB_REPO`             | This repo's Git URL (for ArgoCD)                             | `https://github.com/user/rh-demos.git` |
+| `GIT_REVISION`            | Git branch for ArgoCD                                        | `master`                               |
 
 ### 2. Deploy
 
@@ -72,17 +72,17 @@ source .env
 
 The script runs 7 phases:
 
-| Phase | What it does | Duration |
-|-------|-------------|----------|
-| 0 | Verify `oc login` | instant |
-| 1 | Install OpenShift GitOps Operator + RBAC | ~2 min |
-| 2 | Deploy RHDH Operator via ArgoCD | ~3 min |
-| 3 | Deploy GitLab CE (on-cluster) | ~5 min |
-| 3b | Deploy Keycloak + configure OIDC | ~2 min |
-| 4 | Deploy RHDH (Backstage CR + config) | ~3 min |
-| 5 | Seed GitLab (PAT, groups, users, templates) | ~1 min |
-| 6 | Deploy demo environments + VM ApplicationSet | instant |
-| 7 | Install Gatekeeper OPA + policies | ~3 min |
+| Phase | What it does                                 | Duration |
+| ----- | -------------------------------------------- | -------- |
+| 0     | Verify `oc login`                            | instant  |
+| 1     | Install OpenShift GitOps Operator + RBAC     | ~2 min   |
+| 2     | Deploy RHDH Operator via ArgoCD              | ~3 min   |
+| 3     | Deploy GitLab CE (on-cluster)                | ~5 min   |
+| 3b    | Deploy Keycloak + configure OIDC             | ~2 min   |
+| 4     | Deploy RHDH (Backstage CR + config)          | ~3 min   |
+| 5     | Seed GitLab (PAT, groups, users, templates)  | ~1 min   |
+| 6     | Deploy demo environments + VM ApplicationSet | instant  |
+| 7     | Install Gatekeeper OPA + policies            | ~3 min   |
 
 Total: ~20 minutes on a healthy cluster.
 
@@ -142,12 +142,12 @@ echo "ArgoCD:   https://$(oc get route openshift-gitops-server -n openshift-gito
 
 The portal has two VM creation templates, each demonstrating a different governance model:
 
-| Template                       | Enforcement                       | How it works                                                                                |
-| ------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------- |
-| **Create Virtual Machine**     | MR-based approval (humans review) | Creates GitLab MR → app-owner + security-admin approve → merge → ArgoCD syncs → VM created  |
-| **Resize Virtual Machine**     | MR-based approval (humans review) | Creates MR with updated CPU/RAM/disk → approve → merge → ArgoCD syncs → VM live-resized     |
+| Template                         | Enforcement                       | How it works                                                                                |
+| -------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------- |
+| **Create Virtual Machine**       | MR-based approval (humans review) | Creates GitLab MR → app-owner + security-admin approve → merge → ArgoCD syncs → VM created  |
+| **Resize Virtual Machine**       | MR-based approval (humans review) | Creates MR with updated CPU/RAM/disk → approve → merge → ArgoCD syncs → VM live-resized     |
 | **Decommission Virtual Machine** | MR-based approval (humans review) | Creates MR that empties kustomization → approve → merge → ArgoCD prunes all K8s resources   |
-| **Create VM (Policy Test)**    | Gatekeeper OPA (automated policy) | Publishes directly to main → ArgoCD syncs immediately → Gatekeeper webhook allows or denies |
+| **Create VM (Policy Test)**      | Gatekeeper OPA (automated policy) | Publishes directly to main → ArgoCD syncs immediately → Gatekeeper webhook allows or denies |
 
 ---
 
@@ -161,7 +161,7 @@ Shows the human approval workflow — two approvers must review and merge before
 2. Go to **Create** → select **Create Virtual Machine**
 3. Fill in the form:
    - VM Name: `dev-web-01` (must match `prefix-name-number` format)
-   - CPU: 2, Memory: 4 GiB, Disk: 20 GiB
+   - CPU: 2, Memory: 4 GiB, Disk: 30 GiB
    - OS Image: RHEL 9, Environment: Development
    - Owner: pick `vm-requestor`, Cost Center: CC-001
 4. Click **Create** — RHDH creates a GitLab repo and opens a Merge Request

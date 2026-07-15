@@ -368,13 +368,13 @@ PTK téma: tenant model, viditelnost omezená na vlastní zdroje.
 - [ ] OCP namespaces per team: vm-dev-team-a, vm-dev-team-b (volitelně)
 - [ ] GitLab subgroups per team v `vm-instances/` (vm-instances/team-a/, vm-instances/team-b/)
 
-### Krok 10: Kvóty a limity zdrojů (Phase B)
+### Krok 10: Kvóty a limity zdrojů (Phase B) — ČÁSTEČNĚ HOTOVO
 
 PTK téma: limity na vCPU/RAM/storage/počet VM, vynucování, workflow navyšování.
 
-- [ ] ResourceQuota per namespace (vm-dev, vm-staging, vm-prod) — již existuje, rozšířit
+- [x] ResourceQuota per namespace (vm-dev: 8 CPU/32Gi/10 VMs, vm-staging: 8 CPU/32Gi/10 VMs, vm-prod: 16 CPU/64Gi/20 VMs) — `base/demo-env/quotas.yaml`
+- [x] Gatekeeper per-VM resource limits: max 8 CPU, 16 GiB RAM, 100 GiB disk — `base/gatekeeper/policies/` (implementováno v Kroku 5)
 - [ ] LimitRange pro VMs: min/max CPU, RAM per VM
-- [ ] Gatekeeper constraint: max počet VM per team/namespace
 - [ ] "Request Quota Increase" šablona — MR do `base/demo-env/quotas.yaml` → approval
 - [ ] Template validace: check zda nový VM překročí kvótu před submitem
 
@@ -401,28 +401,28 @@ PTK téma: nasazování do CORE a EDGE lokalit.
 
 PTK požadavek: vysvětlit architekturu minimálně v rozsahu:
 
-| Komponenta | Implementace | Status |
-|---|---|---|
-| Komponenty portálu | RHDH (Backstage) + Keycloak + GitLab + ArgoCD | ✅ |
-| Workflow engine | GitLab MR approval (Phase B) ✅ + SonataFlow Orchestrator (Phase C) ⏳ | ⏳ |
-| Katalog služeb | RHDH Software Catalog | ✅ |
-| API vrstva | RHDH REST API (Catalog, Scaffolder, Permission) | ✅ |
-| Integrační konektory | GitLab integration, Keycloak provider, ArgoCD plugin | ✅ |
-| IaC repozitáře | GitLab `vm-instances/` group, ArgoCD ApplicationSet | ✅ |
-| CI/CD pipeline | ArgoCD GitOps sync (continuous delivery) | ✅ |
-| Policy-as-Code | Gatekeeper OPA ConstraintTemplates | ⏳ krok 5 |
-| Secret/Vault | K8s Secrets + Keycloak credentials | ✅ |
-| Monitoring a logging | OCP built-in (Prometheus, Loki) + ServiceMonitor | ⏳ krok 4 |
-| Databáze portálu | RHDH PostgreSQL (local DB), Keycloak H2 (dev) | ✅ |
-| HA režim portálu | RHDH: multiple replicas, Keycloak: single (demo) | slide |
-| Zálohování portálu | OADP (already on cluster) | slide |
-| DR portálu | GitOps-based rebuild from Git repos | slide |
-| Správa šablon | GitLab `demo/templates` repo, RHDH auto-discovery | ✅ |
-| Správa verzí | Git versioning, GitLab tags | ⏳ krok 8 |
-| Auditní úložiště | Git history + Gatekeeper audit + OCP audit logs | ⏳ krok 5 |
-| Dostupnost 99%, RTO/RPO 24-48h | OCP HA + OADP backup + GitOps rebuild | slide |
+| Komponenta                     | Implementace                                                         | Status   |
+| ------------------------------ | -------------------------------------------------------------------- | -------- |
+| Komponenty portálu             | RHDH (Backstage) + Keycloak + GitLab + ArgoCD                        | ✅        |
+| Workflow engine                | GitLab MR approval ✅ + SonataFlow Orchestrator ✅                     | ✅        |
+| Katalog služeb                 | RHDH Software Catalog                                                | ✅        |
+| API vrstva                     | RHDH REST API (Catalog, Scaffolder, Permission)                      | ✅        |
+| Integrační konektory           | GitLab integration, Keycloak provider, ArgoCD plugin                 | ✅        |
+| IaC repozitáře                 | GitLab `vm-instances/` group, ArgoCD ApplicationSet                  | ✅        |
+| CI/CD pipeline                 | ArgoCD GitOps sync (continuous delivery)                             | ✅        |
+| Policy-as-Code                 | Gatekeeper OPA ConstraintTemplates (3 policies)                      | ✅        |
+| Secret/Vault                   | K8s Secrets + Keycloak credentials                                   | ✅        |
+| Monitoring a logging           | OCP built-in (Prometheus, Loki) + ServiceMonitor v skeleton          | ✅        |
+| Databáze portálu               | RHDH PostgreSQL (local DB), Keycloak H2 (dev)                        | ✅        |
+| HA režim portálu               | RHDH: multiple replicas, Keycloak: single (demo)                     | slide    |
+| Zálohování portálu             | OADP (already on cluster)                                            | slide    |
+| DR portálu                     | GitOps-based rebuild from Git repos                                  | slide    |
+| Správa šablon                  | GitLab `demo/templates` repo, RHDH auto-discovery                    | ✅        |
+| Správa verzí                   | Git versioning, GitLab tags                                          | ⏳ krok 8 |
+| Auditní úložiště               | Git history + Gatekeeper audit + OCP audit logs                      | ✅        |
+| Dostupnost 99%, RTO/RPO 24-48h | OCP HA + OADP backup + GitOps rebuild                                | slide    |
 
-### Krok 14: SonataFlow Orchestrator (Phase C) — IN PROGRESS
+### Krok 14: SonataFlow Orchestrator (Phase C) ✅ HOTOVO (2026-07-15)
 
 Enterprise workflow engine jako enhancement nad MR-based approval.
 
@@ -438,10 +438,11 @@ Enterprise workflow engine jako enhancement nad MR-based approval.
 - [x] Vytvořit `workflows/request-vm-approval/` — SonataFlow workflow (YAML, schemas, OpenAPI specs)
 - [x] Přidat Phase 8 + 9 do deploy.sh (operators + orchestrator platform)
 - [x] Aktualizovat teardown.sh
-- [ ] Build workflow container image a deploy SonataFlow CR na clusteru
-- [ ] End-to-end test: developer → Orchestrator UI → GitLab issue → approval → VM created
+- [x] Build workflow container image a deploy SonataFlow CR na clusteru (deploy.sh Phase 9: `oc new-build`/`oc start-build` + Dockerfile v `workflows/request-vm-approval/`, SonataFlow CR s image referencí)
+- [x] End-to-end test: workflow trigger → notifications → MR poll → merge=COMPLETED / close=COMPLETED (2026-07-15)
 
 Architektura:
+
 ```
 User → RHDH Orchestrator UI → SonataFlow Workflow Engine
                                     │
@@ -453,13 +454,13 @@ User → RHDH Orchestrator UI → SonataFlow Workflow Engine
 
 Uživatelský model (rozšířený):
 
-| Role | Orchestrator permissions | Keycloak group |
-|---|---|---|
+| Role           | Orchestrator permissions                          | Keycloak group  |
+| -------------- | ------------------------------------------------- | --------------- |
 | platform-admin | workflow read/use + adminView + instanceAdminView | platform-admins |
-| security-admin | workflow read + instanceAdminView (audit) | security-admins |
-| app-owner | workflow read/use | app-owners |
-| developer | workflow read/use | developers |
-| requestor | workflow read/use | requestors |
+| security-admin | workflow read + instanceAdminView (audit)         | security-admins |
+| app-owner      | workflow read/use                                 | app-owners      |
+| developer      | workflow read/use                                 | developers      |
+| requestor      | workflow read/use                                 | requestors      |
 
 Nové demo uživatele: `frontend-dev`, `backend-dev` (developers group)
 
@@ -480,3 +481,7 @@ Poučení z implementace:
 - SonataFlowPlatform Data Index + Job Service vyžadují funkční PostgreSQL DB při startu — jinak CrashLoopBackOff
 - RHDH PostgreSQL pod je StatefulSet `backstage-psql-rhdh-0` (ne Deployment)
 - Credentials v `backstage-psql-secret-rhdh` — user `postgres`, auto-generated password
+- Quarkus OpenAPI generator double-encodes `%2F` v path parametrech — `project_path` (string s `%2F`) nefunguje, nutno použít `project_id` (integer) pro GitLab API
+- OpenAPI spec `id` parameter pro getMergeRequest/getIssue/createIssue musí být `type: integer` (ne string) aby se předešlo URL encoding problémům
+- Jobs Service startup race condition: workflow pod reportuje health DOWN na startu, ale recovers po pár sekundách — ne problém, jen startup ordering
+- Workflow poll interval PT10S je dostatečný — merge detekován do ~15s od skutečného merge
