@@ -11,6 +11,7 @@ metadata:
     app.kubernetes.io/component: vm
     environment: ${{ values.environment }}
     cost-center: ${{ values.costCenter }}
+    network-zone: ${{ values.networkZone }}
 spec:
   runStrategy: Always
   template:
@@ -20,6 +21,7 @@ spec:
         app: ${{ values.vmName }}
         app.kubernetes.io/name: ${{ values.vmName }}
         app.kubernetes.io/part-of: virt-portal
+        network-zone: ${{ values.networkZone }}
     spec:
       domain:
         cpu:

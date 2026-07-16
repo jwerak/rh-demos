@@ -2,38 +2,29 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: deny-cross-namespace
+  name: default-deny-ingress
   namespace: vm-dev
 spec:
   podSelector: {}
   policyTypes:
     - Ingress
-  ingress:
-    - from:
-        - podSelector: {}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: deny-cross-namespace
+  name: default-deny-ingress
   namespace: vm-staging
 spec:
   podSelector: {}
   policyTypes:
     - Ingress
-  ingress:
-    - from:
-        - podSelector: {}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: deny-cross-namespace
+  name: default-deny-ingress
   namespace: vm-prod
 spec:
   podSelector: {}
   policyTypes:
     - Ingress
-  ingress:
-    - from:
-        - podSelector: {}

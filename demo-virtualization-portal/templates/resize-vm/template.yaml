@@ -41,6 +41,20 @@ spec:
             - "Staging"
             - "Production"
           ui:disabled: true
+        networkZone:
+          title: Network Zone (current)
+          type: string
+          description: Current network security zone of the VM
+          default: frontend
+          enum:
+            - frontend
+            - backend
+            - database
+          enumNames:
+            - "Frontend (public-facing)"
+            - "Backend (application tier)"
+            - "Database (restricted)"
+          ui:disabled: true
         osImage:
           title: OS Image (current)
           type: string
@@ -153,6 +167,7 @@ spec:
           diskSizeGi: ${{ parameters.diskSizeGi }}
           osImage: ${{ parameters.osImage }}
           environment: ${{ parameters.environment }}
+          networkZone: ${{ parameters.networkZone }}
           owner: ${{ parameters.owner }}
           costCenter: ${{ parameters.costCenter }}
 

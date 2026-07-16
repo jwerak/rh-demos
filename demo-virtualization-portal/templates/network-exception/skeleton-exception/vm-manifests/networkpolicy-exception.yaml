@@ -1,0 +1,25 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ${{ values.sourceVm }}-to-${{ values.targetZone }}-exception
+  namespace: ${{ values.environment }}
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    demo: virt-portal
+    exception-for: ${{ values.sourceVm }}
+    target-zone: ${{ values.targetZone }}
+spec:
+  podSelector:
+    matchLabels:
+      network-zone: ${{ values.targetZone }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              kubevirt.io/domain: ${{ values.sourceVm }}
+      ports:
+        - port: ${{ values.port }}
+          protocol: TCP

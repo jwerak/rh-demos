@@ -1,0 +1,62 @@
+---
+apiVersion: policy.networking.k8s.io/v1alpha1
+kind: AdminNetworkPolicy
+metadata:
+  name: virt-portal-backend-ingress
+spec:
+  priority: 50
+  subject:
+    pods:
+      namespaceSelector:
+        matchLabels:
+          app.kubernetes.io/part-of: virt-portal
+      podSelector:
+        matchLabels:
+          network-zone: backend
+  ingress:
+    - name: allow-from-frontend
+      action: Allow
+      from:
+        - pods:
+            namespaceSelector:
+              matchLabels:
+                app.kubernetes.io/part-of: virt-portal
+            podSelector:
+              matchLabels:
+                network-zone: frontend
+---
+apiVersion: policy.networking.k8s.io/v1alpha1
+kind: AdminNetworkPolicy
+metadata:
+  name: virt-portal-database-ingress
+spec:
+  priority: 50
+  subject:
+    pods:
+      namespaceSelector:
+        matchLabels:
+          app.kubernetes.io/part-of: virt-portal
+      podSelector:
+        matchLabels:
+          network-zone: database
+  ingress:
+    - name: allow-from-backend
+      action: Allow
+      from:
+        - pods:
+            namespaceSelector:
+              matchLabels:
+                app.kubernetes.io/part-of: virt-portal
+            podSelector:
+              matchLabels:
+                network-zone: backend
+    - name: pass-from-frontend
+      action: Pass
+      from:
+        - pods:
+            namespaceSelector:
+              matchLabels:
+                app.kubernetes.io/part-of: virt-portal
+            podSelector:
+              matchLabels:
+                network-zone: frontend

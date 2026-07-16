@@ -10,3 +10,4 @@ spec:
     - ./create-vm-policy-test/template.yaml
     - ./resize-vm/template.yaml
     - ./decommission-vm/template.yaml
+    - ./network-exception/template.yaml

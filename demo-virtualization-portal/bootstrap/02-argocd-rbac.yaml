@@ -56,6 +56,13 @@ rules:
     verbs:
       - "*"
   - apiGroups:
+      - policy.networking.k8s.io
+    resources:
+      - adminnetworkpolicies
+      - baselineadminnetworkpolicies
+    verbs:
+      - "*"
+  - apiGroups:
       - rhdh.redhat.com
     resources:
       - backstages

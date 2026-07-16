@@ -23,6 +23,7 @@ spec:
         - memoryGi
         - osImage
         - environment
+        - networkZone
       properties:
         vmName:
           title: VM Name
@@ -101,6 +102,19 @@ spec:
             - "Development"
             - "Staging"
             - "Production"
+        networkZone:
+          title: Network Zone
+          type: string
+          description: Network security zone — determines which tiers can communicate with this VM
+          default: frontend
+          enum:
+            - frontend
+            - backend
+            - database
+          enumNames:
+            - "Frontend (public-facing)"
+            - "Backend (application tier)"
+            - "Database (restricted)"
 
     - title: Owner Information
       required:
@@ -145,6 +159,7 @@ spec:
           diskSizeGi: ${{ parameters.diskSizeGi }}
           osImage: ${{ parameters.osImage }}
           environment: ${{ parameters.environment }}
+          networkZone: ${{ parameters.networkZone }}
           owner: ${{ parameters.owner }}
           costCenter: ${{ parameters.costCenter }}
 
@@ -174,6 +189,7 @@ spec:
           diskSizeGi: ${{ parameters.diskSizeGi }}
           osImage: ${{ parameters.osImage }}
           environment: ${{ parameters.environment }}
+          networkZone: ${{ parameters.networkZone }}
           owner: ${{ parameters.owner }}
           costCenter: ${{ parameters.costCenter }}
 
@@ -195,6 +211,7 @@ spec:
           | **Disk** | ${{ parameters.diskSizeGi }} GiB |
           | **OS Image** | ${{ parameters.osImage }} |
           | **Environment** | ${{ parameters.environment }} |
+          | **Network Zone** | ${{ parameters.networkZone }} |
           | **Owner** | ${{ parameters.owner }} |
           | **Cost Center** | ${{ parameters.costCenter }} |
 
@@ -215,6 +232,7 @@ spec:
           os_image: ${{ parameters.osImage }}
           cpu_cores: ${{ parameters.cpuCores }}
           memory_gi: ${{ parameters.memoryGi }}
+          network_zone: ${{ parameters.networkZone }}
           owner: ${{ parameters.owner }}
           project_id: ${{ steps['publish'].output.projectId }}
           merge_request_url: ${{ steps['create-mr'].output.mergeRequestUrl | replace("http://gitlab.gitlab.svc.cluster.local", "https://gitlab.__BASE_DOMAIN__") }}

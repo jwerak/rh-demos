@@ -1,0 +1,190 @@
+---
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: network-exception
+  title: Request Network Exception
+  description: Request an exception to the default network zone policy (e.g. allow a frontend VM to reach the database zone)
+  tags:
+    - network
+    - exception
+    - security
+spec:
+  owner: platform-team
+  type: network-exception
+
+  parameters:
+    - title: Exception Details
+      description: |
+        By default, frontend VMs cannot reach the database zone.
+        Use this form to request a specific exception — security-admin must approve.
+      required:
+        - sourceVm
+        - targetZone
+        - port
+        - environment
+        - justification
+      properties:
+        sourceVm:
+          title: Source VM Name
+          type: string
+          description: Name of the VM that needs access (must exist in the target environment)
+          pattern: "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
+          ui:autofocus: true
+        targetZone:
+          title: Target Network Zone
+          type: string
+          description: Destination zone to allow access to
+          default: database
+          enum:
+            - database
+          enumNames:
+            - "Database (restricted zone)"
+        port:
+          title: Target Port
+          type: integer
+          description: Port number to allow on the target zone
+          default: 5432
+          enum:
+            - 5432
+            - 3306
+            - 27017
+            - 6379
+          enumNames:
+            - "5432 (PostgreSQL)"
+            - "3306 (MySQL)"
+            - "27017 (MongoDB)"
+            - "6379 (Redis)"
+        environment:
+          title: Environment
+          type: string
+          description: Namespace where both VMs reside
+          default: vm-dev
+          enum:
+            - vm-dev
+            - vm-staging
+            - vm-prod
+          enumNames:
+            - "Development"
+            - "Staging"
+            - "Production"
+        justification:
+          title: Justification
+          type: string
+          description: Explain why this exception is needed — security-admin will review this
+          ui:widget: textarea
+          ui:options:
+            rows: 4
+
+    - title: Owner Information
+      required:
+        - owner
+      properties:
+        owner:
+          title: Requestor
+          type: string
+          description: Person or team requesting this exception
+          ui:field: OwnerPicker
+          ui:options:
+            allowedKinds:
+              - Group
+              - User
+
+  steps:
+    - id: fetch-init
+      name: Fetch Catalog Skeleton
+      action: fetch:template
+      input:
+        url: ./skeleton-init
+        values:
+          sourceVm: ${{ parameters.sourceVm }}
+          targetZone: ${{ parameters.targetZone }}
+          port: ${{ parameters.port }}
+          environment: ${{ parameters.environment }}
+          justification: ${{ parameters.justification }}
+          owner: ${{ parameters.owner }}
+
+    - id: publish
+      name: Create Repository
+      action: publish:gitlab
+      input:
+        repoUrl: gitlab.gitlab.svc.cluster.local?owner=vm-instances&repo=${{ parameters.sourceVm }}-netexc-${{ parameters.targetZone }}
+        defaultBranch: main
+        repoVisibility: public
+
+    - id: register
+      name: Register in Catalog
+      action: catalog:register
+      input:
+        catalogInfoUrl: http://gitlab.gitlab.svc.cluster.local/vm-instances/${{ parameters.sourceVm }}-netexc-${{ parameters.targetZone }}/-/blob/main/catalog-info.yaml
+
+    - id: fetch-exception
+      name: Fetch Exception NetworkPolicy
+      action: fetch:template
+      input:
+        url: ./skeleton-exception
+        values:
+          sourceVm: ${{ parameters.sourceVm }}
+          targetZone: ${{ parameters.targetZone }}
+          port: ${{ parameters.port }}
+          environment: ${{ parameters.environment }}
+          justification: ${{ parameters.justification }}
+          owner: ${{ parameters.owner }}
+
+    - id: create-mr
+      name: Create Merge Request for Approval
+      action: publish:gitlab:merge-request
+      input:
+        repoUrl: gitlab.gitlab.svc.cluster.local?owner=vm-instances&repo=${{ parameters.sourceVm }}-netexc-${{ parameters.targetZone }}
+        branchName: exception/${{ parameters.sourceVm }}-to-${{ parameters.targetZone }}
+        title: "Network Exception: ${{ parameters.sourceVm }} → ${{ parameters.targetZone }} (port ${{ parameters.port }})"
+        description: |
+          ## Network Exception Request
+
+          | Parameter | Value |
+          |-----------|-------|
+          | **Source VM** | ${{ parameters.sourceVm }} |
+          | **Target Zone** | ${{ parameters.targetZone }} |
+          | **Port** | ${{ parameters.port }} |
+          | **Environment** | ${{ parameters.environment }} |
+          | **Requestor** | ${{ parameters.owner }} |
+
+          ### Justification
+
+          ${{ parameters.justification }}
+
+          ---
+          This MR adds a NetworkPolicy that allows `${{ parameters.sourceVm }}` to reach
+          `${{ parameters.targetZone }}` zone pods on port ${{ parameters.port }}.
+
+          **Default policy**: frontend → database is blocked by AdminNetworkPolicy (Pass + default-deny).
+          **This exception**: creates a namespace-level NetworkPolicy that overrides the default deny.
+
+          Merge this MR to activate the exception via ArgoCD GitOps.
+          To revoke: delete this GitLab repository.
+        targetBranchName: main
+        removeSourceBranch: true
+
+    - id: run-approval-workflow
+      name: Start Approval Workflow
+      action: orchestrator:workflow:run
+      input:
+        workflow_id: request-vm-approval
+        target_entity: ${{ steps['register'].output.entityRef }}
+        parameters:
+          vm_name: ${{ parameters.sourceVm }}-netexc-${{ parameters.targetZone }}
+          environment: ${{ parameters.environment }}
+          owner: ${{ parameters.owner }}
+          network_zone: "exception: ${{ parameters.sourceVm }} → ${{ parameters.targetZone }}:${{ parameters.port }}"
+          project_id: ${{ steps['publish'].output.projectId }}
+          merge_request_url: ${{ steps['create-mr'].output.mergeRequestUrl | replace("http://gitlab.gitlab.svc.cluster.local", "https://gitlab.__BASE_DOMAIN__") }}
+
+  output:
+    links:
+      - title: Merge Request (Security Approval Required)
+        url: ${{ steps['create-mr'].output.mergeRequestUrl | replace("http://gitlab.gitlab.svc.cluster.local", "https://gitlab.__BASE_DOMAIN__") }}
+      - title: Exception Repository
+        url: https://gitlab.__BASE_DOMAIN__/vm-instances/${{ parameters.sourceVm }}-netexc-${{ parameters.targetZone }}
+      - title: Catalog Entry
+        icon: catalog
+        entityRef: ${{ steps['register'].output.entityRef }}

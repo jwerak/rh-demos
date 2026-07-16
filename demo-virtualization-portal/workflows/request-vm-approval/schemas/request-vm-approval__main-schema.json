@@ -29,6 +29,12 @@
       "type": "integer",
       "description": "Memory in GiB"
     },
+    "network_zone": {
+      "title": "Network Zone",
+      "type": "string",
+      "description": "Network security zone (frontend, backend, database)",
+      "enum": ["frontend", "backend", "database"]
+    },
     "owner": {
       "title": "Owner",
       "type": "string",

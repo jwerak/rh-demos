@@ -72,7 +72,7 @@ spec:
                     - group:default/security-admins
                 payload:
                   title: '"VM approval needed: " + .vm_name'
-                  description: '"Request from " + .owner + " for VM " + .vm_name + " in " + .environment + " (" + .os_image + ", " + (.cpu_cores|tostring) + " CPU, " + (.memory_gi|tostring) + "GiB RAM). Review the MR and click Approve in GitLab. Both app-owner and security-admin approval required."'
+                  description: '"Request from " + .owner + " for VM " + .vm_name + " in " + .environment + " (" + .os_image + ", " + (.cpu_cores|tostring) + " CPU, " + (.memory_gi|tostring) + "GiB RAM, zone: " + (.network_zone // "n/a") + "). Review the MR and click Approve in GitLab. Both app-owner and security-admin approval required."'
                   link: .merge_request_url
                   severity: normal
                   topic: VM Approval

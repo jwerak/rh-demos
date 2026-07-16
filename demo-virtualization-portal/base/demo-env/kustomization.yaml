@@ -6,3 +6,4 @@ resources:
   - namespaces.yaml
   - quotas.yaml
   - network-policies.yaml
+  - admin-network-policies.yaml

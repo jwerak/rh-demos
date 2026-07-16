@@ -1,0 +1,30 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ${{ values.vmName }}-zone
+  namespace: ${{ values.environment }}
+  labels:
+    app: ${{ values.vmName }}
+    network-zone: ${{ values.networkZone }}
+spec:
+  podSelector:
+    matchLabels:
+      kubevirt.io/domain: ${{ values.vmName }}
+  policyTypes:
+    - Ingress
+  ingress:
+{%- if values.networkZone == 'frontend' %}
+    - from:
+        - podSelector: {}
+{%- elif values.networkZone == 'backend' %}
+    - from:
+        - podSelector:
+            matchLabels:
+              network-zone: frontend
+{%- elif values.networkZone == 'database' %}
+    - from:
+        - podSelector:
+            matchLabels:
+              network-zone: backend
+{%- endif %}
