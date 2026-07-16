@@ -146,7 +146,7 @@ spec:
   output:
     links:
       - title: Repository
-        url: ${{ steps['publish'].output.remoteUrl }}
+        url: https://gitlab.__BASE_DOMAIN__/vm-instances/${{ parameters.vmName }}
       - title: Catalog Entry
         icon: catalog
         entityRef: ${{ steps['register'].output.entityRef }}

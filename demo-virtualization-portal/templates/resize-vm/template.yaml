@@ -191,9 +191,9 @@ spec:
           cpu_cores: ${{ parameters.cpuCores }}
           memory_gi: ${{ parameters.memoryGi }}
           owner: ${{ parameters.owner }}
-          merge_request_url: ${{ steps['create-mr'].output.mergeRequestUrl }}
+          merge_request_url: ${{ steps['create-mr'].output.mergeRequestUrl | replace("http://gitlab.gitlab.svc.cluster.local", "https://gitlab.__BASE_DOMAIN__") }}
 
   output:
     links:
       - title: Merge Request (Approval Required)
-        url: ${{ steps['create-mr'].output.mergeRequestUrl }}
+        url: ${{ steps['create-mr'].output.mergeRequestUrl | replace("http://gitlab.gitlab.svc.cluster.local", "https://gitlab.__BASE_DOMAIN__") }}

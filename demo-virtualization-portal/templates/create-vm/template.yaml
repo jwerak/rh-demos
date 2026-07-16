@@ -217,14 +217,14 @@ spec:
           memory_gi: ${{ parameters.memoryGi }}
           owner: ${{ parameters.owner }}
           project_id: ${{ steps['publish'].output.projectId }}
-          merge_request_url: ${{ steps['create-mr'].output.mergeRequestUrl }}
+          merge_request_url: ${{ steps['create-mr'].output.mergeRequestUrl | replace("http://gitlab.gitlab.svc.cluster.local", "https://gitlab.__BASE_DOMAIN__") }}
 
   output:
     links:
       - title: Merge Request (Approval Required)
-        url: ${{ steps['create-mr'].output.mergeRequestUrl }}
+        url: ${{ steps['create-mr'].output.mergeRequestUrl | replace("http://gitlab.gitlab.svc.cluster.local", "https://gitlab.__BASE_DOMAIN__") }}
       - title: Repository
-        url: ${{ steps['publish'].output.remoteUrl }}
+        url: https://gitlab.__BASE_DOMAIN__/vm-instances/${{ parameters.vmName }}
       - title: Catalog Entry
         icon: catalog
         entityRef: ${{ steps['register'].output.entityRef }}

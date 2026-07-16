@@ -32,7 +32,7 @@ spec:
               value: __GITLAB_ADMIN_PASSWORD__
             - name: GITLAB_OMNIBUS_CONFIG
               value: |
-                external_url 'https://gitlab.__BASE_DOMAIN__'
+                external_url 'http://gitlab.gitlab.svc.cluster.local'
                 nginx['listen_port'] = 80
                 nginx['listen_https'] = false
                 puma['worker_processes'] = 0
