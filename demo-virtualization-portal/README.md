@@ -138,22 +138,44 @@ echo "ArgoCD:   https://$(oc get route openshift-gitops-server -n openshift-gito
 
 ---
 
-## Two Catalog Items — Two Enforcement Mechanisms
-
-The portal has two VM creation templates, each demonstrating a different governance model:
+## Catalog Items and Enforcement Mechanisms
 
 | Template                         | Enforcement                       | How it works                                                                                |
 | -------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------- |
 | **Create Virtual Machine**       | MR-based approval (humans review) | Creates GitLab MR → app-owner + security-admin approve → merge → ArgoCD syncs → VM created  |
 | **Resize Virtual Machine**       | MR-based approval (humans review) | Creates MR with updated CPU/RAM/disk → approve → merge → ArgoCD syncs → VM live-resized     |
 | **Decommission Virtual Machine** | MR-based approval (humans review) | Creates MR that empties kustomization → approve → merge → ArgoCD prunes all K8s resources   |
+| **Request Network Exception**    | MR-based approval (humans review) | Creates MR with NetworkPolicy exception → security-admin approves → ArgoCD syncs exception  |
 | **Create VM (Policy Test)**      | Gatekeeper OPA (automated policy) | Publishes directly to main → ArgoCD syncs immediately → Gatekeeper webhook allows or denies |
+
+### Network Zone Architecture
+
+Each VM is assigned a **network zone** (frontend, backend, database) that controls which tiers can communicate:
+
+```
+AdminNetworkPolicy (cluster level, enforced by OVN-Kubernetes)
+  ✅ Allow: frontend → backend
+  ✅ Allow: backend → database
+  🔒 Pass:  frontend → database  →  delegates to namespace NetworkPolicy
+                                          │
+                            ┌──────────────┼──────────────┐
+                            │              │              │
+                       default-deny   exception NP    per-VM NP
+                       (blocks all)   (if approved)   (zone ingress)
+                            │              │
+                         DENIED        ALLOWED
+```
+
+- **AdminNetworkPolicy** enforces zone rules at the cluster level (cannot be bypassed by namespace admins)
+- **Default-deny-ingress** NetworkPolicy blocks all ingress in vm-dev/staging/prod namespaces
+- **Per-VM NetworkPolicy** opens ingress based on the VM's zone (created by the template)
+- **Exception NetworkPolicy** overrides the default deny for a specific VM and port (created via "Request Network Exception")
 
 ---
 
-## Demo Scenario A: MR-Based Approval (Create Virtual Machine)
+## Demo Scenario A: Standard VM Order (Create Virtual Machine)
 
-Shows the human approval workflow — two approvers must review and merge before the VM is provisioned.
+Shows the human approval workflow — requestor selects service from catalog, enters parameters including network zone, two approvers review the network segment and merge before the VM is provisioned.
 
 ### Steps
 
@@ -163,76 +185,165 @@ Shows the human approval workflow — two approvers must review and merge before
    - VM Name: `dev-web-01` (must match `prefix-name-number` format)
    - CPU: 2, Memory: 4 GiB, Disk: 30 GiB
    - OS Image: RHEL 9, Environment: Development
+   - **Network Zone: Backend** (application tier — accepts traffic from frontend only)
    - Owner: pick `vm-requestor`, Cost Center: CC-001
 4. Click **Create** — RHDH creates a GitLab repo and opens a Merge Request
-5. **Show the MR** — click the "Merge Request" link in the output
-   - The MR description shows a summary table of all requested parameters
-   - The MR diff shows the VM manifests (VirtualMachine, Service, Secret)
-6. **Login to GitLab** as `app-owner` → approve the MR
-7. **Login to GitLab** as `security-admin` → approve and merge the MR
-8. **Show ArgoCD** — within 30 seconds, ArgoCD discovers the new repo and syncs the VM
-9. **Verify**: `oc get vm -n vm-dev` — the VM is Running
+5. **Show the MR in GitLab** — click the "Merge Request" link in the output
+   - The MR description shows a summary table including the **Network Zone**
+   - Click **Changes** tab to show the diff:
+     - `virtualmachine.yaml` — VM with `network-zone: backend` label on both VM and pod template
+     - `networkpolicy.yaml` — NetworkPolicy allowing ingress **only from frontend zone**
+     - Other manifests (Service, Secret, ServiceMonitor, VirtualMachineSnapshot)
+6. **Login to GitLab** as `app-owner` → review the VM configuration and approve
+7. **Login to GitLab** as `security-admin` → review the **network zone and NetworkPolicy**, approve and merge
+8. **Show ArgoCD UI** — within 30 seconds, ArgoCD discovers the new repo and syncs
+   - Click application `vm-dev-web-01` → show the resource tree with VirtualMachine + NetworkPolicy
+9. **Show OpenShift Console** → **Networking** → **NetworkPolicies** in namespace `vm-dev`
+   - The per-VM zone policy `dev-web-01-zone` is visible with its ingress rules
+10. **Show RHDH catalog** → find `dev-web-01` entity
+    - Annotations show zone, CPU, RAM, environment
+    - Links: Resize VM, Decommission VM, Request Network Exception
 
 ### What to highlight
 
+- **Network zone selection** — requestor chooses the security zone, security-admin reviews the NetworkPolicy in the MR diff
+- **AdminNetworkPolicy** — cluster-level enforcement of zone traffic rules (show in OpenShift Console → **Networking** → **AdminNetworkPolicies**)
 - Git is the single source of truth — all changes go through Git
 - Two-person approval — no single person can provision a VM alone
 - Full audit trail in Git history — who requested, who approved, when
+- VM is registered in RHDH catalog with zone metadata (acts as lightweight CMDB)
 
 ---
 
-## Demo Scenario B: Resize VM (Resize Virtual Machine)
+## Demo Scenario B: Policy Violation and Network Exception
 
-Shows live VM resizing through the same MR-based approval workflow.
+Shows what happens when a VM needs access to a restricted network zone — the AdminNetworkPolicy blocks it, and the user requests an exception through the portal.
+
+### Prerequisites
+
+Create two VMs first (via Scenario A):
+- `dev-web-01` in **frontend** zone
+- `dev-db-01` in **database** zone
+
+### Steps — Show the Policy
+
+1. **Open OpenShift Console** → **Networking** → **AdminNetworkPolicies**
+   - Show `virt-portal-backend-ingress` — allows frontend → backend
+   - Show `virt-portal-database-ingress` — allows backend → database, **passes** frontend → database to namespace NetworkPolicy
+2. **Open OpenShift Console** → **Networking** → **NetworkPolicies** in `vm-dev`
+   - Show `default-deny-ingress` — blocks all ingress by default
+   - Show `dev-web-01-zone` — frontend VM, accepts all same-namespace traffic
+   - Show `dev-db-01-zone` — database VM, accepts only from backend zone
+3. **Explain the enforcement chain**:
+   - frontend → database: ANP says **Pass** → delegates to namespace NetworkPolicy → `default-deny-ingress` blocks → no exception exists → **traffic denied**
+   - "The frontend VM `dev-web-01` cannot reach the database VM `dev-db-01` — there is no NetworkPolicy that allows it"
+
+### Steps — Request an Exception
+
+4. **Navigate to** `dev-web-01` in the **RHDH catalog** → click **Request Network Exception**
+5. Fill in the form:
+   - Source VM: `dev-web-01` (pre-filled from catalog link)
+   - Target Zone: Database
+   - Port: 5432 (PostgreSQL)
+   - Environment: Development (pre-filled)
+   - Justification: "Frontend app needs direct DB access for health checks"
+6. Click **Create** — RHDH creates a GitLab repo and MR with the exception NetworkPolicy
+7. **Show the MR in GitLab** — click the "Merge Request" link
+   - The MR description shows the **justification** and a summary table
+   - Click **Changes** tab — the diff shows `networkpolicy-exception.yaml`:
+     - Selects destination pods with `network-zone: database`
+     - Allows ingress from pods with `kubevirt.io/domain: dev-web-01` on port 5432 only
+   - "Security-admin can see exactly which VM, which zone, and which port — nothing more"
+
+### Steps — Security Review
+
+8. **Login to GitLab** as `security-admin`
+   - Review the justification in the MR description
+   - Review the NetworkPolicy diff — verify the scope is minimal (one VM, one port)
+   - **Approve and merge** the MR (or close it to deny)
+
+### Steps — Show the Result
+
+9. **Show ArgoCD UI** — a new application `vm-dev-web-01-netexc-database` appears and syncs ✅
+10. **Show OpenShift Console** → **Networking** → **NetworkPolicies** in `vm-dev`
+    - A new policy `dev-web-01-to-database-exception` now exists
+    - Click it to show: allows `dev-web-01` → database zone on port 5432
+    - "This exception NetworkPolicy overrides the default-deny — the frontend VM can now reach the database zone on this specific port"
+11. **Show RHDH catalog** — a new entity `dev-web-01-netexc-database` of type `network-exception` is registered with all exception metadata
+
+### Steps — Revoke the Exception
+
+12. **Go to GitLab** → `vm-instances/dev-web-01-netexc-database` → **Settings** → **General** → **Advanced** → **Delete this project**
+13. **Show ArgoCD UI** — the application disappears within 30 seconds
+14. **Show OpenShift Console** → **NetworkPolicies** — the exception policy is gone
+    - "Traffic is blocked again — revoking an exception is as simple as deleting the repo"
+
+### What to highlight
+
+- **AdminNetworkPolicy** is OCP-native (OVN-Kubernetes) — cluster-admin controls which flows are always allowed, always denied, or exception-eligible
+- **Pass + default-deny** = blocked by default, but exceptions are possible via namespace NetworkPolicy
+- Exception goes through the **same MR-based approval** workflow — security-admin reviews the exact NetworkPolicy
+- Full audit trail: who requested the exception, why, who approved, when it was revoked
+- Revoking = deleting the repo → ArgoCD prunes → immediate effect
+
+---
+
+## Demo Scenario C: Change Existing Service (Resize Virtual Machine)
+
+Shows live VM resizing through the same MR-based approval workflow. Network zone is preserved.
 
 ### Steps
 
-1. **Navigate to a VM** in the RHDH catalog → click **Decommission VM** or **Resize VM** link on the entity page
-2. Or go to **Create** → select **Resize Virtual Machine**
-3. Fill in the VM name, then set new CPU/RAM/disk values
+1. **Navigate to a VM** in the **RHDH catalog** → click **Resize VM** link on the entity page
+   - Or go to **Create** → select **Resize Virtual Machine**
+2. The form opens with pre-filled values (VM name, environment, network zone — all read-only)
+3. Change the resource values: e.g. CPU: 4, Memory: 8 GiB
 4. Click **Create** — RHDH creates a MR that updates the VM manifests
-5. **Show the MR diff** — old vs new resource values are clearly visible
+5. **Show the MR in GitLab** — click the "Merge Request" link
+   - Click **Changes** tab — the diff shows updated CPU/RAM values in `virtualmachine.yaml`
+   - Note: `network-zone` label is preserved (unchanged)
 6. **Approve and merge** as `app-owner` / `security-admin`
-7. ArgoCD syncs the updated manifests → KubeVirt live-migrates the VM with new resources (no restart needed if hotplug prerequisites are met)
+7. **Show ArgoCD UI** — the existing application re-syncs with updated manifests
+8. **Show OpenShift Console** → **Virtualization** → **VirtualMachines** → `dev-web-01`
+   - VM shows updated CPU/RAM values (live-resize if hotplug prerequisites are met)
+9. **Show RHDH catalog** — the entity annotations are updated with new CPU/RAM values
 
 ---
 
-## Demo Scenario C: Decommission VM (Decommission Virtual Machine)
+## Demo Scenario D: Decommission Service (Decommission Virtual Machine)
 
 Shows the full VM lifecycle completion — retiring a VM through approval and GitOps pruning.
 
 ### Steps
 
-1. **Navigate to a VM** in the RHDH catalog → click the **Decommission VM** link on the entity page
-2. Or go to **Create** → select **Decommission Virtual Machine**
-3. Fill in the VM name, provide a reason, and confirm the backup checkbox
-4. Click **Create** — RHDH creates a MR that:
-   - Empties `vm-manifests/kustomization.yaml` (removes all resource references)
-   - Updates `catalog-info.yaml` to `lifecycle: decommissioned` with decommission metadata
-5. **Show the MR diff** — resources removed from kustomization, lifecycle changed
-6. **Approve and merge** as `app-owner` / `security-admin`
-7. ArgoCD syncs the empty kustomization → `prune: true` deletes all K8s resources (VM, Service, PVC, Secret, ServiceMonitor, VirtualMachineSnapshot)
-8. **RHDH catalog** shows the entity as decommissioned (historical record)
+1. **Navigate to a VM** in the **RHDH catalog** → click the **Decommission VM** link on the entity page
+   - Or go to **Create** → select **Decommission Virtual Machine**
+2. Fill in the VM name, provide a reason, and confirm the backup checkbox
+3. Click **Create** — RHDH creates a MR
+4. **Show the MR in GitLab** — click the "Merge Request" link
+   - Click **Changes** tab — the diff shows:
+     - `kustomization.yaml` → `resources: []` (all resource references removed)
+     - `catalog-info.yaml` → `lifecycle: decommissioned` with decommission metadata
+   - "When ArgoCD syncs the empty kustomization, `prune: true` deletes all Kubernetes resources"
+5. **Approve and merge** as `app-owner` / `security-admin`
+6. **Show ArgoCD UI** — the application syncs, all resources are pruned (VM, Service, PVC, Secret, ServiceMonitor, VirtualMachineSnapshot, NetworkPolicy)
+7. **Show OpenShift Console** → **Virtualization** → **VirtualMachines** in `vm-dev` — the VM is gone
+8. **Show RHDH catalog** — the entity remains with `lifecycle: decommissioned` (historical record)
 9. **Delete the GitLab repo** to remove the ArgoCD Application:
-   - **GUI**: GitLab → project → **Settings** → **General** → **Advanced** → **Delete this project**
-   - **CLI**:
-     ```bash
-     source .env
-     curl -ks -X DELETE -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-       "https://gitlab.${BASE_DOMAIN}/api/v4/projects/vm-instances%2F<vm-name>"
-     ```
-   Deletion is immediate — `seed-gitlab.sh` sets `deletion_adjourned_period` to 0 via rails runner (the API enforces min 1, but rails bypasses this).
+   - GitLab → project → **Settings** → **General** → **Advanced** → **Delete this project**
+   - Deletion is immediate
 
 ### What to highlight
 
 - Complete VM lifecycle: create → resize → decommission — all through Git
 - Decommission requires approval — same two-person rule as creation
+- ArgoCD prune removes all resources including NetworkPolicies and network exceptions
 - Audit trail preserved: Git history shows who decommissioned, when, and why
 - RHDH catalog entity remains as historical record with `lifecycle: decommissioned`
 
 ---
 
-## Demo Scenario D: Gatekeeper Policy Enforcement (Create VM — Policy Test)
+## Supplementary Demo: Gatekeeper Policy Enforcement (Create VM — Policy Test)
 
 Shows automated policy-as-code — Gatekeeper OPA blocks non-compliant VMs at the Kubernetes API level. No human approval needed; the policies enforce compliance automatically.
 
@@ -450,7 +561,7 @@ oc logs -n gitlab -l app=gitlab --tail=50
                   │     ArgoCD ApplicationSet       │
                   │  discovers new repos, syncs     │
                   └──────────┬─────────────────────┘
-                             │ oc apply (VirtualMachine CR)
+                             │ oc apply (VirtualMachine CR + NetworkPolicy)
                              ▼
               ┌──────────────────────────────────────────┐
               │          Kubernetes API Server            │
@@ -469,4 +580,18 @@ oc logs -n gitlab -l app=gitlab --tail=50
                      ▼                 ▼
               VM Created          ArgoCD SyncFailed
               (Running)           (error message)
+                     │
+                     ▼
+              ┌──────────────────────────────────────────┐
+              │     OVN-Kubernetes Network Enforcement    │
+              │                                          │
+              │  AdminNetworkPolicy (cluster-level):     │
+              │  ✅ frontend → backend    (Allow)         │
+              │  ✅ backend  → database   (Allow)         │
+              │  🔒 frontend → database   (Pass→NP→deny) │
+              │                                          │
+              │  Per-VM NetworkPolicy (namespace-level):  │
+              │  ✓ Zone-based ingress rules              │
+              │  ✓ Exception NPs for approved overrides  │
+              └──────────────────────────────────────────┘
 ```
