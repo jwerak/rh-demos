@@ -5,6 +5,10 @@ ansible-navigator.log
 # Environment files
 .env
 .env.local
+**/.env
+!**/.env.example
+!**/.env.sample
+
 
 # Vault files (if they contain real secrets)
 # Uncomment if vault.yml contains real secrets:

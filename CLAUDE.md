@@ -17,6 +17,7 @@ Collection of Red Hat technology demos. Each demo is self-contained in its own `
 | `demo-satellite-cloud-native/` | Cloud-native Satellite + IdM + RHEL clients on OpenShift Virtualization |
 | `demo-system-roles/` | RHEL System Roles: host registration, Cockpit, monitoring |
 | `demo-windows-vm/` | Windows Server golden image via Tekton pipeline on OpenShift Virtualization |
+| `demo-cve-remediation/` | AAP + Automation Orchestrator CVE remediation with Lightspeed MCP |
 
 ## Unified Deployment Controller
 
