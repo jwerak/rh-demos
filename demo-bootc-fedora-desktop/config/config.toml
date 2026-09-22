@@ -1,0 +1,26 @@
+[customizations.installer.kickstart]
+contents = """
+lang cs_CZ.UTF-8
+keyboard cz
+timezone Europe/Prague --utc
+
+text --non-interactive
+zerombr
+clearpart --all --initlabel --disklabel=gpt
+autopart --noswap --type=lvm
+network --bootproto=dhcp --device=link --activate --onboot=on
+rootpw --lock
+reboot --eject
+
+# A text install sets the deployed system to multi-user.target and that
+# /etc symlink hides the image default of graphical.target.
+%post
+ln -sfn /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.target
+systemctl enable gdm.service
+%end
+"""
+
+# The kiosk user is created in the container image. Leave Anaconda's user
+# module off so the non-interactive install does not stop to ask for one.
+[customizations.installer.modules]
+disable = ["org.fedoraproject.Anaconda.Modules.Users"]

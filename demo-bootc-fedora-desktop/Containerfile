@@ -1,0 +1,40 @@
+FROM quay.io/fedora/fedora-bootc:44
+
+RUN dnf -y install --exclude=gnome-initial-setup --exclude=gnome-tour \
+        gnome-shell \
+        gnome-session \
+        gnome-session-wayland-session \
+        gnome-control-center \
+        gdm \
+        mpv \
+        mesa-dri-drivers \
+        glibc-langpack-cs \
+        dconf \
+    && dnf clean all \
+    && useradd --no-create-home --no-log-init --user-group --groups wheel --comment 'Video kiosk' kiosk \
+    && echo 'kiosk:kiosk' | chpasswd \
+    && rm -f /var/spool/mail/kiosk \
+    && passwd -l root \
+    && printf 'LANG=cs_CZ.UTF-8\n' > /etc/locale.conf \
+    && printf 'KEYMAP=cz\n' > /etc/vconsole.conf \
+    && ln -sf /usr/share/zoneinfo/Europe/Prague /etc/localtime \
+    && find /var/log -type f -delete
+
+COPY --chmod=0644 config/gdm-custom.conf /etc/gdm/custom.conf
+COPY --chmod=0644 config/systemd/video-loop.service /usr/lib/systemd/user/video-loop.service
+COPY config/gnome-shell/no-overview@kiosk/ /usr/share/gnome-shell/extensions/no-overview@kiosk/
+COPY --chmod=0644 config/dconf/profile/user /etc/dconf/profile/user
+COPY --chmod=0644 config/dconf/db/local.d/00-kiosk /etc/dconf/db/local.d/00-kiosk
+COPY --chmod=0644 config/dconf/db/local.d/locks/00-kiosk /etc/dconf/db/local.d/locks/00-kiosk
+# /var is machine-local and is not deployed from the container image.
+COPY --chmod=0644 config/tmpfiles/kiosk-home.conf /usr/lib/tmpfiles.d/kiosk-home.conf
+COPY videos/ /usr/local/share/videos/
+
+RUN find /usr/local/share/videos -type d -exec chmod 0755 {} + \
+    && find /usr/local/share/videos -type f -exec chmod 0644 {} + \
+    && dconf update \
+    && mkdir -p /usr/lib/systemd/user/graphical-session.target.wants \
+    && ln -sf ../video-loop.service /usr/lib/systemd/user/graphical-session.target.wants/video-loop.service \
+    && systemctl set-default graphical.target \
+    && systemctl enable gdm.service \
+    && bootc container lint

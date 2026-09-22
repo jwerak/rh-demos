@@ -1,0 +1,7 @@
+{
+  "uuid": "no-overview@kiosk",
+  "name": "No Overview",
+  "description": "Keep the session on a single desktop without the overview or dash.",
+  "shell-version": ["50"],
+  "session-modes": ["user"]
+}

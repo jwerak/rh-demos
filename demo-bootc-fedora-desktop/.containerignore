@@ -1,0 +1,7 @@
+output/
+videos/.gitkeep
+.git
+.gitignore
+README.md
+CLAUDE.md
+scripts/
