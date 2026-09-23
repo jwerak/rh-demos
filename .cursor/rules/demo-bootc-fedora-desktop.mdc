@@ -1,0 +1,13 @@
+---
+description: Prefer AGENTS.md + bootc-fedora-desktop skill when working in this demo
+globs: demo-bootc-fedora-desktop/**
+alwaysApply: false
+---
+
+# demo-bootc-fedora-desktop
+
+When editing or running anything under `demo-bootc-fedora-desktop/`:
+
+1. Read `demo-bootc-fedora-desktop/AGENTS.md` (canonical; `CLAUDE.md` is a symlink).
+2. Follow the `bootc-fedora-desktop` skill for build / ISO / qcow2 / libvirt workflows.
+3. Prefer the scripts in `scripts/` over ad-hoc podman or virt-install commands.

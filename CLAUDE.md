@@ -37,7 +37,15 @@ Available demo names: `aiops`, `demo-acm-policies`, `demo-containerfile`, `demo-
 
 ## Conventions
 
-- Each demo has its own README.md (human docs) and CLAUDE.md (agent context)
+- Each demo has its own README.md (human docs) and agent context (`AGENTS.md` preferred; `CLAUDE.md` may be a symlink to it for Claude Code)
+- Task workflows that should auto-trigger live as project skills under the demo’s `.cursor/skills/` and are registered at repo root via symlink into `.cursor/skills/` (and `.claude/skills/` when Claude Code should see them too)
 - Credentials go in `.env` (copied from `.env.sample`, gitignored)
 - Most OpenShift demos use kustomize base/overlay patterns
 - Ansible demos use `ansible-navigator` with containerized execution environments
+
+## Project skills
+
+| Skill | Demo |
+|---|---|
+| `bootc-fedora-desktop` | `demo-bootc-fedora-desktop/` |
+| `cve-remediation-demo` | `demo-cve-remediation/` |
