@@ -1,8 +1,8 @@
 output/
-videos/
 .git
 .gitignore
 README.md
 CLAUDE.md
 scripts/
-Containerfile.videos
+Containerfile
+videos/.gitkeep

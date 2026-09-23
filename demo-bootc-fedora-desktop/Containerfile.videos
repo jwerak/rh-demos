@@ -1,0 +1,10 @@
+# Final image: base desktop plus videos from videos/.
+# Build the base first: ./scripts/build-base.sh [image-name]
+ARG BASE_IMAGE=localhost/fedora-desktop-bootc-base:latest
+FROM ${BASE_IMAGE}
+
+COPY videos/ /usr/local/share/videos/
+
+RUN find /usr/local/share/videos -type d -exec chmod 0755 {} + \
+    && find /usr/local/share/videos -type f -exec chmod 0644 {} + \
+    && bootc container lint

@@ -34,7 +34,7 @@ qcow2)
 	name="fedora-desktop-bootc"
 	disk="${root}/output/qcow2/disk.qcow2"
 	if [[ ! -f "${disk}" ]]; then
-		echo "error: missing ${disk}. Run scripts/build-images.sh first." >&2
+		echo "error: missing ${disk}. Run ./scripts/build-images.sh qcow2 first." >&2
 		exit 1
 	fi
 	require_absent "${name}"
@@ -46,18 +46,21 @@ qcow2)
 	;;
 iso)
 	name="fedora-desktop-bootc-install"
-	mapfile -d '' isos < <(find "${root}/output" -type f -name '*.iso' -print0)
-	if ((${#isos[@]} == 0)); then
-		echo "error: no ISO under ${root}/output. Run scripts/build-images.sh first." >&2
-		exit 1
-	fi
-	iso="${isos[0]}"
-	for candidate in "${isos[@]}"; do
-		if [[ "${candidate}" == */install.iso ]]; then
-			iso="${candidate}"
-			break
+	iso="${root}/output/iso/install.iso"
+	if [[ ! -f "${iso}" ]]; then
+		mapfile -d '' isos < <(find "${root}/output" -type f -name '*.iso' -print0)
+		if ((${#isos[@]} == 0)); then
+			echo "error: no ISO under ${root}/output. Run ./scripts/build-images.sh iso first." >&2
+			exit 1
 		fi
-	done
+		iso="${isos[0]}"
+		for candidate in "${isos[@]}"; do
+			if [[ "${candidate}" == */install.iso ]]; then
+				iso="${candidate}"
+				break
+			fi
+		done
+	fi
 	require_absent "${name}"
 	mkdir -p "${root}/output/install"
 	disk="${root}/output/install/disk.qcow2"

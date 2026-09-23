@@ -18,6 +18,7 @@ RUN dnf -y install --exclude=gnome-initial-setup --exclude=gnome-tour \
     && printf 'LANG=cs_CZ.UTF-8\n' > /etc/locale.conf \
     && printf 'KEYMAP=cz\n' > /etc/vconsole.conf \
     && ln -sf /usr/share/zoneinfo/Europe/Prague /etc/localtime \
+    && mkdir -p /usr/local/share/videos \
     && find /var/log -type f -delete
 
 COPY --chmod=0644 config/gdm-custom.conf /etc/gdm/custom.conf
@@ -28,11 +29,8 @@ COPY --chmod=0644 config/dconf/db/local.d/00-kiosk /etc/dconf/db/local.d/00-kios
 COPY --chmod=0644 config/dconf/db/local.d/locks/00-kiosk /etc/dconf/db/local.d/locks/00-kiosk
 # /var is machine-local and is not deployed from the container image.
 COPY --chmod=0644 config/tmpfiles/kiosk-home.conf /usr/lib/tmpfiles.d/kiosk-home.conf
-COPY videos/ /usr/local/share/videos/
 
-RUN find /usr/local/share/videos -type d -exec chmod 0755 {} + \
-    && find /usr/local/share/videos -type f -exec chmod 0644 {} + \
-    && dconf update \
+RUN dconf update \
     && mkdir -p /usr/lib/systemd/user/graphical-session.target.wants \
     && ln -sf ../video-loop.service /usr/lib/systemd/user/graphical-session.target.wants/video-loop.service \
     && systemctl set-default graphical.target \
