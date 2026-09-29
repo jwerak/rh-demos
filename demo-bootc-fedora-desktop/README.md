@@ -24,7 +24,7 @@ The base image has GNOME, GDM autologin as `kiosk`, the video-loop service, and 
 ```bash
 ./scripts/build-base.sh
 # optional custom tag:
-# ./scripts/build-base.sh registry.example.com/fedora-desktop-bootc-base:1.0
+# ./scripts/build-base.sh quay.io/jwerak/fedora-desktop-bootc-kiosk-base:latest
 ```
 
 Default tag is `localhost/fedora-desktop-bootc-base:latest`.
@@ -49,7 +49,7 @@ Then build the final container (base + videos) and one disk artifact:
 
 # custom tags and artifact path:
 ./scripts/build-images.sh qcow2 \
-  --base registry.example.com/fedora-desktop-bootc-base:1.0 \
+  --base quay.io/jwerak/fedora-desktop-bootc-kiosk-base:latest \
   --name registry.example.com/fedora-desktop-bootc:1.0 \
   --output ./demo-desktop.qcow2
 ```
