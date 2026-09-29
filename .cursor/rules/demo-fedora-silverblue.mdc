@@ -1,0 +1,13 @@
+---
+description: Prefer AGENTS.md + fedora-silverblue skill when working in this demo
+globs: demo-fedora-silverblue/**
+alwaysApply: false
+---
+
+# demo-fedora-silverblue
+
+When editing or running anything under `demo-fedora-silverblue/`:
+
+1. Read `demo-fedora-silverblue/AGENTS.md` (canonical; `CLAUDE.md` is a symlink).
+2. Follow the `fedora-silverblue` skill for ISO download, kickstart install, and the Déjà Dup fusermount repro.
+3. Prefer the scripts in `scripts/` over ad-hoc virt-install commands.

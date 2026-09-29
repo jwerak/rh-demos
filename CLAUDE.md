@@ -11,6 +11,7 @@ Collection of Red Hat technology demos. Each demo is self-contained in its own `
 | `demo-aiops/` | AIOps: AAP workflow setup + AI ops assistant agent on OpenShift |
 | `demo-containerfile/` | Manifest-driven tar archive file copying into container images |
 | `demo-bootc-fedora-desktop/` | bootc Fedora desktop: kickstart ISO, libvirt qcow2, fullscreen video loop |
+| `demo-fedora-silverblue/` | Fedora Silverblue 44 libvirt install and Déjà Dup restic fusermount repro |
 | `demo-hybrid-app/` | Hybrid cloud: KubeVirt VM (PostgreSQL) + containers (Frontend, Backend, Redis) |
 | `demo-network-manager/` | RHEL 10 NetworkManager IP alias management via Ansible |
 | `demo-podman-build-push-run/` | Basic podman build/push/run workflow |
@@ -48,4 +49,5 @@ Available demo names: `aiops`, `demo-acm-policies`, `demo-containerfile`, `demo-
 | Skill | Demo |
 |---|---|
 | `bootc-fedora-desktop` | `demo-bootc-fedora-desktop/` |
+| `fedora-silverblue` | `demo-fedora-silverblue/` |
 | `cve-remediation-demo` | `demo-cve-remediation/` |
