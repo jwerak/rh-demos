@@ -1,0 +1,14 @@
+---
+- name: Delete the short-lived AAP gateway token
+  ansible.builtin.uri:
+    url: "{{ lookup('env', 'CONTROLLER_HOST') }}/api/gateway/v1/tokens/{{ ao_controller_token_id }}/"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ ao_controller_token }}"
+    validate_certs: false
+    status_code: [202, 204, 404]
+  when:
+    - ao_controller_token_owned | default(false) | bool
+    - ao_controller_token_id is defined
+  no_log: true
+  failed_when: false

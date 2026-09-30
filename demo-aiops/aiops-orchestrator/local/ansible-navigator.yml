@@ -1,0 +1,17 @@
+---
+ansible-navigator:
+  # The supported AAP execution environment needs `podman login registry.redhat.io`.
+  # This workstation already has ansible.controller 4.6.x, so run without an EE.
+  execution-environment:
+    enabled: false
+  mode: stdout
+  ansible:
+    config:
+      path: ansible.cfg
+    inventory:
+      entries:
+        - inventory/localhost.yml
+  logging:
+    level: warning
+    append: false
+    file: /tmp/aiops-orchestrator-navigator.log

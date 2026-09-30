@@ -1,0 +1,80 @@
+---
+# Launch the Product Demos AWS job templates that already exist on the lab AAP.
+# Run from aiops-orchestrator/local with ansible-navigator. See README.md.
+- name: Provision AO lab RHEL nodes through existing AAP templates
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  environment:
+    CONTROLLER_VERIFY_SSL: "false"
+  vars_files:
+    - vars/rhel-nodes.yml
+  vars:
+    ao_create_vpc: true
+    ao_create_keypair: true
+
+  tasks:
+    - name: Require controller credentials from the environment
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'CONTROLLER_HOST') | length > 0
+          - lookup('env', 'CONTROLLER_USERNAME') | length > 0
+          - lookup('env', 'CONTROLLER_PASSWORD') | length > 0
+        fail_msg: >-
+          Source aiops-orchestrator/.env and pass CONTROLLER_HOST,
+          CONTROLLER_USERNAME, and CONTROLLER_PASSWORD to ansible-navigator
+          with --penv.
+
+    - name: Create a gateway token
+      ansible.builtin.include_tasks: tasks/create-gateway-token.yml
+
+    - name: Launch cloud templates
+      block:
+        - name: Launch Cloud | AWS | Create VPC
+          ansible.controller.job_launch:
+            job_template: "Cloud | AWS | Create VPC"
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            extra_vars:
+              create_vm_aws_region: "{{ ao_aws_region }}"
+              aws_owner_tag: "{{ ao_aws_owner }}"
+            wait: true
+            timeout: 900
+            validate_certs: false
+          when: ao_create_vpc | bool
+
+        - name: Launch Cloud | AWS | Create Keypair
+          ansible.controller.job_launch:
+            job_template: "Cloud | AWS | Create Keypair"
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            extra_vars:
+              create_vm_aws_region: "{{ ao_aws_region }}"
+              aws_key_name: "{{ ao_aws_keypair }}"
+            wait: true
+            timeout: 600
+            validate_certs: false
+          when: ao_create_keypair | bool
+
+        - name: Launch Cloud | AWS | Create VM for each node
+          ansible.controller.job_launch:
+            job_template: "Cloud | AWS | Create VM"
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            extra_vars:
+              create_vm_aws_region: "{{ ao_aws_region }}"
+              create_vm_vm_name: "{{ item.name }}"
+              create_vm_vm_owner: "{{ ao_aws_owner }}"
+              create_vm_vm_deployment: ao-lab
+              create_vm_vm_purpose: "{{ item.purpose }}"
+              create_vm_vm_environment: "{{ item.environment }}"
+              vm_blueprint: rhel9
+              create_vm_aws_vpc_subnet_name: "{{ ao_aws_subnet }}"
+              create_vm_aws_securitygroup_name: "{{ ao_aws_sg }}"
+              create_vm_aws_keypair_name: "{{ ao_aws_keypair }}"
+            wait: true
+            timeout: 1800
+            validate_certs: false
+          loop: "{{ ao_nodes }}"
+          loop_control:
+            label: "{{ item.name }}"
+      always:
+        - name: Delete the gateway token
+          ansible.builtin.include_tasks: tasks/delete-gateway-token.yml

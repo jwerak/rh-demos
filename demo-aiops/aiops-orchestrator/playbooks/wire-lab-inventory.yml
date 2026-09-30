@@ -1,0 +1,127 @@
+---
+# Sync the Product Demos AWS inventory and copy cve-node* into lab-inventory.
+- name: Wire AO lab inventory from AWS inventory
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  environment:
+    CONTROLLER_VERIFY_SSL: "false"
+  vars_files:
+    - vars/rhel-nodes.yml
+  vars:
+    ao_source_inventory: Ansible Product Demos Inventory
+    ao_target_inventory: lab-inventory
+
+  tasks:
+    - name: Require controller credentials from the environment
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'CONTROLLER_HOST') | length > 0
+          - lookup('env', 'CONTROLLER_USERNAME') | length > 0
+          - (lookup('env', 'CONTROLLER_PASSWORD') | length > 0) or (lookup('env', 'CONTROLLER_OAUTH_TOKEN') | length > 0)
+        fail_msg: >-
+          Source aiops-orchestrator/.env and pass CONTROLLER_HOST,
+          CONTROLLER_USERNAME, and CONTROLLER_PASSWORD to ansible-navigator
+          with --penv.
+
+    - name: Create a gateway token
+      ansible.builtin.include_tasks: tasks/create-gateway-token.yml
+
+    - name: Wire hosts
+      block:
+        - name: Ensure lab-inventory exists
+          ansible.controller.inventory:
+            name: "{{ ao_target_inventory }}"
+            organization: "{{ ao_organization }}"
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            state: present
+            validate_certs: false
+
+        - name: Sync AWS inventory source
+          ansible.controller.inventory_source_update:
+            name: AWS Inventory
+            inventory: "{{ ao_source_inventory }}"
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            wait: true
+            timeout: 300
+            validate_certs: false
+
+        - name: Find the Product Demos inventory id
+          ansible.builtin.uri:
+            url: "{{ lookup('env', 'CONTROLLER_HOST') }}/api/controller/v2/inventories/?name={{ ao_source_inventory | urlencode }}"
+            headers:
+              Authorization: "Bearer {{ ao_controller_token }}"
+            validate_certs: false
+            status_code: [200]
+          register: ao_source_inventory_lookup
+
+        - name: Look up AWS hosts by Name tag
+          ansible.builtin.uri:
+            url: "{{ lookup('env', 'CONTROLLER_HOST') }}/api/controller/v2/inventories/{{ ao_source_inventory_lookup.json.results[0].id }}/hosts/?name={{ item.name | urlencode }}"
+            headers:
+              Authorization: "Bearer {{ ao_controller_token }}"
+            validate_certs: false
+            status_code: [200]
+          loop: "{{ ao_nodes }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: ao_aws_hosts
+
+        - name: Fail when an AWS host is missing
+          ansible.builtin.fail:
+            msg: >-
+              Host {{ item.item.name }} is not in {{ ao_source_inventory }}.
+              Run playbooks/provision-rhel-nodes.yml first. The AWS inventory
+              only imports running instances tagged managed-by=aap-product-demos
+              and apd=true, and it names hosts from the Name tag.
+          when: item.json.count | default(0) | int == 0
+          loop: "{{ ao_aws_hosts.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+
+        - name: Record host variables from AWS inventory
+          ansible.builtin.set_fact:
+            ao_resolved_hosts: "{{ ao_resolved_hosts | default([]) + [resolved] }}"
+          vars:
+            aws_host_vars: "{{ item.json.results[0].variables | from_yaml }}"
+            resolved:
+              lab_name: "{{ item.item.lab_name }}"
+              aws_name: "{{ item.item.name }}"
+              ansible_host: "{{ aws_host_vars.ansible_host | default('') }}"
+              ansible_user: "{{ aws_host_vars.ansible_user | default('ec2-user') }}"
+              variables: "{{ item.item.variables }}"
+          loop: "{{ ao_aws_hosts.results }}"
+          loop_control:
+            label: "{{ item.item.lab_name }}"
+          when: item.json.count | default(0) | int > 0
+
+        - name: Fail when a public IP is missing
+          ansible.builtin.fail:
+            msg: "AWS host {{ item.aws_name }} has no ansible_host (public IP)."
+          when: item.ansible_host | length == 0
+          loop: "{{ ao_resolved_hosts }}"
+          loop_control:
+            label: "{{ item.aws_name }}"
+
+        - name: Upsert lab-inventory hosts
+          ansible.controller.host:
+            name: "{{ item.lab_name }}"
+            inventory: "{{ ao_target_inventory }}"
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            state: present
+            variables: "{{ host_vars }}"
+            validate_certs: false
+          vars:
+            host_vars:
+              env: "{{ item.variables.env }}"
+              role: "{{ item.variables.role }}"
+              criticality: "{{ item.variables.criticality }}"
+              ansible_host: "{{ item.ansible_host }}"
+              ansible_user: "{{ item.ansible_user }}"
+              aws_instance_name: "{{ item.aws_name }}"
+          loop: "{{ ao_resolved_hosts }}"
+          loop_control:
+            label: "{{ item.lab_name }}"
+      always:
+        - name: Delete the gateway token
+          ansible.builtin.include_tasks: tasks/delete-gateway-token.yml

@@ -1,0 +1,107 @@
+# AIOps - Automation Orchestrator
+
+Stand up Automation Orchestrator (AO) and run the workflows from the [Automation Orchestrator demos](https://ansible-tmm.github.io/aap-orchestrator-demos/) catalog.
+
+Scenario write-ups live in [ansible-tmm/aap-orchestrator-demos](https://github.com/ansible-tmm/aap-orchestrator-demos). Each card on the catalog site links to its own guide. The RHEL CVE scenario is already implemented in this repo as [demo-cve-remediation](../../demo-cve-remediation/).
+
+Two ways to get AO:
+
+1. **Product Demos lab** (Red Hat Demo Platform) — the path used for these notes.
+2. **Local `aap-demo`** — not tried here. Upstream documents a 16 GB CRC VM as the default.
+
+## Product Demos lab
+
+Order the lab from the [product-demos catalog item](https://catalog.demo.redhat.com/catalog/all?search=product-demos&item=babylon-catalog-prod%2Fenterprise.aap-product-demos-cnv-aap25.prod).
+
+Walkthrough video: [How to run the AO demo](https://drive.google.com/file/d/1PcyEPkJ6nfOMoSuOzQL2QoqJtpiAXAFj/view).
+
+In the lab AAP, launch these job templates in order:
+
+1. **APD | Single demo setup**, use case **infrastructure**. Wait until the job finishes.
+2. **Infrastructure | Automation Orchestrator | Install**.
+
+The install job output contains the AO URL and login. Copy those into `.env`:
+
+```bash
+cp .env.sample .env
+```
+
+On the current lab (`cluster-472rl`) both of those jobs have already succeeded: `APD | Single demo setup` with use case `infrastructure`, then `Infrastructure | Automation Orchestrator | Install` on the `stable` channel. The three RHEL nodes are in `lab-inventory`.
+
+## RHEL nodes
+
+The cloud job templates are already on this AAP. They use the `AWS` and `APD Machine Credential` credentials. `Cloud | AWS | Create VM` tags instances so the `AWS Inventory` source can import them (`managed-by=aap-product-demos`, `apd=true`, hostname from the Name tag, `ansible_host` from the public IP, user `ec2-user`).
+
+| Template | Survey variables this setup sends |
+|---|---|
+| `Cloud \| AWS \| Create VPC` | `create_vm_aws_region=us-east-2`, `aws_owner_tag=ao-demo` |
+| `Cloud \| AWS \| Create Keypair` | `create_vm_aws_region=us-east-2`, `aws_key_name=aws-test-key` |
+| `Cloud \| AWS \| Create VM` | one launch each for `cve-node1` (Dev), `cve-node2` (Prod), `cve-node3` (Prod), blueprint `rhel9` |
+
+`playbooks/wire-lab-inventory.yml` then syncs AWS inventory and writes `lab-inventory` in organization `Ansible Product Demos (APD)`:
+
+| AWS Name tag | Host | env | role | criticality |
+|---|---|---|---|---|
+| cve-node1 | node1 | dev | webserver | low |
+| cve-node2 | node2 | production | application_server | high |
+| cve-node3 | node3 | production | database | critical |
+
+`.env` has `RHSM_ORG_ID`, `RHSM_ACTIVATION_KEY`, and the MaaS model (`AO_MODEL_BASE_URL`, `AO_MODEL_NAME`, `AO_MODEL_ACCESS_TOKEN`). The SSH private key for `aws-test-key` stays inside the AAP credential `APD Machine Credential`. Registration runs as a controller job with that credential, so a local copy of the key is not required.
+
+`playbooks/configure-aap.yml` creates the controller objects for that path:
+
+- credential type and credential `AO Lab RHSM` (injects `RHSM_ORG_ID` and `RHSM_ACTIVATION_KEY`)
+- inventory `AO Orchestrator Localhost`
+- git project `AO Orchestrator` (`https://github.com/jwerak/rh-demos.git`, branch `master`)
+- job template `AO Lab | Wire inventory` (playbook `wire-lab-inventory.yml`, credential `AAP Credential`)
+- job template `AO Lab | Register nodes` (playbook `register-rhel-nodes.yml`, credentials `APD Machine Credential` and `AO Lab RHSM`)
+- workflow `AO Lab | Provision and register`: Create VPC, Create Keypair, three Create VM nodes, then wire, then register
+
+`playbooks/register-rhel-nodes.yml` runs on `lab-inventory`. It removes the AWS RHUI client (these are hourly RHEL images), then applies `redhat.rhel_system_roles.rhc`. That role registers with the activation key and connects Insights. Remediation stays off. The controller project sync installs the collection from `collections/requirements.yml` at the repository root.
+
+`local/ansible-navigator.yml` runs without an execution environment. The supported AAP image on `registry.redhat.io` needs `podman login` first; this machine already has the `ansible.controller` collection. That collection's token call to `/api/controller/v2/tokens/` returns 404 on this gateway, so the local playbooks create a short-lived token at `/api/gateway/v1/tokens/` and delete it when the play finishes.
+
+```bash
+cd demo-aiops/aiops-orchestrator
+set -a && source .env && set +a
+cd local
+ansible-navigator run ../playbooks/configure-aap.yml \
+  --penv CONTROLLER_HOST --penv CONTROLLER_USERNAME --penv CONTROLLER_PASSWORD \
+  --penv RHSM_ORG_ID --penv RHSM_ACTIVATION_KEY \
+  -e ao_launch_workflow=true
+```
+
+`ao_launch_workflow` defaults to false, which only creates the objects. The same playbook can be re-run safely.
+
+The older local launchers still work for the cloud templates and inventory wiring:
+
+```bash
+ansible-navigator run ../playbooks/provision-rhel-nodes.yml \
+  --penv CONTROLLER_HOST --penv CONTROLLER_USERNAME --penv CONTROLLER_PASSWORD
+ansible-navigator run ../playbooks/wire-lab-inventory.yml \
+  --penv CONTROLLER_HOST --penv CONTROLLER_USERNAME --penv CONTROLLER_PASSWORD
+```
+
+Skip VPC or keypair creation when they already exist: `-e ao_create_vpc=false -e ao_create_keypair=false`.
+
+Scenario write-ups stay on the [catalog](https://ansible-tmm.github.io/aap-orchestrator-demos/).
+
+## Local aap-demo
+
+[RedHatOfficial/aap-demo](https://github.com/RedHatOfficial/aap-demo) deploys AAP on a local MicroShift (CRC) cluster and has an AO addon. This path has not been run from this repo. Upstream sets the CRC VM to 16 GB RAM by default (`CRC_MEMORY=16384`).
+
+```bash
+git clone https://github.com/RedHatOfficial/aap-demo.git
+cd aap-demo && ./install.sh
+aap-demo deploy
+aap-demo enable ao
+aap-demo status
+```
+
+`aap-demo enable ao` asks for an LLM provider (local Ollama, an external OpenAI-compatible endpoint, or none). Agentic scenarios need a provider. The addon wires AAP and the MCP server, and can import the TMM workflow exports. Addon details: [addons/ao/README.md](https://github.com/RedHatOfficial/aap-demo/blob/main/addons/ao/README.md).
+
+Raise memory before `aap-demo create` if the default VM is tight:
+
+```bash
+CRC_MEMORY=24576 aap-demo create
+```

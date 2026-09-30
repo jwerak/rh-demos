@@ -1,0 +1,32 @@
+---
+- name: Use a controller token injected by the AAP credential
+  ansible.builtin.set_fact:
+    ao_controller_token: "{{ lookup('env', 'CONTROLLER_OAUTH_TOKEN') }}"
+    ao_controller_token_owned: false
+  when: lookup('env', 'CONTROLLER_OAUTH_TOKEN') | length > 0
+  no_log: true
+
+- name: Create a short-lived AAP gateway token
+  ansible.builtin.uri:
+    url: "{{ lookup('env', 'CONTROLLER_HOST') }}/api/gateway/v1/tokens/"
+    method: POST
+    url_username: "{{ lookup('env', 'CONTROLLER_USERNAME') }}"
+    url_password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      description: aiops-orchestrator navigator
+      scope: write
+    validate_certs: false
+    status_code: [201]
+  register: ao_gateway_token
+  when: ao_controller_token is not defined
+  no_log: true
+
+- name: Store the gateway token for controller modules
+  ansible.builtin.set_fact:
+    ao_controller_token: "{{ ao_gateway_token.json.token }}"
+    ao_controller_token_id: "{{ ao_gateway_token.json.id }}"
+    ao_controller_token_owned: true
+  when: ao_controller_token is not defined
+  no_log: true

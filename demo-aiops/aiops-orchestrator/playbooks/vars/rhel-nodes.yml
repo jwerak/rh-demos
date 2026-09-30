@@ -1,0 +1,32 @@
+---
+ao_organization: Ansible Product Demos (APD)
+ao_aws_region: us-east-2
+ao_aws_owner: ao-demo
+ao_aws_keypair: aws-test-key
+ao_aws_subnet: aws-test-subnet
+ao_aws_sg: aws-test-sg
+ao_nodes:
+  - name: cve-node1
+    environment: Dev
+    purpose: cve-dev-webserver
+    lab_name: node1
+    variables:
+      env: dev
+      role: webserver
+      criticality: low
+  - name: cve-node2
+    environment: Prod
+    purpose: cve-prod-appserver
+    lab_name: node2
+    variables:
+      env: production
+      role: application_server
+      criticality: high
+  - name: cve-node3
+    environment: Prod
+    purpose: cve-prod-database
+    lab_name: node3
+    variables:
+      env: production
+      role: database
+      criticality: critical

@@ -1,0 +1,261 @@
+---
+# Create the AAP project, RHSM credential, job templates, and workflow.
+# Run from aiops-orchestrator/local. Secrets come from the environment, not git.
+- name: Configure AAP for the AO lab nodes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars/rhel-nodes.yml
+  vars:
+    ao_project_name: AO Orchestrator
+    ao_project_url: https://github.com/jwerak/rh-demos.git
+    ao_project_branch: master
+    ao_local_inventory: AO Orchestrator Localhost
+    ao_lab_inventory: lab-inventory
+    ao_credential_type: AO Lab RHSM
+    ao_rhsm_credential: AO Lab RHSM
+    ao_machine_credential: APD Machine Credential
+    ao_aap_credential: AAP Credential
+    ao_workflow_name: AO Lab | Provision and register
+    ao_wire_template: AO Lab | Wire inventory
+    ao_register_template: AO Lab | Register nodes
+    ao_launch_workflow: false
+
+  tasks:
+    - name: Require controller and RHSM settings from the environment
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'CONTROLLER_HOST') | length > 0
+          - lookup('env', 'CONTROLLER_USERNAME') | length > 0
+          - lookup('env', 'CONTROLLER_PASSWORD') | length > 0
+          - lookup('env', 'RHSM_ORG_ID') | length > 0
+          - lookup('env', 'RHSM_ACTIVATION_KEY') | length > 0
+        fail_msg: >-
+          Source aiops-orchestrator/.env and pass CONTROLLER_HOST,
+          CONTROLLER_USERNAME, CONTROLLER_PASSWORD, RHSM_ORG_ID, and
+          RHSM_ACTIVATION_KEY to ansible-navigator with --penv.
+
+    - name: Create a gateway token
+      ansible.builtin.include_tasks: tasks/create-gateway-token.yml
+
+    - name: Configure controller objects
+      block:
+        - name: Ensure the RHSM credential type
+          ansible.controller.credential_type:
+            name: "{{ ao_credential_type }}"
+            description: Injects RHSM org id and activation key into job environments
+            kind: cloud
+            inputs:
+              fields:
+                - id: rhsm_org_id
+                  type: string
+                  label: Organization ID
+                - id: rhsm_activation_key
+                  type: string
+                  label: Activation key
+                  secret: true
+              required:
+                - rhsm_org_id
+                - rhsm_activation_key
+            injectors:
+              env:
+                RHSM_ORG_ID: "{{ '{{' }} rhsm_org_id {{ '}}' }}"
+                RHSM_ACTIVATION_KEY: "{{ '{{' }} rhsm_activation_key {{ '}}' }}"
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+
+        - name: Ensure the RHSM credential
+          ansible.controller.credential:
+            name: "{{ ao_rhsm_credential }}"
+            organization: "{{ ao_organization }}"
+            credential_type: "{{ ao_credential_type }}"
+            inputs:
+              rhsm_org_id: "{{ lookup('env', 'RHSM_ORG_ID') }}"
+              rhsm_activation_key: "{{ lookup('env', 'RHSM_ACTIVATION_KEY') }}"
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          no_log: true
+
+        - name: Ensure the localhost inventory used by controller-side jobs
+          ansible.controller.inventory:
+            name: "{{ ao_local_inventory }}"
+            organization: "{{ ao_organization }}"
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+
+        - name: Ensure localhost in that inventory
+          ansible.controller.host:
+            name: localhost
+            inventory: "{{ ao_local_inventory }}"
+            variables:
+              ansible_connection: local
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+
+        - name: Ensure the lab inventory exists before job templates reference it
+          ansible.controller.inventory:
+            name: "{{ ao_lab_inventory }}"
+            organization: "{{ ao_organization }}"
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+
+        - name: Ensure the git project for this repository
+          ansible.controller.project:
+            name: "{{ ao_project_name }}"
+            organization: "{{ ao_organization }}"
+            scm_type: git
+            scm_url: "{{ ao_project_url }}"
+            scm_branch: "{{ ao_project_branch }}"
+            scm_clean: true
+            scm_update_on_launch: true
+            scm_update_cache_timeout: 0
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+
+        - name: Sync the project
+          ansible.controller.project_update:
+            name: "{{ ao_project_name }}"
+            organization: "{{ ao_organization }}"
+            wait: true
+            timeout: 900
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+
+        - name: Ensure the wire-inventory job template
+          ansible.controller.job_template:
+            name: "{{ ao_wire_template }}"
+            description: Sync AWS inventory and copy cve-node hosts into lab-inventory
+            job_type: run
+            inventory: "{{ ao_local_inventory }}"
+            project: "{{ ao_project_name }}"
+            playbook: demo-aiops/aiops-orchestrator/playbooks/wire-lab-inventory.yml
+            credentials:
+              - "{{ ao_aap_credential }}"
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+
+        - name: Ensure the register-nodes job template
+          ansible.controller.job_template:
+            name: "{{ ao_register_template }}"
+            description: Register lab-inventory nodes with RHSM and Insights
+            job_type: run
+            inventory: "{{ ao_lab_inventory }}"
+            project: "{{ ao_project_name }}"
+            playbook: demo-aiops/aiops-orchestrator/playbooks/register-rhel-nodes.yml
+            credentials:
+              - "{{ ao_machine_credential }}"
+              - "{{ ao_rhsm_credential }}"
+            become_enabled: true
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+
+        - name: Ensure the lab workflow
+          ansible.controller.workflow_job_template:
+            name: "{{ ao_workflow_name }}"
+            description: Create the AWS nodes, wire lab-inventory, and register them
+            organization: "{{ ao_organization }}"
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+
+        - name: Build the Create VM workflow nodes
+          ansible.builtin.set_fact:
+            ao_vm_nodes: "{{ ao_vm_nodes | default([]) + [ao_vm_node] }}"
+          vars:
+            ao_vm_node:
+              identifier: "vm-{{ item.lab_name }}"
+              unified_job_template: Cloud | AWS | Create VM
+              extra_data:
+                create_vm_aws_region: "{{ ao_aws_region }}"
+                create_vm_vm_name: "{{ item.name }}"
+                create_vm_vm_owner: "{{ ao_aws_owner }}"
+                create_vm_vm_deployment: ao-lab
+                create_vm_vm_purpose: "{{ item.purpose }}"
+                create_vm_vm_environment: "{{ item.environment }}"
+                vm_blueprint: rhel9
+                create_vm_aws_vpc_subnet_name: "{{ ao_aws_subnet }}"
+                create_vm_aws_securitygroup_name: "{{ ao_aws_sg }}"
+                create_vm_aws_keypair_name: "{{ ao_aws_keypair }}"
+              success_nodes:
+                - wire
+          loop: "{{ ao_nodes }}"
+          loop_control:
+            label: "{{ item.name }}"
+
+        - name: Ensure workflow nodes
+          ansible.controller.workflow_job_template_node:
+            identifier: "{{ item.identifier }}"
+            workflow: "{{ ao_workflow_name }}"
+            organization: "{{ ao_organization }}"
+            unified_job_template: "{{ item.unified_job_template }}"
+            extra_data: "{{ item.extra_data | default(omit) }}"
+            all_parents_must_converge: "{{ item.all_parents_must_converge | default(omit) }}"
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          loop: "{{ ao_prefix_nodes + ao_vm_nodes + ao_suffix_nodes }}"
+          loop_control:
+            label: "{{ item.identifier }}"
+
+        - name: Link workflow nodes
+          ansible.controller.workflow_job_template_node:
+            identifier: "{{ item.identifier }}"
+            workflow: "{{ ao_workflow_name }}"
+            organization: "{{ ao_organization }}"
+            unified_job_template: "{{ item.unified_job_template }}"
+            success_nodes: "{{ item.success_nodes | default([]) }}"
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          loop: "{{ ao_prefix_nodes + ao_vm_nodes + ao_suffix_nodes }}"
+          loop_control:
+            label: "{{ item.identifier }}"
+
+        - name: Launch the workflow
+          ansible.controller.workflow_launch:
+            workflow_template: "{{ ao_workflow_name }}"
+            organization: "{{ ao_organization }}"
+            wait: true
+            timeout: 3600
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          when: ao_launch_workflow | bool
+      vars:
+        ao_prefix_nodes:
+          - identifier: vpc
+            unified_job_template: Cloud | AWS | Create VPC
+            extra_data:
+              create_vm_aws_region: "{{ ao_aws_region }}"
+              aws_owner_tag: "{{ ao_aws_owner }}"
+            success_nodes:
+              - keypair
+          - identifier: keypair
+            unified_job_template: Cloud | AWS | Create Keypair
+            extra_data:
+              create_vm_aws_region: "{{ ao_aws_region }}"
+              aws_key_name: "{{ ao_aws_keypair }}"
+            success_nodes:
+              - vm-node1
+              - vm-node2
+              - vm-node3
+        ao_suffix_nodes:
+          - identifier: wire
+            unified_job_template: "{{ ao_wire_template }}"
+            all_parents_must_converge: true
+            success_nodes:
+              - register
+          - identifier: register
+            unified_job_template: "{{ ao_register_template }}"
+            success_nodes: []
+      always:
+        - name: Delete the gateway token
+          ansible.builtin.include_tasks: tasks/delete-gateway-token.yml
