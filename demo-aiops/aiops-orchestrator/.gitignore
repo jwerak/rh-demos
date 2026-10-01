@@ -1,2 +1,4 @@
 .env
 *-artifact-*.json
+cve-remediation-setup/ocp/local/
+cve-remediation-setup/ocp/**/secret.yaml

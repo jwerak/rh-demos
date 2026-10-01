@@ -16,6 +16,8 @@
       state: present
       remediation: absent
       display_name: "{{ inventory_hostname }}"
+      tags:
+        group: cve-lab
   pre_tasks:
     - name: Require the RHSM credential injected by AAP
       ansible.builtin.assert:

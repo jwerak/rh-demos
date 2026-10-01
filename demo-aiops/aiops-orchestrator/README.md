@@ -57,7 +57,7 @@ The cloud job templates are already on this AAP. They use the `AWS` and `APD Mac
 - job template `AO Lab | Register nodes` (playbook `register-rhel-nodes.yml`, credentials `APD Machine Credential` and `AO Lab RHSM`)
 - workflow `AO Lab | Provision and register`: Create VPC, Create Keypair, three Create VM nodes, then wire, then register
 
-`playbooks/register-rhel-nodes.yml` runs on `lab-inventory`. It removes the AWS RHUI client (these are hourly RHEL images), then applies `redhat.rhel_system_roles.rhc`. That role registers with the activation key and connects Insights. Remediation stays off. The controller project sync installs the collection from `collections/requirements.yml` at the repository root.
+`playbooks/register-rhel-nodes.yml` runs on `lab-inventory`. It removes the AWS RHUI client (these are hourly RHEL images), then applies `redhat.rhel_system_roles.rhc`. That role registers with the activation key, connects Insights, and sets the tag `group: cve-lab`. Remediation stays off. The controller project sync installs the collection from `collections/requirements.yml` at the repository root.
 
 `local/ansible-navigator.yml` runs without an execution environment. The supported AAP image on `registry.redhat.io` needs `podman login` first; this machine already has the `ansible.controller` collection. That collection's token call to `/api/controller/v2/tokens/` returns 404 on this gateway, so the local playbooks create a short-lived token at `/api/gateway/v1/tokens/` and delete it when the play finishes.
 
@@ -84,7 +84,7 @@ ansible-navigator run ../playbooks/wire-lab-inventory.yml \
 
 Skip VPC or keypair creation when they already exist: `-e ao_create_vpc=false -e ao_create_keypair=false`.
 
-Scenario write-ups stay on the [catalog](https://ansible-tmm.github.io/aap-orchestrator-demos/).
+Scenario write-ups stay on the [catalog](https://ansible-tmm.github.io/aap-orchestrator-demos/). The lab prerequisites for the RHEL CVE scenario (MCP manifests, Gitea, Mattermost, and the older workstation playbooks) are in [cve-remediation-setup](cve-remediation-setup/).
 
 ## Local aap-demo
 
