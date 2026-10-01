@@ -6,9 +6,10 @@ This repository contains a collection of demonstrations for various Red Hat tech
 
 Here is an overview of the available demos:
 
-* [**AIOps**](./aiops/): This demo showcases AIOps capabilities, including integration with Ansible Automation Platform (AAP) and an agent-based approach for incident assistance.
-  * [AIOps - AAP](./aiops/aiops-aap/): Speeds up the setup of an AAP demo for AIOps.
-  * [AIOps - Agentic](./aiops/aiops-agent/): Demonstrates an agentic approach to AIOps with an Ops Assistant Agent.
+* [**AIOps**](./demo-aiops/): This demo showcases AIOps capabilities, including Ansible Automation Platform (AAP), Automation Orchestrator, and an agent-based approach for incident assistance.
+  * [AIOps - AAP](./demo-aiops/aiops-aap/): Speeds up the setup of an AAP demo for AIOps.
+  * [AIOps - Automation Orchestrator](./demo-aiops/aiops-orchestrator/): Product Demos lab (or local `aap-demo`) setup for the Automation Orchestrator scenario catalog.
+  * [AIOps - Agentic](./demo-aiops/aiops-agent/): Demonstrates an agentic approach to AIOps with an Ops Assistant Agent.
 
 * [**ACM Policies**](./demo-acm-policies/): This demo shows how to manage the lifecycle of operators using Red Hat Advanced Cluster Management (ACM) policies. It covers version pinning, controlled upgrades, and rollout management.
 

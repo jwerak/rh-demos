@@ -1,6 +1,6 @@
 # Fedora Silverblue 44 libvirt demo
 
-Canonical agent context for `demo-fedora-silverblue/`. `CLAUDE.md` is a symlink to this file.
+Canonical agent context for this directory. Cursor and Antigravity read `AGENTS.md`. `CLAUDE.md` is a symlink to this file for Claude Code.
 
 Unattended install of official Fedora Silverblue 44 in a local libvirt guest, then a reproduction of [Déjà Dup issue 670](https://gitlab.gnome.org/World/deja-dup/-/work_items/670): the Flathub Flatpak can list a restic repo, but browse/restore fails because `fusermount` is missing or blocked in the sandbox.
 

@@ -1,6 +1,6 @@
 # Fedora bootc desktop demo
 
-Canonical agent context for `demo-bootc-fedora-desktop/`. `CLAUDE.md` is a symlink to this file.
+Canonical agent context for this directory. Cursor and Antigravity read `AGENTS.md`. `CLAUDE.md` is a symlink to this file for Claude Code.
 
 Fedora 44 bootc GNOME desktop that loops local videos. Local podman and libvirt only; not wired into `ansible-controller/`.
 
