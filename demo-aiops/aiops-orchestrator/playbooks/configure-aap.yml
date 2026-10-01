@@ -142,6 +142,26 @@
             controller_oauthtoken: "{{ ao_controller_token }}"
             validate_certs: false
 
+        - name: Derive the Insights group for this deployment
+          ansible.builtin.set_fact:
+            ao_insights_group: "{{ _ao_insights_group }}"
+          vars:
+            _from_env: "{{ lookup('env', 'AO_INSIGHTS_GROUP') }}"
+            _cluster_id: "{{ lookup('env', 'CONTROLLER_HOST') | regex_search('cluster-[a-z0-9]+') | default('', true) }}"
+            _ao_insights_group: "{{ _from_env if _from_env | length > 0 else 'ao-cve-' ~ _cluster_id }}"
+
+        - name: Require a deployment-specific Insights group
+          ansible.builtin.assert:
+            that:
+              - ao_insights_group | length > 0
+              - ao_insights_group not in ['cve-lab', 'xfd48']
+              - _from_env | length > 0 or ao_insights_group is match('^ao-cve-cluster-[a-z0-9]+$')
+            fail_msg: >-
+              Set AO_INSIGHTS_GROUP to a unique Insights group for this
+              deployment. Shared names cve-lab and xfd48 are refused.
+          vars:
+            _from_env: "{{ lookup('env', 'AO_INSIGHTS_GROUP') }}"
+
         - name: Ensure the register-nodes job template
           ansible.controller.job_template:
             name: "{{ ao_register_template }}"
@@ -150,6 +170,8 @@
             inventory: "{{ ao_lab_inventory }}"
             project: "{{ ao_project_name }}"
             playbook: demo-aiops/aiops-orchestrator/playbooks/register-rhel-nodes.yml
+            extra_vars:
+              ao_insights_group: "{{ ao_insights_group }}"
             credentials:
               - "{{ ao_machine_credential }}"
               - "{{ ao_rhsm_credential }}"
@@ -157,6 +179,35 @@
             state: present
             controller_oauthtoken: "{{ ao_controller_token }}"
             validate_certs: false
+
+        - name: Ensure the CVE remediation job templates
+          ansible.controller.job_template:
+            name: "{{ item.name }}"
+            description: "{{ item.description }}"
+            job_type: run
+            organization: "{{ ao_organization }}"
+            inventory: "{{ ao_local_inventory }}"
+            project: "{{ ao_project_name }}"
+            playbook: "{{ item.playbook }}"
+            credentials: "{{ item.credentials | default(omit) }}"
+            ask_variables_on_launch: true
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          loop:
+            - name: CVE - Fetch and Commit
+              description: Fetch a Lightspeed remediation playbook and commit it to Gitea
+              playbook: demo-cve-remediation/aap/playbooks/cve_fetch_and_commit.yml
+            - name: CVE - Sync and Deploy Remediation
+              description: Sync Lightspeed-Playbooks and create the per-host remediation job template
+              playbook: demo-cve-remediation/aap/playbooks/cve_sync_and_deploy.yml
+              credentials:
+                - "{{ ao_aap_credential }}"
+            - name: CVE - Notify Mattermost Investigation
+              description: Post the CVE investigation report to Mattermost
+              playbook: demo-cve-remediation/aap/playbooks/notify_mattermost_cve.yml
+          loop_control:
+            label: "{{ item.name }}"
 
         - name: Ensure the lab workflow
           ansible.controller.workflow_job_template:
@@ -182,6 +233,7 @@
                 create_vm_vm_purpose: "{{ item.purpose }}"
                 create_vm_vm_environment: "{{ item.environment }}"
                 vm_blueprint: rhel9
+                create_vm_aws_image_filter: "{{ ao_image_filter }}"
                 create_vm_aws_vpc_subnet_name: "{{ ao_aws_subnet }}"
                 create_vm_aws_securitygroup_name: "{{ ao_aws_sg }}"
                 create_vm_aws_keypair_name: "{{ ao_aws_keypair }}"

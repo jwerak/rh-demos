@@ -17,7 +17,7 @@
       remediation: absent
       display_name: "{{ inventory_hostname }}"
       tags:
-        group: cve-lab
+        group: "{{ ao_insights_group }}"
   pre_tasks:
     - name: Require the RHSM credential injected by AAP
       ansible.builtin.assert:
@@ -28,9 +28,27 @@
           RHSM_ORG_ID and RHSM_ACTIVATION_KEY are empty. Attach the
           AO Lab RHSM credential to this job template.
 
+    - name: Require a deployment-specific Insights group
+      ansible.builtin.assert:
+        that:
+          - ao_insights_group is defined
+          - ao_insights_group | length > 0
+          - ao_insights_group not in ['cve-lab', 'xfd48']
+        fail_msg: >-
+          ao_insights_group must be a name unique to this deployment.
+          configure-aap.yml sets it on AO Lab | Register nodes.
+          Shared names cve-lab and xfd48 are refused.
+
     - name: Remove the AWS RHUI client so subscription-manager can register
       ansible.builtin.dnf:
         name: rh-amazon-rhui-client*
         state: absent
   roles:
     - role: redhat.rhel_system_roles.rhc
+  post_tasks:
+    - name: Report the Insights group for the AO trigger
+      ansible.builtin.set_stats:
+        data:
+          insights_group: "{{ ao_insights_group }}"
+          lab_tag: "group={{ ao_insights_group }}"
+      run_once: true

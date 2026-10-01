@@ -3,6 +3,8 @@ ao_organization: Ansible Product Demos (APD)
 ao_aws_region: us-east-2
 ao_aws_owner: ao-demo
 ao_aws_keypair: aws-test-key
+# Latest RHEL-9 hourly images are already on current errata. Pin 9.4 so Lightspeed has CVEs.
+ao_image_filter: "RHEL-9.4*HVM-*Hourly*"
 ao_aws_subnet: aws-test-subnet
 ao_aws_sg: aws-test-sg
 ao_nodes:

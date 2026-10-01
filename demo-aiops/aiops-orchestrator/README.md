@@ -36,7 +36,7 @@ The cloud job templates are already on this AAP. They use the `AWS` and `APD Mac
 |---|---|
 | `Cloud \| AWS \| Create VPC` | `create_vm_aws_region=us-east-2`, `aws_owner_tag=ao-demo` |
 | `Cloud \| AWS \| Create Keypair` | `create_vm_aws_region=us-east-2`, `aws_key_name=aws-test-key` |
-| `Cloud \| AWS \| Create VM` | one launch each for `cve-node1` (Dev), `cve-node2` (Prod), `cve-node3` (Prod), blueprint `rhel9` |
+| `Cloud \| AWS \| Create VM` | one launch each for `cve-node1` (Dev), `cve-node2` (Prod), `cve-node3` (Prod), blueprint `rhel9`, image filter `RHEL-9.4*HVM-*Hourly*` |
 
 `playbooks/wire-lab-inventory.yml` then syncs AWS inventory and writes `lab-inventory` in organization `Ansible Product Demos (APD)`:
 
@@ -48,6 +48,8 @@ The cloud job templates are already on this AAP. They use the `AWS` and `APD Mac
 
 `.env` has `RHSM_ORG_ID`, `RHSM_ACTIVATION_KEY`, and the MaaS model (`AO_MODEL_BASE_URL`, `AO_MODEL_NAME`, `AO_MODEL_ACCESS_TOKEN`). The SSH private key for `aws-test-key` stays inside the AAP credential `APD Machine Credential`. Registration runs as a controller job with that credential, so a local copy of the key is not required.
 
+An agent follows `.cursor/skills/ao-cve-lab/SKILL.md` to finish this lab. The AO screens that stay manual are in `.cursor/skills/ao-cve-lab/ui.md`.
+
 `playbooks/configure-aap.yml` creates the controller objects for that path:
 
 - credential type and credential `AO Lab RHSM` (injects `RHSM_ORG_ID` and `RHSM_ACTIVATION_KEY`)
@@ -55,9 +57,12 @@ The cloud job templates are already on this AAP. They use the `AWS` and `APD Mac
 - git project `AO Orchestrator` (`https://github.com/jwerak/rh-demos.git`, branch `master`)
 - job template `AO Lab | Wire inventory` (playbook `wire-lab-inventory.yml`, credential `AAP Credential`)
 - job template `AO Lab | Register nodes` (playbook `register-rhel-nodes.yml`, credentials `APD Machine Credential` and `AO Lab RHSM`)
+- job templates `CVE - Fetch and Commit`, `CVE - Sync and Deploy Remediation`, and `CVE - Notify Mattermost Investigation` (playbooks under `demo-cve-remediation/aap/playbooks/`, inventory `AO Orchestrator Localhost`; the sync template uses `AAP Credential`)
 - workflow `AO Lab | Provision and register`: Create VPC, Create Keypair, three Create VM nodes, then wire, then register
 
-`playbooks/register-rhel-nodes.yml` runs on `lab-inventory`. It removes the AWS RHUI client (these are hourly RHEL images), then applies `redhat.rhel_system_roles.rhc`. That role registers with the activation key, connects Insights, and sets the tag `group: cve-lab`. Remediation stays off. The controller project sync installs the collection from `collections/requirements.yml` at the repository root.
+`playbooks/register-rhel-nodes.yml` runs on `lab-inventory`. It removes the AWS RHUI client (these are hourly RHEL images), then applies `redhat.rhel_system_roles.rhc`. It does not upgrade packages. The role registers with the activation key, connects Insights, and sets tag `group` to a name unique to this deployment (`ao-cve-<cluster id>` from `CONTROLLER_HOST`, or `AO_INSIGHTS_GROUP` when set). Shared names `cve-lab` and `xfd48` are refused. The job output `lab_tag` is the value for the AO trigger. Remediation stays off. `rhc_insights.autoupdate` only refreshes the Insights client configuration. The controller project sync installs the collection from `collections/requirements.yml` at the repository root.
+
+Blueprint `rhel9` would select the newest hourly AMI. The Create VM extra var `create_vm_aws_image_filter` is `RHEL-9.4*HVM-*Hourly*` so the image still has errata. An existing Name tag makes Create VM skip the launch, so terminate `cve-node1`, `cve-node2`, and `cve-node3` before creating them again. Do not run `dnf update` afterward.
 
 `local/ansible-navigator.yml` runs without an execution environment. The supported AAP image on `registry.redhat.io` needs `podman login` first; this machine already has the `ansible.controller` collection. That collection's token call to `/api/controller/v2/tokens/` returns 404 on this gateway, so the local playbooks create a short-lived token at `/api/gateway/v1/tokens/` and delete it when the play finishes.
 

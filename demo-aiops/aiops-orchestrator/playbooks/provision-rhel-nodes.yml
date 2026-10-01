@@ -66,6 +66,7 @@
               create_vm_vm_purpose: "{{ item.purpose }}"
               create_vm_vm_environment: "{{ item.environment }}"
               vm_blueprint: rhel9
+              create_vm_aws_image_filter: "{{ ao_image_filter }}"
               create_vm_aws_vpc_subnet_name: "{{ ao_aws_subnet }}"
               create_vm_aws_securitygroup_name: "{{ ao_aws_sg }}"
               create_vm_aws_keypair_name: "{{ ao_aws_keypair }}"

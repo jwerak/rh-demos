@@ -7,7 +7,7 @@ AIOps demo: agent-based incident response using AAP (Ansible Automation Platform
 ## Sub-projects
 
 - **aiops-aap/**: Ansible playbooks to configure AAP workflows for the AIOps demo. Requires a provisioned AAP instance from demo catalog.
-- **aiops-orchestrator/**: Product Demos lab runbook for Automation Orchestrator. `playbooks/configure-aap.yml` creates the AAP project, RHSM credential, job templates, and workflow `AO Lab | Provision and register`. Credentials are in `.env` (gitignored). Scenario guides: https://ansible-tmm.github.io/aap-orchestrator-demos/.
+- **aiops-orchestrator/**: Product Demos lab runbook for Automation Orchestrator. `playbooks/configure-aap.yml` creates the AAP project, RHSM credential, job templates, and workflow `AO Lab | Provision and register`. Credentials are in `.env` (gitignored). An agent sets the CVE lab up by following `.cursor/skills/ao-cve-lab/SKILL.md`. Scenario guides: https://ansible-tmm.github.io/aap-orchestrator-demos/.
 - **aiops-agent/**: Deploys two components to OpenShift via Kustomize overlays referencing upstream GitHub repos:
   - `ocp/mcp-server-aap/` - MCP server bridging AAP to the agent (namespace: `mcp-server-aap`, base: `github.com/jwerak/mcp-server-aap`)
   - `ocp/ops-assistant/` - AI ops incident assistant (namespace: `aiops`, base: `github.com/jwerak/agent-ops-assistant`)
