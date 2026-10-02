@@ -17,6 +17,10 @@
     ao_rhsm_credential: AO Lab RHSM
     ao_machine_credential: APD Machine Credential
     ao_aap_credential: AAP Credential
+    ao_gitea_credential_type: Gitea
+    ao_gitea_credential: Gitea
+    ao_gitea_scm_credential: Gitea SCM
+    ao_lightspeed_project: Lightspeed-Playbooks
     ao_workflow_name: AO Lab | Provision and register
     ao_wire_template: AO Lab | Wire inventory
     ao_register_template: AO Lab | Register nodes
@@ -78,6 +82,91 @@
             controller_oauthtoken: "{{ ao_controller_token }}"
             validate_certs: false
           no_log: true
+
+        - name: Ensure the Gitea credential type
+          ansible.controller.credential_type:
+            name: "{{ ao_gitea_credential_type }}"
+            description: Injects the Gitea URL and token into the fetch playbook
+            kind: cloud
+            inputs:
+              fields:
+                - id: gitea_url
+                  type: string
+                  label: Gitea URL
+                - id: gitea_token
+                  type: string
+                  label: Token
+                  secret: true
+                - id: gitea_repo
+                  type: string
+                  label: Repository
+              required:
+                - gitea_url
+                - gitea_token
+            injectors:
+              env:
+                GITEA_URL: "{{ '{{' }} gitea_url {{ '}}' }}"
+                GITEA_TOKEN: "{{ '{{' }} gitea_token {{ '}}' }}"
+                GITEA_REPO: "{{ '{{' }} gitea_repo {{ '}}' }}"
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          when: lookup('env', 'GITEA_TOKEN') | length > 0
+
+        - name: Ensure the Gitea credential
+          ansible.controller.credential:
+            name: "{{ ao_gitea_credential }}"
+            organization: "{{ ao_organization }}"
+            credential_type: "{{ ao_gitea_credential_type }}"
+            inputs:
+              gitea_url: "{{ lookup('env', 'GITEA_URL') }}"
+              gitea_token: "{{ lookup('env', 'GITEA_TOKEN') }}"
+              gitea_repo: "{{ lookup('env', 'GITEA_REPO') | default('lab-user/lightspeed_playbooks', true) }}"
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          no_log: true
+          when: lookup('env', 'GITEA_TOKEN') | length > 0
+
+        - name: Ensure the Gitea source-control credential
+          ansible.controller.credential:
+            name: "{{ ao_gitea_scm_credential }}"
+            organization: "{{ ao_organization }}"
+            credential_type: Source Control
+            inputs:
+              username: lab-user
+              password: "{{ lookup('env', 'GITEA_TOKEN') }}"
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          no_log: true
+          when: lookup('env', 'GITEA_TOKEN') | length > 0
+
+        - name: Ensure the Lightspeed-Playbooks project
+          ansible.controller.project:
+            name: "{{ ao_lightspeed_project }}"
+            organization: "{{ ao_organization }}"
+            scm_type: git
+            scm_url: "{{ lookup('env', 'GITEA_URL') | regex_replace('/$', '') }}/{{ lookup('env', 'GITEA_REPO') | default('lab-user/lightspeed_playbooks', true) }}.git"
+            scm_branch: main
+            credential: "{{ ao_gitea_scm_credential }}"
+            scm_clean: true
+            scm_update_on_launch: true
+            scm_update_cache_timeout: 0
+            state: present
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          when: lookup('env', 'GITEA_URL') | length > 0
+
+        - name: Sync Lightspeed-Playbooks
+          ansible.controller.project_update:
+            name: "{{ ao_lightspeed_project }}"
+            organization: "{{ ao_organization }}"
+            wait: true
+            timeout: 300
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          when: lookup('env', 'GITEA_URL') | length > 0
 
         - name: Ensure the localhost inventory used by controller-side jobs
           ansible.controller.inventory:
@@ -198,6 +287,7 @@
             - name: CVE - Fetch and Commit
               description: Fetch a Lightspeed remediation playbook and commit it to Gitea
               playbook: demo-cve-remediation/aap/playbooks/cve_fetch_and_commit.yml
+              credentials: "{{ [ao_gitea_credential] if (lookup('env', 'GITEA_TOKEN') | length > 0) else omit }}"
             - name: CVE - Sync and Deploy Remediation
               description: Sync Lightspeed-Playbooks and create the per-host remediation job template
               playbook: demo-cve-remediation/aap/playbooks/cve_sync_and_deploy.yml

@@ -28,6 +28,17 @@
           RHSM_ORG_ID and RHSM_ACTIVATION_KEY are empty. Attach the
           AO Lab RHSM credential to this job template.
 
+    - name: Show the subscription release
+      ansible.builtin.command: subscription-manager release --show
+      register: ao_release_show
+      changed_when: false
+      failed_when: false
+
+    - name: Clear the subscription release lock
+      ansible.builtin.command: subscription-manager release --unset
+      when: ao_release_show.stdout is search('Release:\s*[0-9]')
+      changed_when: true
+
     - name: Require a deployment-specific Insights group
       ansible.builtin.assert:
         that:
@@ -46,6 +57,29 @@
   roles:
     - role: redhat.rhel_system_roles.rhc
   post_tasks:
+    - name: Show whether subscription-manager manages repositories
+      ansible.builtin.command: subscription-manager config --rhsm.manage_repos
+      register: ao_manage_repos_show
+      changed_when: false
+
+    - name: Enable repository management
+      ansible.builtin.command: subscription-manager config --rhsm.manage_repos=1
+      when: "'manage_repos = 1' not in ao_manage_repos_show.stdout"
+      changed_when: true
+
+    - name: List enabled repositories
+      ansible.builtin.command: subscription-manager repos --list-enabled
+      register: ao_enabled_repos
+      changed_when: false
+
+    - name: Enable BaseOS and AppStream
+      ansible.builtin.command: subscription-manager repos --enable={{ item }}
+      loop:
+        - rhel-9-for-x86_64-baseos-rpms
+        - rhel-9-for-x86_64-appstream-rpms
+      when: item not in ao_enabled_repos.stdout
+      changed_when: true
+
     - name: Report the Insights group for the AO trigger
       ansible.builtin.set_stats:
         data:

@@ -36,7 +36,7 @@ The cloud job templates are already on this AAP. They use the `AWS` and `APD Mac
 |---|---|
 | `Cloud \| AWS \| Create VPC` | `create_vm_aws_region=us-east-2`, `aws_owner_tag=ao-demo` |
 | `Cloud \| AWS \| Create Keypair` | `create_vm_aws_region=us-east-2`, `aws_key_name=aws-test-key` |
-| `Cloud \| AWS \| Create VM` | one launch each for `cve-node1` (Dev), `cve-node2` (Prod), `cve-node3` (Prod), blueprint `rhel9`, image filter `RHEL-9.4*HVM-*Hourly*` |
+| `Cloud \| AWS \| Create VM` | one launch each for `cve-node1` (Dev), `cve-node2` (Prod), `cve-node3` (Prod), blueprint `rhel9`, image filter `RHEL-9.6.0_HVM-202506*` |
 
 `playbooks/wire-lab-inventory.yml` then syncs AWS inventory and writes `lab-inventory` in organization `Ansible Product Demos (APD)`:
 
@@ -62,7 +62,7 @@ An agent follows `.cursor/skills/ao-cve-lab/SKILL.md` to finish this lab. The AO
 
 `playbooks/register-rhel-nodes.yml` runs on `lab-inventory`. It removes the AWS RHUI client (these are hourly RHEL images), then applies `redhat.rhel_system_roles.rhc`. It does not upgrade packages. The role registers with the activation key, connects Insights, and sets tag `group` to a name unique to this deployment (`ao-cve-<cluster id>` from `CONTROLLER_HOST`, or `AO_INSIGHTS_GROUP` when set). Shared names `cve-lab` and `xfd48` are refused. The job output `lab_tag` is the value for the AO trigger. Remediation stays off. `rhc_insights.autoupdate` only refreshes the Insights client configuration. The controller project sync installs the collection from `collections/requirements.yml` at the repository root.
 
-Blueprint `rhel9` would select the newest hourly AMI. The Create VM extra var `create_vm_aws_image_filter` is `RHEL-9.4*HVM-*Hourly*` so the image still has errata. An existing Name tag makes Create VM skip the launch, so terminate `cve-node1`, `cve-node2`, and `cve-node3` before creating them again. Do not run `dnf update` afterward.
+Blueprint `rhel9` would select the newest hourly AMI. The Create VM extra var `create_vm_aws_image_filter` is `RHEL-9.6.0_HVM-202506*` so the image still has 9.6 errata. An existing Name tag makes Create VM skip the launch, so terminate `cve-node1`, `cve-node2`, and `cve-node3` before creating them again. Do not run `dnf update` afterward. Do not set a subscription-manager release lock. Insights reports that lock as `rhsm_lock` and then scores no CVEs on these hosts.
 
 `local/ansible-navigator.yml` runs without an execution environment. The supported AAP image on `registry.redhat.io` needs `podman login` first; this machine already has the `ansible.controller` collection. That collection's token call to `/api/controller/v2/tokens/` returns 404 on this gateway, so the local playbooks create a short-lived token at `/api/gateway/v1/tokens/` and delete it when the play finishes.
 
