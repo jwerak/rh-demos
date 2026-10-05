@@ -57,8 +57,11 @@
   roles:
     - role: redhat.rhel_system_roles.rhc
   post_tasks:
+    # `config --rhsm.manage_repos` without a value reads the setting on some
+    # builds and errors with "expected one argument" on others. `--list` is
+    # the form every build accepts.
     - name: Show whether subscription-manager manages repositories
-      ansible.builtin.command: subscription-manager config --rhsm.manage_repos
+      ansible.builtin.command: subscription-manager config --list
       register: ao_manage_repos_show
       changed_when: false
 
