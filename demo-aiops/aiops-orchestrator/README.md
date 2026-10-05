@@ -78,6 +78,21 @@ ansible-navigator run ../playbooks/configure-aap.yml \
 
 `ao_launch_workflow` defaults to false, which only creates the objects. The same playbook can be re-run safely.
 
+`playbooks/configure-ao.yml` then builds the Automation Orchestrator side over the AO REST API. `POST /api/v1/auth/login` takes the local admin account, so none of this needs the UI. The OpenAPI spec is at `<AO_URL>/api_docs/v1/openapi.json`.
+
+```bash
+cd local
+ansible-navigator run ../playbooks/configure-ao.yml \
+  --penv AO_URL --penv AO_USERNAME --penv AO_PASSWORD \
+  --penv AO_MODEL_BASE_URL --penv AO_MODEL_NAME --penv AO_MODEL_ACCESS_TOKEN \
+  --penv CONTROLLER_HOST --penv CONTROLLER_USERNAME --penv CONTROLLER_PASSWORD \
+  --penv AAP_MCP_TOKEN
+```
+
+It creates credentials and global integrations `MaaS` (LLM provider, model from `AO_MODEL_NAME`), `AAP MCP` (`hosts_list`, `hosts_variable_data_retrieve`), `Lightspeed MCP` (the vulnerability, inventory, remediation, and advisor tools the workflow calls), and `AAP`, then validates all four and fails if any is unhealthy. It matches on name, so re-running changes nothing. MCP URLs are derived from the cluster in `CONTROLLER_HOST`; set `AAP_MCP_URL` or `LIGHTSPEED_MCP_URL` to override. `AAP_MCP_TOKEN` is a persistent AAP gateway token; the playbook creates one if the variable is empty, so put it in `.env` to keep re-runs on the same token.
+
+After that only the AO workflow import and node wiring are manual, in `.cursor/skills/ao-cve-lab/ui.md`.
+
 The older local launchers still work for the cloud templates and inventory wiring:
 
 ```bash

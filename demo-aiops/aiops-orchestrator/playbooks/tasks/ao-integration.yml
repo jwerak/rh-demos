@@ -1,0 +1,89 @@
+---
+# Discover an integration's tools and models, then create it with the tools
+# this demo uses enabled and everything else off. AO stores the selection at
+# create time, so discovery has to happen first.
+- name: "Reset the selections for {{ ao_integration.name }}"
+  ansible.builtin.set_fact:
+    ao_tool_selection: []
+    ao_model_selection: []
+
+- name: "Discover {{ ao_integration.name }}"
+  ansible.builtin.uri:
+    url: "{{ ao_url }}/api/v1/integrations/discover"
+    method: POST
+    headers: "{{ ao_headers }}"
+    body_format: json
+    body:
+      integration_type: "{{ ao_integration.configuration.integration_type }}"
+      credential_id: "{{ ao_credential_ids[ao_integration.credential] }}"
+      configuration: "{{ ao_integration.configuration }}"
+    validate_certs: false
+    status_code: [200]
+    timeout: 120
+  register: ao_discovery
+
+- name: "Fail when {{ ao_integration.name }} is unreachable"
+  ansible.builtin.assert:
+    that: ao_discovery.json.success
+    fail_msg: >-
+      {{ ao_integration.name }} discovery failed:
+      {{ ao_discovery.json.error | default('no error reported') }}
+
+- name: "Warn about tools {{ ao_integration.name }} does not expose"
+  ansible.builtin.debug:
+    msg: >-
+      {{ ao_integration.name }} is missing requested tools:
+      {{ ao_missing_tools | join(', ') }}
+  vars:
+    ao_missing_tools: >-
+      {{ ao_integration.tools | difference((ao_discovery.json.discovered_tools | default([], true))
+         | map(attribute='name') | list) }}
+  when: ao_missing_tools | length > 0
+
+- name: "Select the tools for {{ ao_integration.name }}"
+  ansible.builtin.set_fact:
+    ao_tool_selection: >-
+      {{ ao_tool_selection + [{
+           'name': item.name,
+           'description': item.description | default(None),
+           'enabled': item.name in ao_integration.tools,
+           'parameters': item.parameters | default(None),
+         }] }}
+  loop: "{{ ao_discovery.json.discovered_tools | default([], true) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: "Select the models for {{ ao_integration.name }}"
+  ansible.builtin.set_fact:
+    ao_model_selection: >-
+      {{ ao_model_selection + [{
+           'model_id': item.id,
+           'name': item.name | default(item.id),
+           'enabled': item.id == lookup('env', 'AO_MODEL_NAME'),
+           'is_default': item.id == lookup('env', 'AO_MODEL_NAME'),
+         }] }}
+  loop: "{{ ao_discovery.json.discovered_models | default([], true) }}"
+  loop_control:
+    label: "{{ item.id }}"
+
+- name: "Create {{ ao_integration.name }}"
+  ansible.builtin.uri:
+    url: "{{ ao_url }}/api/v1/integrations"
+    method: POST
+    headers: "{{ ao_headers }}"
+    body_format: json
+    body: >-
+      {{
+        {
+          'name': ao_integration.name,
+          'integration_type': ao_integration.configuration.integration_type,
+          'scope': 'global',
+          'enabled': true,
+          'management_credential_id': ao_credential_ids[ao_integration.credential],
+          'configuration': ao_integration.configuration,
+        }
+        | combine({'discovered_tools': ao_tool_selection} if ao_tool_selection | length > 0 else {})
+        | combine({'discovered_models': ao_model_selection} if ao_model_selection | length > 0 else {})
+      }}
+    validate_certs: false
+    status_code: [201]

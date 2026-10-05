@@ -1,0 +1,268 @@
+---
+# Create the Automation Orchestrator credentials and integrations the CVE
+# workflow needs: the MaaS LLM provider, both MCP servers, and AAP.
+#
+# The AO API is not OIDC-only. /api/v1/auth/login takes the local admin
+# username and password and returns a bearer token that the rest of
+# /api/v1/* accepts. The OpenAPI spec is at <AO_URL>/api_docs/v1/openapi.json.
+#
+# Run from aiops-orchestrator/local. Secrets come from the environment.
+- name: Configure Automation Orchestrator integrations
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ao_url: "{{ lookup('env', 'AO_URL') }}"
+    ao_project: default
+    ao_llm_name: MaaS
+    ao_aap_mcp_name: AAP MCP
+    ao_lightspeed_mcp_name: Lightspeed MCP
+    ao_aap_name: AAP
+    # Route hosts follow the cluster the controller is on unless overridden.
+    ao_apps_domain: >-
+      {{ lookup('env', 'CONTROLLER_HOST') | regex_replace('^https?://aap-aap\.', '') | regex_replace('/$', '') }}
+    ao_aap_mcp_url: >-
+      {{ lookup('env', 'AAP_MCP_URL') | default('https://aap-mcp-aap.' ~ ao_apps_domain ~ '/mcp/inventory_management', true) }}
+    ao_lightspeed_mcp_url: >-
+      {{ lookup('env', 'LIGHTSPEED_MCP_URL') | default('https://lightspeed-mcp-mcp-cve-lightspeed.' ~ ao_apps_domain ~ '/mcp', true) }}
+    # /mcp on the AAP MCP server exposes tools with more than 50 parameters
+    # and AO rejects those, so the integration points at one tool group.
+    ao_aap_mcp_tools:
+      - hosts_list
+      - hosts_variable_data_retrieve
+    ao_lightspeed_mcp_tools:
+      - vulnerability__get_cve_systems
+      - vulnerability__get_system_cves
+      - vulnerability__explain_cves
+      - inventory__find_host_by_name
+      - remediations__create_vuln_playbook
+      - advisor__get_active_rules
+
+  tasks:
+    - name: Require the AO and model settings from the environment
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'AO_URL') | length > 0
+          - lookup('env', 'AO_USERNAME') | length > 0
+          - lookup('env', 'AO_PASSWORD') | length > 0
+          - lookup('env', 'AO_MODEL_BASE_URL') | length > 0
+          - lookup('env', 'AO_MODEL_NAME') | length > 0
+          - lookup('env', 'AO_MODEL_ACCESS_TOKEN') | length > 0
+          - lookup('env', 'CONTROLLER_HOST') | length > 0
+          - lookup('env', 'CONTROLLER_USERNAME') | length > 0
+          - lookup('env', 'CONTROLLER_PASSWORD') | length > 0
+        fail_msg: >-
+          Source aiops-orchestrator/.env and pass AO_URL, AO_USERNAME,
+          AO_PASSWORD, AO_MODEL_BASE_URL, AO_MODEL_NAME,
+          AO_MODEL_ACCESS_TOKEN, CONTROLLER_HOST, CONTROLLER_USERNAME, and
+          CONTROLLER_PASSWORD to ansible-navigator with --penv.
+
+    - name: Log in to Automation Orchestrator
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/auth/login"
+        method: POST
+        body_format: json
+        body:
+          username: "{{ lookup('env', 'AO_USERNAME') }}"
+          password: "{{ lookup('env', 'AO_PASSWORD') }}"
+        validate_certs: false
+        status_code: [200]
+      register: ao_login
+      no_log: true
+
+    - name: Store the AO bearer token
+      ansible.builtin.set_fact:
+        ao_headers:
+          Authorization: "Bearer {{ ao_login.json.access_token }}"
+      no_log: true
+
+    - name: Read the AO projects
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/projects"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_projects
+
+    - name: Select the project that owns the credentials
+      ansible.builtin.set_fact:
+        ao_project_id: >-
+          {{ (ao_projects.json.resources | selectattr('name', 'equalto', ao_project) | first).id }}
+
+    - name: Read the AO credential types
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/credential_types"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_credential_types
+
+    - name: Map credential type names to ids
+      ansible.builtin.set_fact:
+        ao_credential_type_ids: >-
+          {{ dict(ao_credential_types.json.resources | map(attribute='name') | zip(
+                  ao_credential_types.json.resources | map(attribute='id'))) }}
+
+    # A persistent bearer token for the AAP MCP integration. The short-lived
+    # token configure-aap.yml makes is deleted when that play ends.
+    - name: Create an AAP gateway token for the AAP MCP integration
+      ansible.builtin.uri:
+        url: "{{ lookup('env', 'CONTROLLER_HOST') }}/api/gateway/v1/tokens/"
+        method: POST
+        url_username: "{{ lookup('env', 'CONTROLLER_USERNAME') }}"
+        url_password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          description: AO AAP MCP integration
+          scope: write
+        validate_certs: false
+        status_code: [201]
+      register: ao_mcp_token_new
+      when: lookup('env', 'AAP_MCP_TOKEN') | length == 0
+      no_log: true
+
+    - name: Store the AAP MCP bearer token
+      ansible.builtin.set_fact:
+        ao_aap_mcp_token: >-
+          {{ lookup('env', 'AAP_MCP_TOKEN') if lookup('env', 'AAP_MCP_TOKEN') | length > 0
+             else ao_mcp_token_new.json.token }}
+      no_log: true
+
+    - name: Read the existing AO credentials
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/credentials"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_credentials
+
+    - name: Create the missing credentials
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/credentials"
+        method: POST
+        headers: "{{ ao_headers }}"
+        body_format: json
+        body:
+          name: "{{ item.name }}"
+          credential_type_id: "{{ ao_credential_type_ids[item.type] }}"
+          project_id: "{{ ao_project_id }}"
+          inputs: "{{ item.inputs }}"
+        validate_certs: false
+        status_code: [201]
+      loop:
+        - name: "{{ ao_llm_name }}"
+          type: LLM Provider
+          inputs:
+            api_key: "{{ lookup('env', 'AO_MODEL_ACCESS_TOKEN') }}"
+        - name: "{{ ao_aap_mcp_name }}"
+          type: HTTP Bearer Token
+          inputs:
+            token: "{{ ao_aap_mcp_token }}"
+        - name: "{{ ao_lightspeed_mcp_name }}"
+          type: HTTP Bearer Token
+          # The Lightspeed MCP server does not check the bearer token; it
+          # authenticates to console.redhat.com with its own service account.
+          inputs:
+            token: unused
+        - name: "{{ ao_aap_name }}"
+          type: Ansible Automation Platform
+          inputs:
+            username: "{{ lookup('env', 'CONTROLLER_USERNAME') }}"
+            password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.name not in (ao_credentials.json.resources | map(attribute='name') | list)
+      no_log: true
+
+    - name: Re-read the AO credentials
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/credentials"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_credentials_after
+
+    - name: Map credential names to ids
+      ansible.builtin.set_fact:
+        ao_credential_ids: >-
+          {{ dict(ao_credentials_after.json.resources | map(attribute='name') | zip(
+                  ao_credentials_after.json.resources | map(attribute='id'))) }}
+
+    - name: Build the integration definitions
+      ansible.builtin.set_fact:
+        ao_integrations:
+          - name: "{{ ao_llm_name }}"
+            credential: "{{ ao_llm_name }}"
+            configuration:
+              integration_type: llm_provider
+              provider_hint: openai
+              base_url: "{{ lookup('env', 'AO_MODEL_BASE_URL') }}"
+            tools: []
+          - name: "{{ ao_aap_mcp_name }}"
+            credential: "{{ ao_aap_mcp_name }}"
+            configuration:
+              integration_type: mcp_server
+              base_url: "{{ ao_aap_mcp_url | trim }}"
+            tools: "{{ ao_aap_mcp_tools }}"
+          - name: "{{ ao_lightspeed_mcp_name }}"
+            credential: "{{ ao_lightspeed_mcp_name }}"
+            configuration:
+              integration_type: mcp_server
+              base_url: "{{ ao_lightspeed_mcp_url | trim }}"
+            tools: "{{ ao_lightspeed_mcp_tools }}"
+          - name: "{{ ao_aap_name }}"
+            credential: "{{ ao_aap_name }}"
+            configuration:
+              integration_type: ansible_automation_platform
+              base_url: "{{ lookup('env', 'CONTROLLER_HOST') }}"
+            tools: []
+
+    - name: Read the existing AO integrations
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/integrations"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_existing_integrations
+
+    - name: Create the missing integrations
+      ansible.builtin.include_tasks: tasks/ao-integration.yml
+      loop: "{{ ao_integrations }}"
+      loop_control:
+        loop_var: ao_integration
+        label: "{{ ao_integration.name }}"
+      when: >-
+        ao_integration.name not in
+        (ao_existing_integrations.json.resources | map(attribute='name') | list)
+
+    - name: Re-read the AO integrations
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/integrations"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_integrations_after
+
+    - name: Validate every integration
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/integrations/{{ item.id }}/validate"
+        method: POST
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+        status_code: [200]
+      register: ao_validations
+      loop: "{{ ao_integrations_after.json.resources }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Report the integration health
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.name }}: {{ 'ok' if item.json.success else 'FAILED - ' ~ (item.json.error | default('')) }}
+      loop: "{{ ao_validations.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Fail when an integration did not come up
+      ansible.builtin.assert:
+        that: ao_validations.results | rejectattr('json.success') | list | length == 0
+        fail_msg: >-
+          {{ ao_validations.results | rejectattr('json.success')
+             | map(attribute='item.name') | list | join(', ') }} did not validate.
+          A private-address error means the route host is missing from
+          APP_INTEGRATION_URL_ALLOWED_HOSTS on the AO deployments.
