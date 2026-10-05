@@ -26,7 +26,7 @@ The install job output contains the AO URL and login. Copy those into `.env`:
 cp .env.sample .env
 ```
 
-On the current lab (`cluster-472rl`) both of those jobs have already succeeded: `APD | Single demo setup` with use case `infrastructure`, then `Infrastructure | Automation Orchestrator | Install` on the `stable` channel. The three RHEL nodes are in `lab-inventory`.
+On a fresh lab both jobs still have to run: `APD | Single demo setup` with use case `infrastructure` (it also creates the `Cloud | AWS | *` templates), then `Infrastructure | Automation Orchestrator | Install`. The AO admin password is in secret `automation-orchestrator-initial-admin-password` in namespace `automation-orchestrator`.
 
 ## RHEL nodes
 
