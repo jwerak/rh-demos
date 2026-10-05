@@ -124,7 +124,7 @@ cd demo-aiops/aiops-orchestrator/local
 
 Node names carry a per-deployment suffix so the systems of past runs stay tellable apart in the Insights inventory, which keeps them for days. `ao_node_suffix` defaults to the cluster id; override with `AO_NODE_SUFFIX`.
 
-After the lab environment is stopped and started the instances get new public IPs. Re-run `AO Lab | Wire inventory` to refresh `ansible_host` in `lab-inventory`, otherwise every job fails to connect.
+After the lab environment is stopped and started the instances keep their ids and their Insights registration but get new public IPs, so `lab-inventory` goes stale and every job fails to connect. `./reprovision.sh --keep-vms` handles it: it re-syncs the AWS inventory and rewrites `ansible_host` before rebuilding the AO side.
 
 The older local launchers still work for the cloud templates and inventory wiring:
 

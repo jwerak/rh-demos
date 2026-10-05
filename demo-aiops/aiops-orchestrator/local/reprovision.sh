@@ -88,6 +88,17 @@ run "AAP objects and nodes" ansible-navigator run ../playbooks/configure-aap.yml
   --penv AO_INSIGHTS_GROUP --penv AO_NODE_SUFFIX --penv LIGHTSPEED_MCP_SERVICE \
   -e "ao_launch_workflow=${launch_workflow}"
 
+# Keeping the instances across a stop/start of the lab environment leaves
+# lab-inventory holding their old public IPs, and every job then fails to
+# connect. Re-sync the AWS inventory and rewrite ansible_host. The
+# provisioning workflow already ends in a wire, so only do this when it
+# did not run.
+if [[ "$launch_workflow" == false ]]; then
+  run "refresh the node addresses" ansible-navigator run ../playbooks/wire-lab-inventory.yml \
+    --penv CONTROLLER_HOST --penv CONTROLLER_USERNAME --penv CONTROLLER_PASSWORD \
+    --penv AO_NODE_SUFFIX
+fi
+
 run "AO credentials and integrations" ansible-navigator run ../playbooks/configure-ao.yml \
   --penv AO_URL --penv AO_USERNAME --penv AO_PASSWORD \
   --penv AO_MODEL_BASE_URL --penv AO_MODEL_NAME --penv AO_MODEL_ACCESS_TOKEN \
