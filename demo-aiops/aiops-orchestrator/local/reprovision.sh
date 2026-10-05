@@ -5,7 +5,9 @@
 #   ./reprovision.sh                 # reset, then rebuild everything
 #   ./reprovision.sh --reset-only    # tear down and stop
 #   ./reprovision.sh --no-reset      # rebuild over what is already there
-#   ./reprovision.sh --keep-vms      # leave the AWS instances alone
+#   ./reprovision.sh --keep-vms      # leave the AWS instances and their
+#                                    # Insights systems alone; clears the AO
+#                                    # runs, Gitea, and generated templates
 #
 # Reads demo-aiops/aiops-orchestrator/.env. Nothing is echoed from it.
 set -euo pipefail
@@ -62,7 +64,7 @@ if [[ "$do_reset" == true ]]; then
     --penv GITEA_URL --penv GITEA_TOKEN --penv GITEA_REPO \
     --penv LIGHTSPEED_CLIENT_ID --penv LIGHTSPEED_CLIENT_SECRET \
     --penv AO_NODE_SUFFIX \
-    -e "ao_reset_vms=${reset_vms}"
+    -e "ao_reset_vms=${reset_vms}" -e "ao_reset_insights=${reset_vms}"
 fi
 
 if [[ "$do_build" == false ]]; then
@@ -71,15 +73,20 @@ if [[ "$do_build" == false ]]; then
   exit 0
 fi
 
-# Creates the AAP objects and, with ao_launch_workflow, the AWS instances.
-# Launching the workflow only works when the instances are gone, which the
-# reset above takes care of.
+# Create VM skips an instance that already carries the Name tag, so there is
+# only a point launching the provisioning workflow when the reset just removed
+# them. Rebuilding over a live lab skips straight to the AO side.
+launch_workflow=false
+if [[ "$do_reset" == true && "$reset_vms" == true ]]; then
+  launch_workflow=true
+fi
+
 run "AAP objects and nodes" ansible-navigator run ../playbooks/configure-aap.yml \
   --penv CONTROLLER_HOST --penv CONTROLLER_USERNAME --penv CONTROLLER_PASSWORD \
   --penv RHSM_ORG_ID --penv RHSM_ACTIVATION_KEY \
   --penv GITEA_URL --penv GITEA_TOKEN --penv GITEA_REPO \
   --penv AO_INSIGHTS_GROUP --penv AO_NODE_SUFFIX --penv LIGHTSPEED_MCP_SERVICE \
-  -e "ao_launch_workflow=${reset_vms}"
+  -e "ao_launch_workflow=${launch_workflow}"
 
 run "AO credentials and integrations" ansible-navigator run ../playbooks/configure-ao.yml \
   --penv AO_URL --penv AO_USERNAME --penv AO_PASSWORD \

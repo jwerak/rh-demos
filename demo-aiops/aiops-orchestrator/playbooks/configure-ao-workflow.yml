@@ -69,14 +69,86 @@
         _group: "{{ _from_env if _from_env | length > 0 else 'ao-cve-' ~ _cluster_id }}"
         _lab_tag: "group={{ _group }}"
 
-    # The triage prompt does not pick a CVE when cve_id is empty, so a lab
-    # without one imports a workflow that cannot be demoed as-is.
-    - name: Warn when no demo CVE is set
+    # The triage prompt does not pick a CVE when cve_id is empty, and a CVE
+    # noted down from an earlier run goes stale: Insights re-scores a host
+    # every time it uploads, and the applicable list moves. Ask the live data
+    # which CVE to demo instead of carrying one in .env.
+    - name: Choose a demo CVE from the host's applicable list
+      when:
+        - ao_demo_cve | length == 0
+        - lookup('env', 'LIGHTSPEED_CLIENT_ID') | length > 0
+        - lookup('env', 'LIGHTSPEED_CLIENT_SECRET') | length > 0
+      block:
+        - name: Get a console.redhat.com token
+          ansible.builtin.uri:
+            url: https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token
+            method: POST
+            body_format: form-urlencoded
+            body:
+              grant_type: client_credentials
+              scope: api.console
+              client_id: "{{ lookup('env', 'LIGHTSPEED_CLIENT_ID') }}"
+              client_secret: "{{ lookup('env', 'LIGHTSPEED_CLIENT_SECRET') }}"
+            status_code: [200]
+          register: ao_console_login
+          no_log: true
+
+        - name: Find the demo host in the Insights inventory
+          ansible.builtin.uri:
+            url: >-
+              https://console.redhat.com/api/inventory/v1/hosts?display_name={{ ao_demo_host | urlencode }}
+            headers:
+              Authorization: "Bearer {{ ao_console_login.json.access_token }}"
+            status_code: [200]
+          register: ao_console_host
+
+        - name: Warn when the demo host has not reported to Insights
+          ansible.builtin.debug:
+            msg: >-
+              {{ ao_demo_host }} is not in the Insights inventory yet, so no
+              CVE could be chosen. Registration uploads an archive and the
+              vulnerability scoring follows a few minutes later.
+          when: ao_console_host.json.results | length == 0
+
+        # Known exploit first, then plain CVSS order. Both filter on an
+        # available advisory, because a CVE without one sends the triage
+        # agent down the investigate branch.
+        - name: Read the host's top CVEs
+          ansible.builtin.uri:
+            url: >-
+              https://console.redhat.com/api/vulnerability/v1/systems/{{
+              ao_console_host.json.results[0].id }}/cves?limit=20&sort=-cvss_score{{
+              '&known_exploit=true' if item else '' }}
+            headers:
+              Authorization: "Bearer {{ ao_console_login.json.access_token }}"
+            status_code: [200]
+          register: ao_candidate_cves
+          loop: [true, false]
+          loop_control:
+            label: "{{ 'known exploit' if item else 'any' }}"
+          when: ao_console_host.json.results | length > 0
+
+        - name: Select the demo CVE
+          ansible.builtin.set_fact:
+            ao_demo_cve: "{{ _candidates | first | default('', true) }}"
+          vars:
+            _candidates: >-
+              {{ ao_candidate_cves.results | map(attribute='json.data') | select('defined') | flatten
+                 | selectattr('attributes.advisory_available') | map(attribute='id') | list }}
+          when: ao_console_host.json.results | length > 0
+
+        - name: Report the chosen CVE
+          ansible.builtin.debug:
+            msg: "Demo CVE chosen from {{ ao_demo_host }}: {{ ao_demo_cve }}"
+          when: ao_demo_cve | length > 0
+
+    - name: Warn when no demo CVE could be set
       ansible.builtin.debug:
         msg: >-
-          AO_DEMO_CVE is empty, so the CVE Alert trigger has no default cve_id.
-          Pick a CVE that Lightspeed lists for the host with an errata and
-          re-run, or fill the field by hand on each run.
+          The CVE Alert trigger has no default cve_id. Set AO_DEMO_CVE to a CVE
+          Lightspeed lists for {{ ao_demo_host }} with an errata, or fill the
+          field by hand on each run. An empty cve_id makes the triage agent
+          take the investigate branch.
       when: ao_demo_cve | length == 0
 
     - name: Log in to Automation Orchestrator

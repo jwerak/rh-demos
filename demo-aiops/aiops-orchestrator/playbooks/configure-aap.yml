@@ -440,10 +440,9 @@
             extra_data:
               create_vm_aws_region: "{{ ao_aws_region }}"
               aws_key_name: "{{ ao_aws_keypair }}"
-            success_nodes:
-              - vm-node1
-              - vm-node2
-              - vm-node3
+            # Derived from ao_vm_nodes so adding or renaming a node does not
+            # have to be mirrored here.
+            success_nodes: "{{ ao_vm_nodes | map(attribute='identifier') | list }}"
         ao_suffix_nodes:
           - identifier: wire
             unified_job_template: "{{ ao_wire_template }}"

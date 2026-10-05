@@ -103,7 +103,28 @@ The export carries no instance ids, so the play sets organization `Ansible Produ
 
 `AO_DEMO_CVE` has to be a CVE that Lightspeed lists for the host with an errata — the triage prompt does not pick one when the field is empty. `AO_DEMO_HOST` defaults to `node1`, which is the dev host and so the auto-patch path; `node2` and `node3` are production and stop at the approval node.
 
+Leave `AO_DEMO_CVE` empty and the play picks the demo host's top known-exploit CVE with an available advisory from live Insights data. A CVE pinned from an earlier run goes stale, because Insights re-scores a host on every upload.
+
 Nothing is left to do by hand. `.cursor/skills/ao-cve-lab/ui.md` describes what the playbooks build, for checking their work in the UI.
+
+## Resetting
+
+`local/reprovision.sh` tears the lab down and builds it back:
+
+```bash
+cd demo-aiops/aiops-orchestrator/local
+./reprovision.sh              # reset, then rebuild with new AWS instances
+./reprovision.sh --keep-vms   # clear the AO runs, Gitea, and the generated
+                              # templates; leave the instances alone
+./reprovision.sh --reset-only # tear down and stop
+./reprovision.sh --no-reset   # rebuild over what is already there
+```
+
+`playbooks/reset-lab.yml` deletes only what the demo created: the AO workflow and its runs, the Gitea repo, the generated `CVE Remediation - *` job templates, this lab's Insights systems, and the AWS instances named in `ao_nodes`. Each part has an `ao_reset_*` flag. Deleting Insights systems needs **Inventory Hosts administrator** on the `cve-remediator` group; without it those calls return 403 and the play reports what it had to leave behind.
+
+Node names carry a per-deployment suffix so the systems of past runs stay tellable apart in the Insights inventory, which keeps them for days. `ao_node_suffix` defaults to the cluster id; override with `AO_NODE_SUFFIX`.
+
+After the lab environment is stopped and started the instances get new public IPs. Re-run `AO Lab | Wire inventory` to refresh `ansible_host` in `lab-inventory`, otherwise every job fails to connect.
 
 The older local launchers still work for the cloud templates and inventory wiring:
 
