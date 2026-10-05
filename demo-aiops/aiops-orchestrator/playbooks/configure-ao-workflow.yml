@@ -1,0 +1,331 @@
+---
+# Import demo-cve-remediation/ao/rhel-cve-remediation.json into Automation
+# Orchestrator and wire it to this deployment.
+#
+# The exported JSON carries no instance-specific ids: the AAP nodes still say
+# organization Default and have no credential, and the agent nodes have an
+# empty tool_selections and integration_connections. This play fills all of
+# that from the integrations configure-ao.yml created, so run that first.
+#
+# Run from aiops-orchestrator/local. Secrets come from the environment.
+- name: Import the RHEL CVE remediation workflow into Automation Orchestrator
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ao_url: "{{ lookup('env', 'AO_URL') }}"
+    ao_project: default
+    ao_workflow_file: "{{ playbook_dir }}/../../../demo-cve-remediation/ao/rhel-cve-remediation.json"
+    ao_workflow_name: RHEL CVE Remediation - Intelligent Patching
+    ao_aap_organization: Ansible Product Demos (APD)
+    ao_llm_name: MaaS
+    ao_aap_mcp_name: AAP MCP
+    ao_lightspeed_mcp_name: Lightspeed MCP
+    ao_aap_name: AAP
+    # The AAP tools answer "which environment is this host in", the Lightspeed
+    # tools answer "is there an errata". Triage needs one of each; the
+    # investigate agent gets everything it might reach for.
+    ao_agent_tools:
+      triage_agent:
+        - vulnerability__get_cve_systems
+        - hosts_list
+        - hosts_variable_data_retrieve
+      investigate_agent:
+        - vulnerability__get_cve_systems
+        - vulnerability__get_system_cves
+        - vulnerability__explain_cves
+        - advisor__get_active_rules
+        - inventory__find_host_by_name
+        - hosts_list
+        - hosts_variable_data_retrieve
+
+  tasks:
+    - name: Require the AO settings from the environment
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'AO_URL') | length > 0
+          - lookup('env', 'AO_USERNAME') | length > 0
+          - lookup('env', 'AO_PASSWORD') | length > 0
+          - lookup('env', 'AO_MODEL_NAME') | length > 0
+          - lookup('env', 'CONTROLLER_HOST') | length > 0
+        fail_msg: >-
+          Source aiops-orchestrator/.env and pass AO_URL, AO_USERNAME,
+          AO_PASSWORD, AO_MODEL_NAME, and CONTROLLER_HOST to
+          ansible-navigator with --penv.
+
+    - name: Derive the trigger defaults
+      ansible.builtin.set_fact:
+        ao_lab_tag: "{{ _lab_tag }}"
+        ao_demo_cve: "{{ lookup('env', 'AO_DEMO_CVE') }}"
+        ao_demo_host: "{{ lookup('env', 'AO_DEMO_HOST') | default('node1', true) }}"
+      vars:
+        _from_env: "{{ lookup('env', 'AO_INSIGHTS_GROUP') }}"
+        _cluster_id: "{{ lookup('env', 'CONTROLLER_HOST') | regex_search('cluster-[a-z0-9]+') | default('', true) }}"
+        _group: "{{ _from_env if _from_env | length > 0 else 'ao-cve-' ~ _cluster_id }}"
+        _lab_tag: "group={{ _group }}"
+
+    # The triage prompt does not pick a CVE when cve_id is empty, so a lab
+    # without one imports a workflow that cannot be demoed as-is.
+    - name: Warn when no demo CVE is set
+      ansible.builtin.debug:
+        msg: >-
+          AO_DEMO_CVE is empty, so the CVE Alert trigger has no default cve_id.
+          Pick a CVE that Lightspeed lists for the host with an errata and
+          re-run, or fill the field by hand on each run.
+      when: ao_demo_cve | length == 0
+
+    - name: Log in to Automation Orchestrator
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/auth/login"
+        method: POST
+        body_format: json
+        body:
+          username: "{{ lookup('env', 'AO_USERNAME') }}"
+          password: "{{ lookup('env', 'AO_PASSWORD') }}"
+        validate_certs: false
+        status_code: [200]
+      register: ao_login
+      no_log: true
+
+    - name: Store the AO bearer token
+      ansible.builtin.set_fact:
+        ao_headers:
+          Authorization: "Bearer {{ ao_login.json.access_token }}"
+      no_log: true
+
+    - name: Read the AO projects
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/projects"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_projects
+
+    - name: Read the AO integrations
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/integrations"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_integrations
+
+    - name: Read the AO credentials
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/credentials"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_credentials
+
+    - name: Map AO objects to ids
+      ansible.builtin.set_fact:
+        ao_project_id: >-
+          {{ (ao_projects.json.resources | selectattr('name', 'equalto', ao_project) | first).id }}
+        ao_integration_ids: >-
+          {{ dict(ao_integrations.json.resources | map(attribute='name') | zip(
+                  ao_integrations.json.resources | map(attribute='id'))) }}
+        ao_credential_ids: >-
+          {{ dict(ao_credentials.json.resources | map(attribute='name') | zip(
+                  ao_credentials.json.resources | map(attribute='id'))) }}
+
+    - name: Require the integrations configure-ao.yml creates
+      ansible.builtin.assert:
+        that: item in ao_integration_ids
+        fail_msg: >-
+          Integration {{ item }} is missing. Run playbooks/configure-ao.yml first.
+      loop:
+        - "{{ ao_llm_name }}"
+        - "{{ ao_aap_mcp_name }}"
+        - "{{ ao_lightspeed_mcp_name }}"
+        - "{{ ao_aap_name }}"
+
+    - name: Read the LLM models
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/integrations/{{ ao_integration_ids[ao_llm_name] }}/models?limit=100"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_models
+
+    - name: Select the LLM model record
+      ansible.builtin.set_fact:
+        ao_llm_model_id: >-
+          {{ (ao_models.json.resources
+              | selectattr('model_id', 'equalto', lookup('env', 'AO_MODEL_NAME')) | first).id }}
+
+    # These endpoints page at 20 and cap limit at 100. Both MCP servers are
+    # well under 100 tools, so one page each is enough.
+    - name: Read the MCP tools
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/integrations/{{ ao_integration_ids[item] }}/tools?limit=100"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_tools
+      loop:
+        - "{{ ao_aap_mcp_name }}"
+        - "{{ ao_lightspeed_mcp_name }}"
+
+    - name: Map tool names to ids
+      ansible.builtin.set_fact:
+        ao_tool_ids: >-
+          {{ dict(_all | map(attribute='name') | zip(_all | map(attribute='id'))) }}
+      vars:
+        _all: "{{ ao_tools.results | map(attribute='json.resources') | flatten }}"
+
+    - name: Read the exported workflow
+      ansible.builtin.set_fact:
+        ao_workflow: "{{ lookup('file', ao_workflow_file) | from_json }}"
+
+    - name: Reset the rewritten nodes and triggers
+      ansible.builtin.set_fact:
+        ao_nodes: []
+        ao_triggers: []
+
+    - name: Fill in the trigger defaults
+      ansible.builtin.set_fact:
+        ao_triggers: "{{ ao_triggers + [item | combine({'parameters': _parameters}, recursive=True)] }}"
+      loop: "{{ ao_workflow.triggers }}"
+      loop_control:
+        label: "{{ item.id }}"
+      vars:
+        _parameters:
+          input_schema:
+            properties:
+              host:
+                default: "{{ ao_demo_host }}"
+              cve_id:
+                default: "{{ ao_demo_cve }}"
+              lab_tag:
+                default: "{{ ao_lab_tag }}"
+
+    - name: Wire the workflow nodes to this deployment
+      ansible.builtin.set_fact:
+        ao_nodes: "{{ ao_nodes + [item | combine({'parameters': _overlay}, recursive=True)] }}"
+      loop: "{{ ao_workflow.nodes }}"
+      loop_control:
+        label: "{{ item.id }} ({{ item.type }})"
+      vars:
+        _aap_overlay:
+          organization_name: "{{ ao_aap_organization }}"
+          integration_id: "{{ ao_integration_ids[ao_aap_name] }}"
+          credential_id: "{{ ao_credential_ids[ao_aap_name] }}"
+        _agent_overlay:
+          llm_model_id: "{{ ao_llm_model_id }}"
+          credential_id: "{{ ao_credential_ids[ao_llm_name] }}"
+          tool_selection_strategy: SELECTED
+          tool_selections: >-
+            {{ ao_agent_tools.get(item.id, []) | map('extract', ao_tool_ids) | select('string') | list }}
+          # Without an execution connection the agent only loads the tools of
+          # integrations it has a credential for, so both go on every agent.
+          integration_connections:
+            - integration_id: "{{ ao_integration_ids[ao_aap_mcp_name] }}"
+              credential_id: "{{ ao_credential_ids[ao_aap_mcp_name] }}"
+            - integration_id: "{{ ao_integration_ids[ao_lightspeed_mcp_name] }}"
+              credential_id: "{{ ao_credential_ids[ao_lightspeed_mcp_name] }}"
+        _overlay: >-
+          {{ _aap_overlay if item.type == 'aap_job_template'
+             else (_agent_overlay if item.type == 'agentic' else {}) }}
+
+    - name: Warn about agent tools that are not available
+      ansible.builtin.assert:
+        that: item.value | difference(ao_tool_ids.keys() | list) | length == 0
+        fail_msg: >-
+          {{ item.key }} asks for tools the MCP integrations do not expose:
+          {{ item.value | difference(ao_tool_ids.keys() | list) | join(', ') }}
+      loop: "{{ ao_agent_tools | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Build the workflow definition
+      ansible.builtin.set_fact:
+        ao_workflow_definition: >-
+          {{ ao_workflow | combine({'triggers': ao_triggers, 'nodes': ao_nodes}) }}
+
+    - name: Read the existing workflows
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/workflows"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_workflows
+
+    # An imported copy does not track the file, so a re-import has to replace
+    # the old workflow rather than leave two with the same name.
+    - name: Delete the previous import
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/workflows/{{ item.id }}"
+        method: DELETE
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+        status_code: [200, 204]
+      loop: >-
+        {{ ao_workflows.json.resources | selectattr('name', 'equalto', ao_workflow_name) | list }}
+      loop_control:
+        label: "{{ item.id }}"
+
+    - name: Validate the workflow definition
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/workflows/validate"
+        method: POST
+        headers: "{{ ao_headers }}"
+        body_format: json
+        body:
+          workflow_definition: "{{ ao_workflow_definition }}"
+        validate_certs: false
+        status_code: [200]
+      register: ao_workflow_validation
+
+    - name: Show the validation result
+      ansible.builtin.debug:
+        var: ao_workflow_validation.json
+
+    - name: Import the workflow
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/workflows"
+        method: POST
+        headers: "{{ ao_headers }}"
+        body_format: json
+        body:
+          name: "{{ ao_workflow_name }}"
+          description: "{{ ao_workflow.description | default(ao_workflow_name) }}"
+          project_id: "{{ ao_project_id }}"
+          is_import: true
+          workflow_definition: "{{ ao_workflow_definition }}"
+        validate_certs: false
+        status_code: [200, 201]
+      register: ao_workflow_created
+
+    # An imported workflow lands as an unpublished draft with is_enabled
+    # false. The manual trigger does not appear until a version is published.
+    - name: Publish the imported version
+      ansible.builtin.uri:
+        url: >-
+          {{ ao_url }}/api/v1/workflows/{{ ao_workflow_created.json.id }}/versions/{{
+          ao_workflow_created.json.current_version }}/publish
+        method: POST
+        headers: "{{ ao_headers }}"
+        body_format: json
+        body:
+          change_description: Imported by playbooks/configure-ao-workflow.yml
+        validate_certs: false
+        status_code: [200, 201]
+      register: ao_workflow_published
+
+    - name: Re-read the workflow
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/workflows/{{ ao_workflow_created.json.id }}"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_workflow_final
+
+    - name: Fail when the workflow did not publish
+      ansible.builtin.assert:
+        that:
+          - ao_workflow_final.json.published_version_id is not none
+          - ao_workflow_final.json.is_enabled
+        fail_msg: >-
+          {{ ao_workflow_name }} imported but is not published and enabled:
+          {{ ao_workflow_final.json.validation_result | default('no validation result') }}
+
+    - name: Report the imported workflow
+      ansible.builtin.debug:
+        msg: >-
+          Imported and published {{ ao_workflow_name }} as
+          {{ ao_workflow_created.json.id }}. Trigger defaults: host
+          {{ ao_demo_host }}, lab_tag {{ ao_lab_tag }}, cve_id
+          {{ ao_demo_cve | default('(empty - set one before demoing)', true) }}.

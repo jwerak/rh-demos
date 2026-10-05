@@ -91,7 +91,19 @@ ansible-navigator run ../playbooks/configure-ao.yml \
 
 It creates credentials and global integrations `MaaS` (LLM provider, model from `AO_MODEL_NAME`), `AAP MCP` (`hosts_list`, `hosts_variable_data_retrieve`), `Lightspeed MCP` (the vulnerability, inventory, remediation, and advisor tools the workflow calls), and `AAP`, then validates all four and fails if any is unhealthy. It matches on name, so re-running changes nothing. MCP URLs are derived from the cluster in `CONTROLLER_HOST`; set `AAP_MCP_URL` or `LIGHTSPEED_MCP_URL` to override. `AAP_MCP_TOKEN` is a persistent AAP gateway token; the playbook creates one if the variable is empty, so put it in `.env` to keep re-runs on the same token.
 
-After that only the AO workflow import and node wiring are manual, in `.cursor/skills/ao-cve-lab/ui.md`.
+`playbooks/configure-ao-workflow.yml` then imports `demo-cve-remediation/ao/rhel-cve-remediation.json`:
+
+```bash
+AO_DEMO_CVE=CVE-2026-31431 ansible-navigator run ../playbooks/configure-ao-workflow.yml \
+  --penv AO_URL --penv AO_USERNAME --penv AO_PASSWORD --penv AO_MODEL_NAME \
+  --penv CONTROLLER_HOST --penv AO_INSIGHTS_GROUP --penv AO_DEMO_CVE --penv AO_DEMO_HOST
+```
+
+The export carries no instance ids, so the play sets organization `Ansible Product Demos (APD)` and the AAP integration and credential on every job template node, the model, credential, tool selection, and MCP execution connections on both agent nodes, and the trigger defaults for `host`, `cve_id`, and `lab_tag`. It then validates, creates, and publishes; an import without a published version has no manual trigger. Re-running replaces the previous copy of the same name, so edits to the JSON do take effect.
+
+`AO_DEMO_CVE` has to be a CVE that Lightspeed lists for the host with an errata — the triage prompt does not pick one when the field is empty. `AO_DEMO_HOST` defaults to `node1`, which is the dev host and so the auto-patch path; `node2` and `node3` are production and stop at the approval node.
+
+Nothing is left to do by hand. `.cursor/skills/ao-cve-lab/ui.md` describes what the playbooks build, for checking their work in the UI.
 
 The older local launchers still work for the cloud templates and inventory wiring:
 
