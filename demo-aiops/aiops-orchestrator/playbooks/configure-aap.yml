@@ -21,6 +21,9 @@
     ao_gitea_credential: Gitea
     ao_gitea_scm_credential: Gitea SCM
     ao_lightspeed_project: Lightspeed-Playbooks
+    ao_lightspeed_mcp_service: >-
+      {{ lookup('env', 'LIGHTSPEED_MCP_SERVICE')
+         | default('lightspeed-mcp.mcp-cve-lightspeed.svc.cluster.local', true) }}
     ao_workflow_name: AO Lab | Provision and register
     ao_wire_template: AO Lab | Wire inventory
     ao_register_template: AO Lab | Register nodes
@@ -279,6 +282,7 @@
             project: "{{ ao_project_name }}"
             playbook: "{{ item.playbook }}"
             credentials: "{{ item.credentials | default(omit) }}"
+            extra_vars: "{{ item.extra_vars | default(omit) }}"
             ask_variables_on_launch: true
             state: present
             controller_oauthtoken: "{{ ao_controller_token }}"
@@ -288,6 +292,13 @@
               description: Fetch a Lightspeed remediation playbook and commit it to Gitea
               playbook: demo-cve-remediation/aap/playbooks/cve_fetch_and_commit.yml
               credentials: "{{ [ao_gitea_credential] if (lookup('env', 'GITEA_TOKEN') | length > 0) else omit }}"
+              # cve_fetch_and_commit.yml has no default for mcp_server_host and
+              # the AO node does not pass one, so the template has to carry it.
+              # This is the in-cluster service, not the route: the playbook
+              # speaks plain HTTP to the MCP server.
+              extra_vars:
+                mcp_server_host: "{{ ao_lightspeed_mcp_service }}"
+                mcp_server_port: "8001"
             - name: CVE - Sync and Deploy Remediation
               description: Sync Lightspeed-Playbooks and create the per-host remediation job template
               playbook: demo-cve-remediation/aap/playbooks/cve_sync_and_deploy.yml
