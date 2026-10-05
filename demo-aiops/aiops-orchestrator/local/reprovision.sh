@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Tear the AO CVE lab down and build it back up.
+#
+#   cd demo-aiops/aiops-orchestrator/local
+#   ./reprovision.sh                 # reset, then rebuild everything
+#   ./reprovision.sh --reset-only    # tear down and stop
+#   ./reprovision.sh --no-reset      # rebuild over what is already there
+#   ./reprovision.sh --keep-vms      # leave the AWS instances alone
+#
+# Reads demo-aiops/aiops-orchestrator/.env. Nothing is echoed from it.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+if [[ ! -f ../.env ]]; then
+  echo "../.env is missing. Copy .env.sample and fill it in." >&2
+  exit 1
+fi
+
+set -a
+# shellcheck disable=SC1091
+source ../.env
+set +a
+
+do_reset=true
+do_build=true
+reset_vms=true
+
+for arg in "$@"; do
+  case "$arg" in
+    --reset-only) do_build=false ;;
+    --no-reset) do_reset=false ;;
+    --keep-vms) reset_vms=false ;;
+    -h | --help)
+      sed -n '2,12p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "unknown option: $arg" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# AO_DEMO_CVE has to be a CVE Lightspeed lists for the host with an errata.
+# The triage prompt does not pick one when the trigger field is empty.
+if [[ -z "${AO_DEMO_CVE:-}" ]]; then
+  echo "note: AO_DEMO_CVE is unset, so the workflow trigger will have no default CVE."
+fi
+
+run() {
+  echo
+  echo "=== $1"
+  shift
+  "$@"
+}
+
+if [[ "$do_reset" == true ]]; then
+  run "reset the lab" ansible-navigator run ../playbooks/reset-lab.yml \
+    --penv CONTROLLER_HOST --penv CONTROLLER_USERNAME --penv CONTROLLER_PASSWORD \
+    --penv AO_URL --penv AO_USERNAME --penv AO_PASSWORD \
+    --penv GITEA_URL --penv GITEA_TOKEN --penv GITEA_REPO \
+    --penv LIGHTSPEED_CLIENT_ID --penv LIGHTSPEED_CLIENT_SECRET \
+    --penv AO_NODE_SUFFIX \
+    -e "ao_reset_vms=${reset_vms}"
+fi
+
+if [[ "$do_build" == false ]]; then
+  echo
+  echo "Reset done. Skipping the rebuild."
+  exit 0
+fi
+
+# Creates the AAP objects and, with ao_launch_workflow, the AWS instances.
+# Launching the workflow only works when the instances are gone, which the
+# reset above takes care of.
+run "AAP objects and nodes" ansible-navigator run ../playbooks/configure-aap.yml \
+  --penv CONTROLLER_HOST --penv CONTROLLER_USERNAME --penv CONTROLLER_PASSWORD \
+  --penv RHSM_ORG_ID --penv RHSM_ACTIVATION_KEY \
+  --penv GITEA_URL --penv GITEA_TOKEN --penv GITEA_REPO \
+  --penv AO_INSIGHTS_GROUP --penv AO_NODE_SUFFIX --penv LIGHTSPEED_MCP_SERVICE \
+  -e "ao_launch_workflow=${reset_vms}"
+
+run "AO credentials and integrations" ansible-navigator run ../playbooks/configure-ao.yml \
+  --penv AO_URL --penv AO_USERNAME --penv AO_PASSWORD \
+  --penv AO_MODEL_BASE_URL --penv AO_MODEL_NAME --penv AO_MODEL_ACCESS_TOKEN \
+  --penv CONTROLLER_HOST --penv CONTROLLER_USERNAME --penv CONTROLLER_PASSWORD \
+  --penv AAP_MCP_TOKEN --penv AAP_MCP_URL --penv LIGHTSPEED_MCP_URL
+
+run "AO workflow" ansible-navigator run ../playbooks/configure-ao-workflow.yml \
+  --penv AO_URL --penv AO_USERNAME --penv AO_PASSWORD --penv AO_MODEL_NAME \
+  --penv CONTROLLER_HOST --penv AO_INSIGHTS_GROUP \
+  --penv AO_DEMO_CVE --penv AO_DEMO_HOST --penv AO_NODE_SUFFIX
+
+echo
+echo "Lab rebuilt."
+echo "Insights needs a few minutes after registration before the CVE counts appear."

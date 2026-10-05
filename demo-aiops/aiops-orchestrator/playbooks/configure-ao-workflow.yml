@@ -12,6 +12,8 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  vars_files:
+    - vars/rhel-nodes.yml
   vars:
     ao_url: "{{ lookup('env', 'AO_URL') }}"
     ao_project: default
@@ -57,7 +59,10 @@
       ansible.builtin.set_fact:
         ao_lab_tag: "{{ _lab_tag }}"
         ao_demo_cve: "{{ lookup('env', 'AO_DEMO_CVE') }}"
-        ao_demo_host: "{{ lookup('env', 'AO_DEMO_HOST') | default('node1', true) }}"
+        # The first node is the dev host, so the default trigger takes the
+        # auto-patch path. node2 and node3 are production and stop for approval.
+        ao_demo_host: >-
+          {{ lookup('env', 'AO_DEMO_HOST') | default(ao_nodes[0].lab_name, true) }}
       vars:
         _from_env: "{{ lookup('env', 'AO_INSIGHTS_GROUP') }}"
         _cluster_id: "{{ lookup('env', 'CONTROLLER_HOST') | regex_search('cluster-[a-z0-9]+') | default('', true) }}"

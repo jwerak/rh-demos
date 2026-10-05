@@ -8,27 +8,39 @@ ao_aws_keypair: aws-test-key
 ao_image_filter: "RHEL-9.6.0_HVM-202506*"
 ao_aws_subnet: aws-test-subnet
 ao_aws_sg: aws-test-sg
+
+# Plain node1/node2/node3 made every past deployment's systems look identical
+# in the Insights inventory, where entries linger for days after the lab is
+# gone. The suffix goes on the AWS Name tag, the lab-inventory host name, and
+# so on the Insights display name, which is what makes them tellable apart.
+# Set AO_NODE_SUFFIX to re-provision the same cluster without colliding with
+# the systems the previous run left behind.
+ao_node_suffix: >-
+  {{ lookup('env', 'AO_NODE_SUFFIX')
+     | default(lookup('env', 'CONTROLLER_HOST') | regex_search('cluster-[a-z0-9]+')
+               | default('lab', true) | regex_replace('^cluster-', ''), true) }}
+
 ao_nodes:
-  - name: cve-node1
+  - name: "cve-node1-{{ ao_node_suffix }}"
     environment: Dev
     purpose: cve-dev-webserver
-    lab_name: node1
+    lab_name: "node1-{{ ao_node_suffix }}"
     variables:
       env: dev
       role: webserver
       criticality: low
-  - name: cve-node2
+  - name: "cve-node2-{{ ao_node_suffix }}"
     environment: Prod
     purpose: cve-prod-appserver
-    lab_name: node2
+    lab_name: "node2-{{ ao_node_suffix }}"
     variables:
       env: production
       role: application_server
       criticality: high
-  - name: cve-node3
+  - name: "cve-node3-{{ ao_node_suffix }}"
     environment: Prod
     purpose: cve-prod-database
-    lab_name: node3
+    lab_name: "node3-{{ ao_node_suffix }}"
     variables:
       env: production
       role: database

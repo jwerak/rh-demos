@@ -324,7 +324,10 @@
             ao_vm_nodes: "{{ ao_vm_nodes | default([]) + [ao_vm_node] }}"
           vars:
             ao_vm_node:
-              identifier: "vm-{{ item.lab_name }}"
+              # Index, not the node name. A name-derived identifier makes
+              # renaming the nodes add a second set of Create VM nodes beside
+              # the old ones, and the workflow then builds six instances.
+              identifier: "vm-{{ ao_nodes.index(item) + 1 }}"
               unified_job_template: Cloud | AWS | Create VM
               extra_data:
                 create_vm_aws_region: "{{ ao_aws_region }}"
@@ -370,6 +373,47 @@
             controller_oauthtoken: "{{ ao_controller_token }}"
             validate_certs: false
           loop: "{{ ao_prefix_nodes + ao_vm_nodes + ao_suffix_nodes }}"
+          loop_control:
+            label: "{{ item.identifier }}"
+
+        # Nothing in the module set prunes nodes, so a node that used to be
+        # in the workflow and no longer is would otherwise keep running.
+        - name: Find the workflow job template id
+          ansible.builtin.uri:
+            url: >-
+              {{ lookup('env', 'CONTROLLER_HOST') }}/api/controller/v2/workflow_job_templates/?name={{
+              ao_workflow_name | urlencode }}
+            headers:
+              Authorization: "Bearer {{ ao_controller_token }}"
+            validate_certs: false
+            status_code: [200]
+          register: ao_workflow_lookup
+
+        - name: Read the workflow nodes
+          ansible.builtin.uri:
+            url: >-
+              {{ lookup('env', 'CONTROLLER_HOST') }}/api/controller/v2/workflow_job_templates/{{
+              ao_workflow_lookup.json.results[0].id }}/workflow_nodes/?page_size=200
+            headers:
+              Authorization: "Bearer {{ ao_controller_token }}"
+            validate_certs: false
+            status_code: [200]
+          register: ao_existing_workflow_nodes
+
+        - name: Remove workflow nodes that are no longer defined
+          ansible.builtin.uri:
+            url: >-
+              {{ lookup('env', 'CONTROLLER_HOST') }}/api/controller/v2/workflow_job_template_nodes/{{ item.id }}/
+            method: DELETE
+            headers:
+              Authorization: "Bearer {{ ao_controller_token }}"
+            validate_certs: false
+            status_code: [204]
+          loop: >-
+            {{ ao_existing_workflow_nodes.json.results
+               | rejectattr('identifier', 'in',
+                            (ao_prefix_nodes + ao_vm_nodes + ao_suffix_nodes)
+                            | map(attribute='identifier') | list) | list }}
           loop_control:
             label: "{{ item.identifier }}"
 

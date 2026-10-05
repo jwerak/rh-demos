@@ -1,0 +1,287 @@
+---
+# Tear the AO CVE lab back down to a clean slate: AO runs, the generated
+# Gitea playbooks, the generated AAP job templates, the stale Insights
+# systems, and the AWS instances.
+#
+# This deletes things. It only ever touches objects this demo created:
+# workflows and executions of ao_workflow_name, the Gitea repo in GITEA_REPO,
+# AAP templates matching ao_generated_template_prefix, Insights systems whose
+# display name matches one of ao_nodes, and the AWS Name tags in ao_nodes.
+#
+# Run from aiops-orchestrator/local. local/reprovision.sh runs this and then
+# rebuilds the lab in one go.
+- name: Reset the AO CVE lab
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars/rhel-nodes.yml
+  vars:
+    ao_url: "{{ lookup('env', 'AO_URL') }}"
+    ao_workflow_name: RHEL CVE Remediation - Intelligent Patching
+    ao_generated_template_prefix: "CVE Remediation - "
+    ao_lab_inventory: lab-inventory
+    ao_delete_vm_template: Cloud | AWS | Delete VM
+    # Each is independently skippable so a partial reset is one flag away.
+    ao_reset_ao: true
+    ao_reset_gitea: true
+    ao_reset_templates: true
+    ao_reset_insights: true
+    ao_reset_vms: true
+
+  tasks:
+    - name: Require the controller settings from the environment
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'CONTROLLER_HOST') | length > 0
+          - lookup('env', 'CONTROLLER_USERNAME') | length > 0
+          - lookup('env', 'CONTROLLER_PASSWORD') | length > 0
+        fail_msg: >-
+          Source aiops-orchestrator/.env and pass CONTROLLER_HOST,
+          CONTROLLER_USERNAME, and CONTROLLER_PASSWORD with --penv.
+
+    - name: Report what this will delete
+      ansible.builtin.debug:
+        msg:
+          - "AO runs and workflow: {{ ao_reset_ao }} ({{ ao_workflow_name }})"
+          - "Gitea repo: {{ ao_reset_gitea }} ({{ lookup('env', 'GITEA_REPO') }})"
+          - "Generated AAP templates: {{ ao_reset_templates }} ({{ ao_generated_template_prefix }}*)"
+          - "Stale Insights systems: {{ ao_reset_insights }}"
+          - "AWS instances: {{ ao_reset_vms }} ({{ ao_nodes | map(attribute='name') | join(', ') }})"
+
+    # ----------------------------------------------------------------- AO
+    - name: Reset Automation Orchestrator
+      when: ao_reset_ao | bool
+      block:
+        - name: Log in to Automation Orchestrator
+          ansible.builtin.uri:
+            url: "{{ ao_url }}/api/v1/auth/login"
+            method: POST
+            body_format: json
+            body:
+              username: "{{ lookup('env', 'AO_USERNAME') }}"
+              password: "{{ lookup('env', 'AO_PASSWORD') }}"
+            validate_certs: false
+            status_code: [200]
+          register: ao_login
+          no_log: true
+
+        - name: Store the AO bearer token
+          ansible.builtin.set_fact:
+            ao_headers:
+              Authorization: "Bearer {{ ao_login.json.access_token }}"
+          no_log: true
+
+        - name: Read the AO executions
+          ansible.builtin.uri:
+            url: "{{ ao_url }}/api/v1/executions"
+            headers: "{{ ao_headers }}"
+            validate_certs: false
+          register: ao_executions
+
+        # There is no DELETE on an execution, only cancel. Anything paused at
+        # an approval holds a worker slot and shows up in the next demo, so
+        # those have to be stopped even though the history stays.
+        - name: Cancel the executions that are still live
+          ansible.builtin.uri:
+            url: "{{ ao_url }}/api/v1/executions/{{ item.id }}/cancel"
+            method: POST
+            headers: "{{ ao_headers }}"
+            validate_certs: false
+            status_code: [200, 202, 409]
+          loop: >-
+            {{ ao_executions.json.resources
+               | selectattr('status', 'in', ['pending', 'running', 'paused']) | list }}
+          loop_control:
+            label: "{{ item.id }} ({{ item.status }})"
+
+        - name: Read the AO workflows
+          ansible.builtin.uri:
+            url: "{{ ao_url }}/api/v1/workflows"
+            headers: "{{ ao_headers }}"
+            validate_certs: false
+          register: ao_workflows
+
+        # Deleting the workflow is what clears its run history, since the
+        # executions themselves cannot be deleted.
+        - name: Delete the workflow
+          ansible.builtin.uri:
+            url: "{{ ao_url }}/api/v1/workflows/{{ item.id }}"
+            method: DELETE
+            headers: "{{ ao_headers }}"
+            validate_certs: false
+            status_code: [200, 204]
+          loop: >-
+            {{ ao_workflows.json.resources
+               | selectattr('name', 'equalto', ao_workflow_name) | list }}
+          loop_control:
+            label: "{{ item.id }}"
+
+    # -------------------------------------------------------------- Gitea
+    - name: Reset the Gitea repository
+      when:
+        - ao_reset_gitea | bool
+        - lookup('env', 'GITEA_URL') | length > 0
+        - lookup('env', 'GITEA_TOKEN') | length > 0
+      block:
+        # Recreating beats deleting the generated files: it drops them from
+        # the history too, and the URL and PAT stay valid so the AAP project
+        # and Gitea credentials do not have to be touched.
+        - name: Delete the playbook repository
+          ansible.builtin.uri:
+            url: "{{ lookup('env', 'GITEA_URL') }}/api/v1/repos/{{ lookup('env', 'GITEA_REPO') }}"
+            method: DELETE
+            headers:
+              Authorization: "token {{ lookup('env', 'GITEA_TOKEN') }}"
+            validate_certs: false
+            status_code: [204, 404]
+
+        - name: Recreate the playbook repository
+          ansible.builtin.uri:
+            url: "{{ lookup('env', 'GITEA_URL') }}/api/v1/user/repos"
+            method: POST
+            headers:
+              Authorization: "token {{ lookup('env', 'GITEA_TOKEN') }}"
+            body_format: json
+            body:
+              name: "{{ lookup('env', 'GITEA_REPO') | split('/') | last }}"
+              private: false
+              auto_init: true
+              default_branch: main
+            validate_certs: false
+            status_code: [201]
+
+    # ---------------------------------------------------------------- AAP
+    - name: Create a gateway token
+      ansible.builtin.include_tasks: tasks/create-gateway-token.yml
+
+    - name: Reset the AAP side
+      block:
+        - name: Read the job templates
+          ansible.builtin.uri:
+            url: "{{ lookup('env', 'CONTROLLER_HOST') }}/api/controller/v2/job_templates/?page_size=200"
+            headers:
+              Authorization: "Bearer {{ ao_controller_token }}"
+            validate_certs: false
+          register: ao_job_templates
+          when: ao_reset_templates | bool
+
+        # CVE - Sync and Deploy Remediation creates one of these per CVE and
+        # host. They pile up and point at playbooks the Gitea reset removed.
+        - name: Delete the generated remediation templates
+          ansible.controller.job_template:
+            name: "{{ item }}"
+            state: absent
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          loop: >-
+            {{ ao_job_templates.json.results | map(attribute='name')
+               | select('match', ao_generated_template_prefix | regex_escape) | list }}
+          when: ao_reset_templates | bool
+
+        - name: Delete the lab-inventory hosts
+          ansible.controller.host:
+            name: "{{ item.lab_name }}"
+            inventory: "{{ ao_lab_inventory }}"
+            state: absent
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          loop: "{{ ao_nodes }}"
+          loop_control:
+            label: "{{ item.lab_name }}"
+          when: ao_reset_vms | bool
+
+        # Create VM skips the launch when an instance already carries the
+        # Name tag, so the old instances have to go before re-provisioning.
+        - name: Terminate the AWS instances
+          ansible.controller.job_launch:
+            job_template: "{{ ao_delete_vm_template }}"
+            extra_vars:
+              create_vm_aws_region: "{{ ao_aws_region }}"
+              create_vm_vm_name: "{{ item.name }}"
+            wait: true
+            timeout: 900
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          loop: "{{ ao_nodes }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when: ao_reset_vms | bool
+      always:
+        - name: Delete the gateway token
+          ansible.builtin.include_tasks: tasks/delete-gateway-token.yml
+
+    # ----------------------------------------------------------- Insights
+    - name: Reset the stale Insights systems
+      when:
+        - ao_reset_insights | bool
+        - lookup('env', 'LIGHTSPEED_CLIENT_ID') | length > 0
+        - lookup('env', 'LIGHTSPEED_CLIENT_SECRET') | length > 0
+      block:
+        - name: Get a console.redhat.com token
+          ansible.builtin.uri:
+            url: https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token
+            method: POST
+            body_format: form-urlencoded
+            body:
+              grant_type: client_credentials
+              scope: api.console
+              client_id: "{{ lookup('env', 'LIGHTSPEED_CLIENT_ID') }}"
+              client_secret: "{{ lookup('env', 'LIGHTSPEED_CLIENT_SECRET') }}"
+            status_code: [200]
+          register: ao_console_login
+          no_log: true
+
+        - name: Read the Insights inventory
+          ansible.builtin.uri:
+            url: https://console.redhat.com/api/inventory/v1/hosts?per_page=100
+            headers:
+              Authorization: "Bearer {{ ao_console_login.json.access_token }}"
+            status_code: [200]
+          register: ao_insights_hosts
+
+        # This lab's nodes, plus the bare node1/node2/node3 that earlier runs
+        # created before the names carried a suffix. Other systems on the org
+        # are left alone, however stale they look.
+        - name: Select the lab's Insights systems
+          ansible.builtin.set_fact:
+            ao_stale_systems: >-
+              {{ ao_insights_hosts.json.results
+                 | selectattr('display_name', 'in', ao_nodes | map(attribute='lab_name') | list) | list
+                 + ao_insights_hosts.json.results
+                 | selectattr('display_name', 'match', '^node[0-9]+$') | list }}
+
+        # The cve-remediator group only carries viewer roles, so a service
+        # account token gets 403 here. Treat that as "not permitted" and say
+        # so, rather than failing a reset that is otherwise complete.
+        - name: Delete the lab's Insights systems
+          ansible.builtin.uri:
+            url: "https://console.redhat.com/api/inventory/v1/hosts/{{ item.id }}"
+            method: DELETE
+            headers:
+              Authorization: "Bearer {{ ao_console_login.json.access_token }}"
+            status_code: [200, 202, 204, 403, 404]
+          register: ao_insights_deletes
+          loop: "{{ ao_stale_systems }}"
+          loop_control:
+            label: "{{ item.display_name }} {{ item.id }}"
+
+        - name: Report the Insights systems that could not be deleted
+          ansible.builtin.debug:
+            msg: >-
+              {{ _denied | length }} of {{ ao_stale_systems | length }} Insights
+              systems were not deleted: the service account got 403. Add
+              Inventory Hosts administrator to the cve-remediator group on
+              console.redhat.com, or delete them from Inventory by hand.
+              Left behind: {{ _denied | map(attribute='item.display_name') | join(', ') }}
+          vars:
+            _denied: >-
+              {{ ao_insights_deletes.results | default([]) | selectattr('status', 'equalto', 403) | list }}
+          when: _denied | length > 0
+
+    - name: Report the result
+      ansible.builtin.debug:
+        msg: >-
+          Reset done. Rebuild with configure-aap.yml -e ao_launch_workflow=true,
+          then configure-ao.yml and configure-ao-workflow.yml, or just run
+          local/reprovision.sh.
