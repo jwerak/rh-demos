@@ -83,6 +83,13 @@
       when: item not in ao_enabled_repos.stdout
       changed_when: true
 
+    # The archive the rhc role uploads is scored before the repositories above
+    # are in place, and Insights then reports 0 applicable CVEs. A second
+    # upload is what makes the vulnerability counts appear.
+    - name: Upload a fresh Insights archive
+      ansible.builtin.command: insights-client
+      changed_when: true
+
     - name: Report the Insights group for the AO trigger
       ansible.builtin.set_stats:
         data:
