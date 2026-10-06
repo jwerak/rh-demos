@@ -21,6 +21,7 @@
     ao_workflow_name: RHEL CVE Remediation - Intelligent Patching
     ao_generated_template_prefix: "CVE Remediation - "
     ao_lab_inventory: lab-inventory
+    ao_machine_credential: APD Machine Credential
     ao_delete_vm_template: Cloud | AWS | Delete VM
     # Each is independently skippable so a partial reset is one flag away.
     ao_reset_ao: true
@@ -178,6 +179,37 @@
             {{ ao_job_templates.json.results | map(attribute='name')
                | select('match', ao_generated_template_prefix | regex_escape) | list }}
           when: ao_reset_templates | bool
+
+        # Unregistering from the host itself is what actually removes it from
+        # the Insights inventory. Deleting through the inventory API needs
+        # Inventory Hosts administrator, which the service account does not
+        # have. Do this while the instances are still up; afterwards there is
+        # no way to clean up the entry, and a rebuilt node leaves a duplicate
+        # display name behind that the triage agent can match on instead.
+        - name: Unregister the nodes from Insights and RHSM
+          ansible.controller.ad_hoc_command:
+            inventory: "{{ ao_lab_inventory }}"
+            credential: "{{ ao_machine_credential }}"
+            module_name: shell
+            module_args: insights-client --unregister || true; subscription-manager unregister || true
+            become_enabled: true
+            wait: true
+            timeout: 600
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+          register: ao_unregister
+          failed_when: false
+          when: ao_reset_vms | bool
+
+        - name: Note when the nodes could not be unregistered
+          ansible.builtin.debug:
+            msg: >-
+              Unregistering the nodes failed ({{ ao_unregister.status | default('no status') }}).
+              Their Insights entries will stay behind and a rebuilt node will
+              share a display name with them. Delete them from Inventory by hand.
+          when:
+            - ao_reset_vms | bool
+            - ao_unregister.status | default('') != 'successful'
 
         - name: Delete the lab-inventory hosts
           ansible.controller.host:
