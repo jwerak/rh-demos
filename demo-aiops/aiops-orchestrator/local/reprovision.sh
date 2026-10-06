@@ -19,10 +19,25 @@ if [[ ! -f ../.env ]]; then
   exit 1
 fi
 
+# Sourcing .env would otherwise overwrite a variable the caller set on the
+# command line, so `AO_DEMO_CVE=CVE-... ./reprovision.sh` would silently do
+# nothing. Keep the caller's value for the knobs meant to be overridden.
+_overrides=()
+for _v in AO_DEMO_CVE AO_DEMO_HOST AO_NODE_SUFFIX AO_INSIGHTS_GROUP; do
+  if [[ -n "${!_v:-}" ]]; then
+    _overrides+=("$_v=${!_v}")
+  fi
+done
+
 set -a
 # shellcheck disable=SC1091
 source ../.env
 set +a
+
+for _o in ${_overrides[@]+"${_overrides[@]}"}; do
+  export "${_o?}"
+  echo "override: ${_o%%=*}"
+done
 
 do_reset=true
 do_build=true
