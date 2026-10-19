@@ -25,7 +25,10 @@
     _raw_ssh_key: "{{ lookup('env', 'LIBVIRT_SSH_KEY') | default('~/.ssh/id_ed25519', true) }}"
     libvirt_ssh_key: "{{ _home + '/.ssh/' + (_raw_ssh_key | basename) }}"
     libvirt_uri: "qemu+ssh://{{ libvirt_user }}@{{ libvirt_host }}/system"
-    vm_registry_dir: "{{ _home }}/.cache/satellite-demo"
+    # See libvirt-vm-create.yml: the EE runs as root, so $HOME is not the
+    # bind-mounted cache directory.
+    _registry_mount: /home/runner/.cache/satellite-demo
+    vm_registry_dir: "{{ _registry_mount if (_registry_mount is exists) else (_home + '/.cache/satellite-demo') }}"
     vm_registry_file: "{{ vm_registry_dir }}/vm-registry.json"
 
   tasks:
@@ -33,6 +36,22 @@
     - name: Load VM profile definitions
       ansible.builtin.include_vars:
         file: vars/vm-profiles.yml
+
+    # Delegating to "{{ libvirt_host }}" directly breaks when that value is
+    # "localhost": Ansible resolves it to the implicit localhost and the file
+    # cleanup silently runs inside the execution environment container instead
+    # of on the hypervisor, leaking qcow2 files. Delegate to an explicit
+    # add_host entry so the SSH connection is used either way.
+    - name: Register the hypervisor as a delegation target
+      ansible.builtin.add_host:
+        name: libvirt-hypervisor
+        ansible_host: "{{ libvirt_host }}"
+        ansible_connection: ssh
+        ansible_user: "{{ libvirt_user }}"
+        ansible_ssh_private_key_file: "{{ libvirt_ssh_key }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        ansible_python_interpreter: /usr/bin/python3
+      changed_when: false
 
     # ── Check if VM exists ────────────────────────────────────────────
     - name: List existing VMs
@@ -82,40 +101,57 @@
       when: vm_exists | bool
 
     # ── Remove disk files ─────────────────────────────────────────────
-    - name: Find all disk files for this VM
+    # Base images are shared backing files for every overlay in the pool.
+    # They must never be deleted: the "{{ vm_name }}-*.qcow2" glob below
+    # happily matches them when a VM name is a prefix of an image name
+    # (deleting the VM "centos" otherwise destroys
+    # centos-stream-9-x86_64-kvm.qcow2 and breaks every CentOS overlay).
+    - name: Build the list of protected base image paths
+      ansible.builtin.set_fact:
+        _protected_paths: >-
+          {{ ([libvirt_rhel9_image | default(''), libvirt_centos9_image | default('')]
+              + (vm_profiles | dict2items | map(attribute='value') | map('default', {}, true)
+                 | map(attribute='base_image', default='') | list))
+             | select | unique
+             | map('regex_replace', '^', libvirt_pool_dir ~ '/') | list }}
+
+    - name: Find candidate disk files for this VM
       ansible.builtin.find:
         paths: "{{ libvirt_pool_dir }}"
         patterns:
           - "{{ vm_name }}.qcow2"
           - "{{ vm_name }}-*.qcow2"
       register: disk_files
-      delegate_to: "{{ libvirt_host }}"
+      delegate_to: libvirt-hypervisor
       become: true
-      vars:
-        ansible_user: "{{ libvirt_user }}"
-        ansible_ssh_private_key_file: "{{ libvirt_ssh_key }}"
+
+    - name: Exclude base images from deletion
+      ansible.builtin.set_fact:
+        _disks_to_remove: "{{ disk_files.files | rejectattr('path', 'in', _protected_paths) | list }}"
+
+    - name: Report protected images that were skipped
+      ansible.builtin.debug:
+        msg: >-
+          Protected base image(s) matched the glob and were NOT deleted:
+          {{ (disk_files.files | map(attribute='path') | list)
+             | difference(_disks_to_remove | map(attribute='path') | list) }}
+      when: (disk_files.files | length) != (_disks_to_remove | length)
 
     - name: Remove disk files
       ansible.builtin.file:
         path: "{{ item.path }}"
         state: absent
-      loop: "{{ disk_files.files }}"
-      delegate_to: "{{ libvirt_host }}"
+      loop: "{{ _disks_to_remove }}"
+      delegate_to: libvirt-hypervisor
       become: true
-      vars:
-        ansible_user: "{{ libvirt_user }}"
-        ansible_ssh_private_key_file: "{{ libvirt_ssh_key }}"
 
     # ── Remove cloud-init ISO ─────────────────────────────────────────
     - name: Remove cloud-init ISO
       ansible.builtin.file:
         path: "{{ libvirt_pool_dir }}/{{ vm_name }}-cidata.iso"
         state: absent
-      delegate_to: "{{ libvirt_host }}"
+      delegate_to: libvirt-hypervisor
       become: true
-      vars:
-        ansible_user: "{{ libvirt_user }}"
-        ansible_ssh_private_key_file: "{{ libvirt_ssh_key }}"
 
     # ── Remove from VM registry ───────────────────────────────────────
     - name: Load existing registry

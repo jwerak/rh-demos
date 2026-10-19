@@ -5,7 +5,9 @@ network:
       name: eth0
       subnets:
         - type: dhcp
-{% if idm_ip is defined and idm_ip %}
+{# Only point clients at IdM for DNS when IdM is actually deployed. Without
+   this guard a skipped IdM leaves every client resolving against a black hole. #}
+{% if idm_ip is defined and idm_ip and ipa_domain is defined and ipa_domain %}
           dns_nameservers:
             - {{ idm_ip }}
           dns_search:

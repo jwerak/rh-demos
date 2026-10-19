@@ -56,5 +56,10 @@
     <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>
       <listen type='address' address='127.0.0.1'/>
     </graphics>
+    <!-- Free page reporting returns idle guest RAM to the host, which is what
+         makes the local workstation profile fit on a 30 GB machine. -->
+    <memballoon model='virtio' freePageReporting='on'>
+      <stats period='10'/>
+    </memballoon>
   </devices>
 </domain>

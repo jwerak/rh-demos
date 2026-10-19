@@ -33,17 +33,30 @@
     _raw_ssh_key: "{{ lookup('env', 'LIBVIRT_SSH_KEY') | default('~/.ssh/id_ed25519', true) }}"
     libvirt_ssh_key: "{{ _home + '/.ssh/' + (_raw_ssh_key | basename) }}"
     libvirt_uri: "qemu+ssh://{{ libvirt_user }}@{{ libvirt_host }}/system"
-    vm_registry_dir: "{{ _home }}/.cache/satellite-demo"
+    # ansible-navigator runs the EE as root, so HOME is /root, but the host's
+    # cache is bind-mounted at /home/runner/.cache/satellite-demo. Writing to
+    # $HOME would silently land inside the container and be discarded.
+    _registry_mount: /home/runner/.cache/satellite-demo
+    vm_registry_dir: "{{ _registry_mount if (_registry_mount is exists) else (_home + '/.cache/satellite-demo') }}"
     vm_registry_file: "{{ vm_registry_dir }}/vm-registry.json"
     demo_password: "{{ lookup('env', 'DEMO_PASSWORD') }}"
     rhsm_org: "{{ lookup('env', 'RHSM_ORG') }}"
     rhsm_activation_key: "{{ lookup('env', 'RHSM_ACTIVATION_KEY') }}"
     idm_fqdn: "{{ lookup('env', 'IDM_FQDN') }}"
     sat_fqdn: "{{ lookup('env', 'SAT_FQDN') }}"
-    ipa_domain: "{{ idm_fqdn.split('.')[1:] | join('.') if idm_fqdn else '' }}"
+    capsule_fqdn: "{{ lookup('env', 'CAPSULE_FQDN') }}"
+    lab_domain: "{{ lookup('env', 'LAB_DOMAIN') | default('demo.lab', true) }}"
+    ipa_domain: "{{ idm_fqdn.split('.')[1:] | join('.') if idm_fqdn else lab_domain }}"
     ipa_realm: "{{ ipa_domain | upper }}"
-    idm_ip: "192.168.150.10"
+    # Must be empty when IdM is not deployed, otherwise network-config.j2 hands
+    # every client a nameserver that does not exist.
+    idm_ip: "{{ '192.168.150.10' if (idm_fqdn | length > 0) else '' }}"
     sat_ip: "192.168.150.11"
+    capsule_ip: "192.168.150.12"
+    # Overridden per-VM for clients that register through a Capsule.
+    reg_url: "{{ lookup('env', 'REG_URL') }}"
+    sat_tuning: "{{ lookup('env', 'SAT_TUNING') }}"
+    sat_disable_system_checks: "{{ lookup('env', 'SAT_DISABLE_SYSTEM_CHECKS') | default('false', true) | bool }}"
 
   tasks:
     # ── Load profile ──────────────────────────────────────────────────

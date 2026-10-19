@@ -13,4 +13,4 @@ all:
     libvirt_user: "{{ lookup('env', 'LIBVIRT_USER') | default('root', true) }}"
     libvirt_pool_dir: "{{ lookup('env', 'LIBVIRT_POOL_DIR') | default('/var/lib/libvirt/images', true) }}"
     libvirt_network_name: "{{ lookup('env', 'LIBVIRT_NETWORK') | default('satellite-demo', true) }}"
-    libvirt_rhel9_image: "{{ lookup('env', 'LIBVIRT_RHEL9_IMAGE') | default('rhel-9.6-x86_64-kvm.qcow2', true) }}"
+    libvirt_rhel9_image: "{{ lookup('env', 'LIBVIRT_RHEL9_IMAGE') | default('rhel-9.8-x86_64-kvm.qcow2', true) }}"

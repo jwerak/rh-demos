@@ -1,0 +1,101 @@
+#!/bin/bash
+# Generate Capsule certificates on the Satellite and distil the installer
+# command that capsule-certs-generate prints into a runnable form.
+#
+# Rendered by ansible/capsule-join.yml and executed on the Satellite VM.
+# Deliberately a script rather than an inline ssh "sudo bash -c '...'": the
+# awk/sed below need quotes and backslashes that do not survive three levels
+# of shell nesting.
+set -euo pipefail
+
+CAPSULE_FQDN="{{ capsule_fqdn }}"
+CERTS_TAR="/root/{{ _certs_tar }}"
+GEN_OUT="/root/capsule-certs-gen.out"
+BASE_CMD="/root/capsule-install-base.cmd"
+INSTALL_CMD="/root/capsule-install.sh"
+
+capsule-certs-generate \
+  --foreman-proxy-fqdn "${CAPSULE_FQDN}" \
+  --certs-tar "${CERTS_TAR}" > "${GEN_OUT}" 2>&1
+
+# capsule-certs-generate prints the command backslash-continued across many
+# lines, with "satellite-installer\" alone on the first line and
+# "--scenario capsule" on the next. Anchor on a line that is *only*
+# satellite-installer: the surrounding prose also contains the string
+# "satellite-installer --scenario capsule --help", and matching that drags
+# documentation text (including an unbalanced parenthesis) into the command.
+awk '/^[[:space:]]*satellite-installer\\?[[:space:]]*$/,0' "${GEN_OUT}" \
+  | sed 's/[[:space:]]*\\$//' \
+  | tr '\n' ' ' | tr -s ' ' > "${BASE_CMD}"
+
+# Fail here rather than handing eval something unparseable 40 minutes later.
+if ! grep -qE '^[[:space:]]*satellite-installer --scenario capsule' "${BASE_CMD}"; then
+  echo "ERROR: extracted command does not start with satellite-installer --scenario capsule" >&2
+  echo "--- extracted ---" >&2; cat "${BASE_CMD}" >&2
+  exit 1
+fi
+if ! bash -n "${BASE_CMD}" 2>/dev/null; then
+  echo "ERROR: extracted command is not valid shell" >&2
+  cat "${BASE_CMD}" >&2
+  exit 1
+fi
+
+# The Registration feature is what makes
+# "hammer host-registration generate-command --smart-proxy" emit a URL
+# pointing at the Capsule rather than the Satellite. It needs no flags:
+# --foreman-proxy-registration already defaults to true.
+#
+# Do NOT pass --foreman-proxy-registration-url. foreman_proxy_content
+# (init.pp:184-190) fails the run unless the URL's host appears in the
+# certificate cnames, and this Capsule is generated without any:
+#   "The foreman_proxy::registration_url (...) does not match the
+#    specified cname: []"
+# Left unset, Puppet derives it from the server name, which is what we want.
+printf '\n' >> "${BASE_CMD}"
+
+# Optional sizing flags are resolved on the Capsule, not here: the capsule
+# scenario ships with satellite-capsule and is not installed on the Satellite.
+# An unrecognised option makes satellite-installer exit with a usage error
+# rather than ignore it, which would strand the deployment — so each one is
+# checked against the installer's own help before being used.
+cat > "${INSTALL_CMD}" <<'WRAPPER'
+#!/bin/bash
+set -euo pipefail
+BASE=$(cat /root/capsule-install-base.cmd)
+HELP=$(TERM=dumb satellite-installer --scenario capsule --full-help 2>/dev/null || true)
+OPTIONAL=""
+for opt in ${CAPSULE_OPTIONAL_FLAGS:-}; do
+  name="${opt%%=*}"
+  if grep -qE "^[[:space:]]+(-s, )?${name}( |$)" <<< "${HELP}"; then
+    OPTIONAL="${OPTIONAL} ${opt/=/ }"
+  else
+    echo "WARNING: capsule scenario does not accept ${name}, omitting"
+  fi
+done
+echo "Running: ${BASE} ${OPTIONAL}"
+eval "${BASE} ${OPTIONAL}"
+WRAPPER
+
+# Flags are passed as name=value pairs (converted to "name value") so the
+# loop above can word-split them safely.
+# satellite-installer persists every option into
+# scenarios.d/capsule-answers.yaml, so a value set by a previous (failed) run
+# keeps being applied even when the flag is dropped from the command line.
+# Reset registration_url explicitly so a re-run converges from any prior state.
+{
+  printf 'CAPSULE_OPTIONAL_FLAGS="--skip-checks-i-know-better'
+  printf ' --reset-foreman-proxy-registration-url'
+{% if capsule_tuning %}
+  printf ' --tuning={{ capsule_tuning }}'
+{% endif %}
+  printf '"\n'
+} > /root/capsule-install.env
+
+chmod 700 "${INSTALL_CMD}"
+
+# Stage where the controller can scp them as cloud-user.
+cp "${CERTS_TAR}" "${BASE_CMD}" "${INSTALL_CMD}" /root/capsule-install.env /tmp/
+chmod 644 "/tmp/{{ _certs_tar }}" /tmp/capsule-install-base.cmd \
+          /tmp/capsule-install.sh /tmp/capsule-install.env
+
+echo "=== Capsule certs generated for ${CAPSULE_FQDN} ==="

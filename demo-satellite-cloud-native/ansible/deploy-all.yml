@@ -30,15 +30,34 @@
     libvirt_ssh_key: "{{ lookup('env', 'LIBVIRT_SSH_KEY') | default('~/.ssh/id_ed25519', true) }}"
     libvirt_uri: "qemu+ssh://{{ libvirt_user }}@{{ libvirt_host }}/system"
     libvirt_pool_dir: "{{ lookup('env', 'LIBVIRT_POOL_DIR') | default('/var/lib/libvirt/images', true) }}"
-    libvirt_rhel9_image: "{{ lookup('env', 'LIBVIRT_RHEL9_IMAGE') | default('rhel-9.6-x86_64-kvm.qcow2', true) }}"
+    libvirt_rhel9_image: "{{ lookup('env', 'LIBVIRT_RHEL9_IMAGE') | default('rhel-9.8-x86_64-kvm.qcow2', true) }}"
+    libvirt_rhel9_image_source: "{{ lookup('env', 'LIBVIRT_RHEL9_IMAGE_SOURCE') | default(libvirt_pool_dir, true) }}"
+    libvirt_centos9_image: "{{ lookup('env', 'LIBVIRT_CENTOS9_IMAGE') | default('centos-stream-9-x86_64-kvm.qcow2', true) }}"
+    libvirt_centos9_image_url: "{{ lookup('env', 'LIBVIRT_CENTOS9_IMAGE_URL') | default('https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2', true) }}"
     libvirt_network_name: "{{ lookup('env', 'LIBVIRT_NETWORK') | default('satellite-demo', true) }}"
     idm_fqdn: "{{ lookup('env', 'IDM_FQDN') }}"
     sat_fqdn: "{{ lookup('env', 'SAT_FQDN') }}"
+    capsule_fqdn: "{{ lookup('env', 'CAPSULE_FQDN') }}"
     demo_password: "{{ lookup('env', 'DEMO_PASSWORD') }}"
     rhsm_org: "{{ lookup('env', 'RHSM_ORG') }}"
     rhsm_activation_key: "{{ lookup('env', 'RHSM_ACTIVATION_KEY') }}"
-    ipa_domain: "{{ idm_fqdn.split('.')[1:] | join('.') }}"
+    lab_domain: "{{ lookup('env', 'LAB_DOMAIN') | default('demo.lab', true) }}"
+    # Must tolerate an empty IDM_FQDN: the local profile has no IdM.
+    ipa_domain: "{{ idm_fqdn.split('.')[1:] | join('.') if idm_fqdn else lab_domain }}"
     ipa_realm: "{{ ipa_domain | upper }}"
+
+    # ── Profile switches ──────────────────────────────────────────────
+    deploy_idm: "{{ lookup('env', 'DEPLOY_IDM') | default('true', true) | bool }}"
+    deploy_capsule: "{{ lookup('env', 'DEPLOY_CAPSULE') | default('false', true) | bool }}"
+    local_profile: "{{ lookup('env', 'DEMO_LOCAL_PROFILE') | default('false', true) | bool }}"
+    satellite_profile: "{{ 'satellite-local' if (local_profile | bool) else 'satellite' }}"
+    sat_tuning: "{{ lookup('env', 'SAT_TUNING') }}"
+    sat_disable_system_checks: "{{ lookup('env', 'SAT_DISABLE_SYSTEM_CHECKS') | default('false', true) | bool }}"
+
+    # Extra base images to stage into the pool. The CentOS Stream image is
+    # only needed where a Capsule serves content to a CentOS client.
+    _extra_base_images: "{{ [{'name': libvirt_centos9_image, 'url': libvirt_centos9_image_url}] if (deploy_capsule | bool) else [] }}"
+    _base_images_extra_var: "{{ {'libvirt_base_images': _extra_base_images} | to_json }}"
 
     # SSH to the hypervisor host (direct)
     _host_ssh_opts: >-
@@ -67,14 +86,17 @@
       ansible.builtin.assert:
         that:
           - libvirt_host | length > 0
-          - idm_fqdn | length > 0
+          - (not (deploy_idm | bool)) or (idm_fqdn | length > 0)
+          - (not (deploy_capsule | bool)) or (capsule_fqdn | length > 0)
           - sat_fqdn | length > 0
           - demo_password | length > 0
           - rhsm_org | length > 0
           - rhsm_activation_key | length > 0
         fail_msg: >-
-          Missing required environment variables. Ensure LIBVIRT_HOST, IDM_FQDN,
-          SAT_FQDN, DEMO_PASSWORD, RHSM_ORG, and RHSM_ACTIVATION_KEY are set.
+          Missing required environment variables. Ensure LIBVIRT_HOST, SAT_FQDN,
+          DEMO_PASSWORD, RHSM_ORG, and RHSM_ACTIVATION_KEY are set, plus
+          IDM_FQDN when DEPLOY_IDM is true and CAPSULE_FQDN when DEPLOY_CAPSULE
+          is true.
       tags: [always]
 
   tasks:
@@ -84,20 +106,28 @@
     - name: "Phase 1: Prepare libvirt host"
       tags: [host-setup]
       block:
+        # Uses the inventory file rather than "-i {{ libvirt_host }},": with
+        # LIBVIRT_HOST=localhost a comma-inventory resolves to Ansible's
+        # implicit localhost, so host setup would silently install libvirt
+        # inside the execution-environment container instead of on the host.
         - name: Run libvirt-host-setup playbook
           ansible.builtin.command:
             cmd: >-
               ansible-playbook {{ _playbook_dir }}/libvirt-host-setup.yml
-              -i {{ libvirt_host }},
-              -u {{ libvirt_user }}
-              --private-key {{ libvirt_ssh_key }}
+              -i {{ _playbook_dir }}/inventory/libvirt-host.yml
               -b
               -e libvirt_host={{ libvirt_host }}
               -e libvirt_user={{ libvirt_user }}
               -e libvirt_ssh_user={{ libvirt_user }}
               -e libvirt_pool_dir={{ libvirt_pool_dir }}
               -e libvirt_rhel9_image={{ libvirt_rhel9_image }}
+              -e libvirt_rhel9_image_source={{ libvirt_rhel9_image_source }}
               -e libvirt_network_name={{ libvirt_network_name }}
+              -e lab_domain={{ lab_domain }}
+              -e libvirt_local_profile={{ local_profile }}
+              -e sat_fqdn={{ sat_fqdn }}
+              -e capsule_fqdn={{ capsule_fqdn | default('', true) }}
+              -e '{{ _base_images_extra_var }}'
           changed_when: true
 
     # ══════════════════════════════════════════════════════════════════════
@@ -105,6 +135,7 @@
     # ══════════════════════════════════════════════════════════════════════
     - name: "Phase 2: Deploy IdM VM"
       tags: [idm]
+      when: deploy_idm | bool
       block:
         - name: Create IdM VM
           ansible.builtin.command:
@@ -168,7 +199,7 @@
               -i localhost,
               -c local
               -e vm_name=satellite
-              -e vm_profile=satellite
+              -e vm_profile={{ satellite_profile }}
               -e libvirt_host={{ libvirt_host }}
               -e libvirt_uri={{ libvirt_uri }}
               -e libvirt_pool_dir={{ libvirt_pool_dir }}
@@ -176,16 +207,20 @@
               -e libvirt_network_name={{ libvirt_network_name }}
               -e idm_fqdn={{ idm_fqdn }}
               -e sat_fqdn={{ sat_fqdn }}
+              -e capsule_fqdn={{ capsule_fqdn | default('', true) }}
               -e demo_password={{ demo_password }}
               -e rhsm_org={{ rhsm_org }}
               -e rhsm_activation_key={{ rhsm_activation_key }}
               -e ipa_domain={{ ipa_domain }}
               -e ipa_realm={{ ipa_realm }}
+              -e lab_domain={{ lab_domain }}
+              -e sat_tuning={{ sat_tuning | default('', true) }}
+              -e sat_disable_system_checks={{ sat_disable_system_checks }}
           changed_when: true
 
         - name: Get Satellite VM IP address
           ansible.builtin.set_fact:
-            satellite_ip: "{{ vm_profiles.satellite.ip }}"
+            satellite_ip: "{{ vm_profiles[satellite_profile].ip }}"
 
         - name: Wait for Satellite VM to accept SSH connections
           ansible.builtin.shell: |
@@ -196,19 +231,101 @@
           delay: 10
           changed_when: false
 
-        - name: Wait for Satellite installation to complete (up to 60 min)
+        # 80 min: the local profile runs Satellite on 12 GB with development
+        # tuning, which is materially slower than the 22 GB remote profile.
+        - name: Wait for Satellite installation to complete (up to 80 min)
           ansible.builtin.shell: |
             {{ _ssh_cmd }} cloud-user@{{ satellite_ip }} \
               "grep -q 'Satellite Configuration Complete' /var/log/satellite-setup.log 2>/dev/null"
           register: satellite_setup_result
           until: satellite_setup_result.rc == 0
-          retries: 120
+          retries: 160
           delay: 30
           changed_when: false
 
         - name: Satellite deployment complete
           ansible.builtin.debug:
             msg: "Satellite is ready at {{ sat_fqdn }} ({{ satellite_ip }})"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Phase 3b: Deploy Capsule
+    # ══════════════════════════════════════════════════════════════════════
+    # Strictly after the Satellite rather than overlapping with it: running
+    # both installs at once would save ~15 min but needs 18 GB of concurrent
+    # guest memory, which the local profile does not have.
+    - name: "Phase 3b: Deploy Capsule VM"
+      tags: [capsule]
+      when: deploy_capsule | bool
+      block:
+        - name: Create Capsule VM
+          ansible.builtin.command:
+            cmd: >-
+              ansible-playbook {{ _playbook_dir }}/libvirt-vm-create.yml
+              -i localhost,
+              -c local
+              -e vm_name=capsule
+              -e vm_profile=capsule
+              -e libvirt_host={{ libvirt_host }}
+              -e libvirt_uri={{ libvirt_uri }}
+              -e libvirt_pool_dir={{ libvirt_pool_dir }}
+              -e libvirt_rhel9_image={{ libvirt_rhel9_image }}
+              -e libvirt_network_name={{ libvirt_network_name }}
+              -e idm_fqdn={{ idm_fqdn }}
+              -e sat_fqdn={{ sat_fqdn }}
+              -e capsule_fqdn={{ capsule_fqdn }}
+              -e demo_password={{ demo_password }}
+              -e rhsm_org={{ rhsm_org }}
+              -e rhsm_activation_key={{ rhsm_activation_key }}
+              -e ipa_domain={{ ipa_domain }}
+              -e ipa_realm={{ ipa_realm }}
+              -e lab_domain={{ lab_domain }}
+          changed_when: true
+
+        - name: Get Capsule VM IP address
+          ansible.builtin.set_fact:
+            capsule_ip: "{{ vm_profiles.capsule.ip }}"
+
+        - name: Wait for Capsule VM to accept SSH connections
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ capsule_ip }} "echo ok"
+          register: capsule_ssh_check
+          until: capsule_ssh_check.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Capsule package installation to complete (up to 30 min)
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ capsule_ip }} \
+              "grep -q 'Capsule Base Ready' /var/log/capsule-setup.log 2>/dev/null"
+          register: capsule_setup_result
+          until: capsule_setup_result.rc == 0
+          retries: 60
+          delay: 30
+          changed_when: false
+
+        - name: Capsule base deployment complete
+          ansible.builtin.debug:
+            msg: "Capsule packages are installed on {{ capsule_fqdn }} ({{ capsule_ip }})"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Phase 3c: Join Capsule to Satellite
+    # ══════════════════════════════════════════════════════════════════════
+    - name: "Phase 3c: Join Capsule to Satellite"
+      tags: [capsule-join]
+      when: deploy_capsule | bool
+      block:
+        - name: Run capsule-join playbook
+          ansible.builtin.command:
+            cmd: >-
+              ansible-playbook {{ _playbook_dir }}/capsule-join.yml
+              -i localhost,
+              -c local
+              -e libvirt_host={{ libvirt_host }}
+              -e sat_fqdn={{ sat_fqdn }}
+              -e capsule_fqdn={{ capsule_fqdn }}
+              -e demo_password={{ demo_password }}
+          changed_when: true
 
     # ══════════════════════════════════════════════════════════════════════
     # Phase 4: Upload Subscription Manifest (optional)
@@ -222,12 +339,12 @@
             sshpass -p '{{ demo_password }}' \
               scp {{ _ssh_opts }} \
               {{ manifest_path }} \
-              cloud-user@{{ vm_profiles.satellite.ip }}:/tmp/manifest.zip
+              cloud-user@{{ vm_profiles[satellite_profile].ip }}:/tmp/manifest.zip
           changed_when: true
 
         - name: Upload manifest to Satellite
           ansible.builtin.shell: |
-            {{ _ssh_cmd }} cloud-user@{{ vm_profiles.satellite.ip }} \
+            {{ _ssh_cmd }} cloud-user@{{ vm_profiles[satellite_profile].ip }} \
               "sudo hammer subscription upload \
                 --file /tmp/manifest.zip \
                 --organization Demo_Org"

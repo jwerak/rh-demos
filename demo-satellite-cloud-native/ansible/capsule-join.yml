@@ -1,0 +1,274 @@
+---
+# Join a Capsule VM to its Satellite.
+#
+# Runs after both VMs exist, because the handoff is inherently cross-VM:
+# capsule-certs-generate must run on the Satellite, and the tarball plus the
+# OAuth credentials it emits are inputs to satellite-installer on the Capsule.
+# Cloud-init cannot do this — it is one-shot and runs before its peer exists.
+#
+# The certificates tarball travels Satellite -> controller -> Capsule rather
+# than VM to VM, so no SSH trust has to be established between the two guests.
+#
+# Required vars (or environment):
+#   LIBVIRT_HOST, SAT_FQDN, CAPSULE_FQDN, DEMO_PASSWORD
+#
+# Usage:
+#   ansible-playbook ansible/capsule-join.yml
+
+- name: Join Capsule to Satellite
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/vm-profiles.yml
+
+  vars:
+    libvirt_host: "{{ lookup('env', 'LIBVIRT_HOST') }}"
+    libvirt_user: "{{ lookup('env', 'LIBVIRT_USER') | default('root', true) }}"
+    _home: "{{ lookup('env', 'HOME') }}"
+    _raw_ssh_key: "{{ lookup('env', 'LIBVIRT_SSH_KEY') | default('~/.ssh/id_ed25519', true) }}"
+    libvirt_ssh_key: "{{ _home + '/.ssh/' + (_raw_ssh_key | basename) }}"
+    sat_fqdn: "{{ lookup('env', 'SAT_FQDN') }}"
+    capsule_fqdn: "{{ lookup('env', 'CAPSULE_FQDN') }}"
+    demo_password: "{{ lookup('env', 'DEMO_PASSWORD') }}"
+    sat_organization: "{{ lookup('env', 'SAT_ORGANIZATION') | default('Demo_Org', true) }}"
+    capsule_tuning: "{{ lookup('env', 'CAPSULE_TUNING') | default('development', true) }}"
+    sat_ip: "{{ vm_profiles['satellite'].ip }}"
+    capsule_ip: "{{ vm_profiles['capsule'].ip }}"
+    _certs_tar: "capsule-certs.tar"
+    # Everything capsule-certs-generate.sh.j2 stages for the Capsule.
+    _transfer_files:
+      - "capsule-certs.tar"
+      - capsule-install-base.cmd
+      - capsule-install.sh
+      - capsule-install.env
+
+    # SSH to VMs through the hypervisor (NAT network) — same idiom as deploy-all.yml
+    _ssh_opts: >-
+      -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null
+      -o ConnectTimeout=10
+      -o ProxyCommand="ssh -o StrictHostKeyChecking=no -W %h:%p -i {{ libvirt_ssh_key }} {{ libvirt_user }}@{{ libvirt_host }}"
+    _ssh_cmd: >-
+      sshpass -p '{{ demo_password }}'
+      ssh {{ _ssh_opts }}
+    _scp_cmd: >-
+      sshpass -p '{{ demo_password }}'
+      scp {{ _ssh_opts }}
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - libvirt_host | length > 0
+          - sat_fqdn | length > 0
+          - capsule_fqdn | length > 0
+          - demo_password | length > 0
+        fail_msg: >-
+          Missing required environment variables. Ensure LIBVIRT_HOST, SAT_FQDN,
+          CAPSULE_FQDN and DEMO_PASSWORD are set.
+
+  tasks:
+    # ── Idempotency gate ──────────────────────────────────────────────
+    - name: Check whether the Capsule is already registered
+      ansible.builtin.shell: |
+        {{ _ssh_cmd }} cloud-user@{{ sat_ip }} \
+          "sudo hammer --csv capsule list | grep -q '{{ capsule_fqdn }}'"
+      register: capsule_registered
+      changed_when: false
+      failed_when: false
+
+    - name: Capsule already joined
+      ansible.builtin.debug:
+        msg: "Capsule {{ capsule_fqdn }} is already registered with the Satellite, nothing to do."
+      when: capsule_registered.rc == 0
+
+    - name: Join the Capsule
+      when: capsule_registered.rc != 0
+      block:
+        - name: Wait for the Capsule base setup to finish
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ capsule_ip }} \
+              "grep -q 'Capsule Base Ready' /var/log/capsule-setup.log 2>/dev/null"
+          register: capsule_base_ready
+          until: capsule_base_ready.rc == 0
+          retries: 60
+          delay: 30
+          changed_when: false
+
+        # capsule-certs-generate resolves and validates the Capsule FQDN, but
+        # satellite-userdata.j2 only ever writes the Satellite's own /etc/hosts
+        # entry — so without this the certificate generation fails.
+        - name: Map the Capsule FQDN in the Satellite's /etc/hosts
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ sat_ip }} \
+              "grep -q '{{ capsule_fqdn }}' /etc/hosts || \
+               echo '{{ capsule_ip }} {{ capsule_fqdn }} capsule' | sudo tee -a /etc/hosts"
+          register: sat_hosts_entry
+          changed_when: "capsule_fqdn in sat_hosts_entry.stdout"
+
+        # ── Generate certificates on the Satellite ────────────────────
+        # The installer command is extracted on the Satellite by a real script
+        # rather than parsed Ansible-side: the printed block is
+        # backslash-continued and contains quoted, generated OAuth secrets.
+        - name: Render the certificate generation script
+          ansible.builtin.template:
+            src: templates/capsule-certs-generate.sh.j2
+            dest: /tmp/capsule-certs-generate.sh
+            mode: "0755"
+
+        - name: Copy the certificate generation script to the Satellite
+          ansible.builtin.shell: |
+            {{ _scp_cmd }} /tmp/capsule-certs-generate.sh \
+              cloud-user@{{ sat_ip }}:/tmp/capsule-certs-generate.sh
+          changed_when: true
+
+        - name: Generate Capsule certificates and installer command
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ sat_ip }} \
+              "sudo bash /tmp/capsule-certs-generate.sh"
+          register: certs_generate
+          changed_when: true
+
+        - name: Remove the rendered script from the controller
+          ansible.builtin.file:
+            path: /tmp/capsule-certs-generate.sh
+            state: absent
+
+        - name: Read back the generated installer command
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ sat_ip }} "cat /tmp/capsule-install-base.cmd"
+          register: capsule_install_cmd
+          changed_when: false
+
+        # Checking only that the string appears somewhere is not enough: the
+        # prose around the command mentions it too, and leading documentation
+        # text makes eval fail much later on the Capsule.
+        - name: Assert the installer command looks complete
+          ansible.builtin.assert:
+            that:
+              - capsule_install_cmd.stdout is match('\s*satellite-installer --scenario capsule')
+              - "'--foreman-proxy-oauth-consumer-key' in capsule_install_cmd.stdout"
+              - "'--foreman-proxy-oauth-consumer-secret' in capsule_install_cmd.stdout"
+              - "'--certs-tar-file' in capsule_install_cmd.stdout"
+              - "'parameters, see' not in capsule_install_cmd.stdout"
+            fail_msg: >-
+              Could not extract a usable satellite-installer command from
+              capsule-certs-generate output. Inspect
+              /root/capsule-certs-gen.out on the Satellite.
+
+        # ── Transfer to the Capsule via the controller ────────────────
+        # One scp per file: multiple remote sources in a single invocation
+        # behaves differently across scp's legacy and SFTP modes.
+        - name: Fetch the certificates tarball and installer files
+          ansible.builtin.shell: |
+            {{ _scp_cmd }} cloud-user@{{ sat_ip }}:/tmp/{{ item }} /tmp/{{ item }}
+          loop: "{{ _transfer_files }}"
+          changed_when: true
+
+        - name: Push the certificates tarball and installer files to the Capsule
+          ansible.builtin.shell: |
+            {{ _scp_cmd }} {% for f in _transfer_files %}/tmp/{{ f }} {% endfor %}\
+              cloud-user@{{ capsule_ip }}:/tmp/
+            {{ _ssh_cmd }} cloud-user@{{ capsule_ip }} \
+              "sudo mv {% for f in _transfer_files %}/tmp/{{ f }} {% endfor %}/root/ && \
+               sudo chmod 700 /root/capsule-install.sh"
+          changed_when: true
+
+        - name: Remove the transferred artefacts from the controller
+          ansible.builtin.file:
+            path: "/tmp/{{ item }}"
+            state: absent
+          loop: "{{ _transfer_files }}"
+
+        # ── Run the Capsule installer ─────────────────────────────────
+        # Detached: the run takes 20-40 minutes, far longer than a sane SSH
+        # session, so poll the log for completion instead of holding the pipe.
+        - name: Start the Capsule installer
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ capsule_ip }} \
+              "sudo bash -c 'set -a; . /root/capsule-install.env; set +a; \
+                 setsid nohup bash /root/capsule-install.sh \
+                 > /var/log/capsule-install.log 2>&1 < /dev/null & disown'"
+          changed_when: true
+
+        - name: Wait for the Capsule installer to finish (up to 40 min)
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ capsule_ip }} \
+              "sudo grep -qE 'Success!|Installing Done' /var/log/capsule-install.log 2>/dev/null"
+          register: capsule_install_done
+          until: capsule_install_done.rc == 0
+          retries: 80
+          delay: 30
+          changed_when: false
+          failed_when: false
+
+        - name: Check the Capsule installer for failures
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ capsule_ip }} \
+              "sudo tail -40 /var/log/capsule-install.log"
+          register: capsule_install_tail
+          changed_when: false
+          when: capsule_install_done.rc != 0
+
+        - name: Fail with the Capsule installer output
+          ansible.builtin.fail:
+            msg: |
+              satellite-installer --scenario capsule did not report success.
+              Last lines of /var/log/capsule-install.log on {{ capsule_fqdn }}:
+              {{ capsule_install_tail.stdout }}
+          when: capsule_install_done.rc != 0
+
+        # ── Verify and attach content ─────────────────────────────────
+        - name: Verify the Capsule registered with the Satellite
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ sat_ip }} \
+              "sudo hammer capsule info --name '{{ capsule_fqdn }}'"
+          register: capsule_info
+          until: capsule_info.rc == 0
+          retries: 10
+          delay: 30
+          changed_when: false
+
+        - name: Assert the Capsule exposes the features the demo relies on
+          ansible.builtin.assert:
+            that:
+              - "'Pulpcore' in capsule_info.stdout"
+              - "'Registration' in capsule_info.stdout"
+            fail_msg: >-
+              The Capsule registered but is missing the Pulpcore or Registration
+              feature. Without Registration, hammer host-registration
+              generate-command --smart-proxy silently points clients back at the
+              Satellite. Features found: {{ capsule_info.stdout }}
+
+        # hammer moved this namespace around across 6.1x releases, hence the fallback.
+        - name: Attach lifecycle environments to the Capsule
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ sat_ip }} "sudo bash -c '
+              hammer capsule content add-lifecycle-environment \
+                --name {{ capsule_fqdn }} --organization {{ sat_organization }} \
+                --lifecycle-environment {{ item }} \
+              || hammer smart-proxy content add-lifecycle-environment \
+                --name {{ capsule_fqdn }} --organization {{ sat_organization }} \
+                --lifecycle-environment {{ item }} \
+              || true
+            '"
+          loop:
+            - Library
+            - Lab
+          changed_when: true
+
+        - name: Synchronize content to the Capsule
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ sat_ip }} "sudo bash -c '
+              hammer capsule content synchronize \
+                --name {{ capsule_fqdn }} --organization {{ sat_organization }} \
+              || hammer smart-proxy content synchronize \
+                --name {{ capsule_fqdn }} --organization {{ sat_organization }}
+            '"
+          changed_when: true
+
+        - name: Capsule join complete
+          ansible.builtin.debug:
+            msg: "Capsule {{ capsule_fqdn }} ({{ capsule_ip }}) is joined and synchronized."

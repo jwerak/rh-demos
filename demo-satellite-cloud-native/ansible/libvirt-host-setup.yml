@@ -24,8 +24,20 @@
     libvirt_pool_dir: /var/lib/libvirt/images
     libvirt_network_name: satellite-demo
     libvirt_network_subnet: 192.168.150.0/24
-    libvirt_rhel9_image: rhel-9.6-x86_64-kvm.qcow2
+    libvirt_rhel9_image: rhel-9.8-x86_64-kvm.qcow2
     libvirt_rhel9_image_source: "{{ libvirt_pool_dir }}"
+    # DNS domain served by the network's own dnsmasq, composed with the
+    # short names in the DHCP host reservations below.
+    lab_domain: demo.lab
+    # Local workstation profile: stage base images, enable KSM, and map the
+    # lab FQDNs in the host's /etc/hosts (the host is also the user's desktop).
+    libvirt_local_profile: false
+    sat_fqdn: ""
+    capsule_fqdn: ""
+    # Extra qcow2 base images to stage into the pool, as {name, src_dir} or
+    # {name, url} entries. The RHEL image is handled separately for backwards
+    # compatibility with the remote-host profile.
+    libvirt_base_images: []
 
   tasks:
     # ── 1. Install packages ──────────────────────────────────────────────
@@ -90,11 +102,13 @@
               </nat>
             </forward>
             <bridge name='virbr-satdemo' stp='on' delay='0'/>
+            <domain name='{{ lab_domain }}' localOnly='yes'/>
             <ip address='192.168.150.1' netmask='255.255.255.0'>
               <dhcp>
                 <range start='192.168.150.100' end='192.168.150.200'/>
                 <host mac='52:54:00:de:a0:01' name='idm' ip='192.168.150.10'/>
                 <host mac='52:54:00:de:a0:02' name='satellite' ip='192.168.150.11'/>
+                <host mac='52:54:00:de:a0:03' name='capsule' ip='192.168.150.12'/>
               </dhcp>
             </ip>
           </network>
@@ -106,6 +120,100 @@
         command: create
         name: "{{ libvirt_network_name }}"
       when: libvirt_network_name not in libvirt_networks.list_nets
+
+    # ── 3b. Patch a pre-existing network ─────────────────────────────────
+    # The tasks above only ever run for a brand new network, so a host that
+    # already has satellite-demo from an earlier release would never learn
+    # about the Capsule reservation or the DNS domain.
+    - name: Patch a pre-existing satellite-demo network
+      when: libvirt_network_name in libvirt_networks.list_nets
+      block:
+        - name: Read the current network definition
+          ansible.builtin.command:
+            cmd: virsh -c {{ libvirt_uri }} net-dumpxml {{ libvirt_network_name }}
+          register: existing_net_xml
+          changed_when: false
+
+        - name: Add the Capsule DHCP reservation
+          ansible.builtin.command:
+            cmd: >-
+              virsh -c {{ libvirt_uri }} net-update {{ libvirt_network_name }}
+              add ip-dhcp-host
+              "<host mac='52:54:00:de:a0:03' name='capsule' ip='192.168.150.12'/>"
+              --live --config
+          changed_when: true
+          when: "'52:54:00:de:a0:03' not in existing_net_xml.stdout"
+
+        # virsh net-update has no section for <domain>, so adding it needs a
+        # full redefine, which drops running guests off the bridge. Refuse
+        # rather than cut the network out from under a running demo.
+        - name: Check for guests on the network before redefining it
+          ansible.builtin.command:
+            cmd: virsh -c {{ libvirt_uri }} net-dhcp-leases {{ libvirt_network_name }}
+          register: existing_net_leases
+          changed_when: false
+          when: "'<domain' not in existing_net_xml.stdout"
+
+        - name: Warn that the DNS domain cannot be added while guests are running
+          ansible.builtin.debug:
+            msg: >-
+              WARNING: network {{ libvirt_network_name }} has no <domain> element
+              and therefore will not resolve {{ lab_domain }} names, but it has
+              active DHCP leases. Adding the domain requires redefining the
+              network, which would disconnect running guests. Stop the demo VMs
+              and re-run with --tags host-setup.
+          when:
+            - "'<domain' not in existing_net_xml.stdout"
+            - existing_net_leases.stdout_lines | length > 2
+
+        - name: Redefine the network with the DNS domain
+          when:
+            - "'<domain' not in existing_net_xml.stdout"
+            - existing_net_leases.stdout_lines | length <= 2
+          block:
+            - name: Destroy the network
+              community.libvirt.virt_net:
+                uri: "{{ libvirt_uri }}"
+                command: destroy
+                name: "{{ libvirt_network_name }}"
+              failed_when: false
+
+            - name: Undefine the network
+              community.libvirt.virt_net:
+                uri: "{{ libvirt_uri }}"
+                command: undefine
+                name: "{{ libvirt_network_name }}"
+
+            - name: Redefine the network with the DNS domain and all reservations
+              community.libvirt.virt_net:
+                uri: "{{ libvirt_uri }}"
+                command: define
+                name: "{{ libvirt_network_name }}"
+                xml: |
+                  <network>
+                    <name>{{ libvirt_network_name }}</name>
+                    <forward mode='nat'>
+                      <nat>
+                        <port start='1024' end='65535'/>
+                      </nat>
+                    </forward>
+                    <bridge name='virbr-satdemo' stp='on' delay='0'/>
+                    <domain name='{{ lab_domain }}' localOnly='yes'/>
+                    <ip address='192.168.150.1' netmask='255.255.255.0'>
+                      <dhcp>
+                        <range start='192.168.150.100' end='192.168.150.200'/>
+                        <host mac='52:54:00:de:a0:01' name='idm' ip='192.168.150.10'/>
+                        <host mac='52:54:00:de:a0:02' name='satellite' ip='192.168.150.11'/>
+                        <host mac='52:54:00:de:a0:03' name='capsule' ip='192.168.150.12'/>
+                      </dhcp>
+                    </ip>
+                  </network>
+
+            - name: Start the redefined network
+              community.libvirt.virt_net:
+                uri: "{{ libvirt_uri }}"
+                command: create
+                name: "{{ libvirt_network_name }}"
 
     - name: Set satellite-demo network to autostart
       community.libvirt.virt_net:
@@ -198,6 +306,95 @@
         mode: "0644"
         remote_src: true
       when: not rhel9_image_dest.stat.exists
+
+    # ── 6b. Stage additional base images ─────────────────────────────────
+    # Images must live inside the pool: the overlays created by
+    # libvirt-vm-create.yml reference them as backing files, and only the pool
+    # directory carries the virt_image_t SELinux labelling qemu needs.
+    - name: Stage additional base images from a local directory
+      ansible.builtin.copy:
+        src: "{{ item.src_dir }}/{{ item.name }}"
+        dest: "{{ libvirt_pool_dir }}/{{ item.name }}"
+        owner: qemu
+        group: qemu
+        mode: "0644"
+        remote_src: true
+        force: false
+      loop: "{{ libvirt_base_images | selectattr('src_dir', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Download additional base images
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "{{ libvirt_pool_dir }}/{{ item.name }}"
+        owner: qemu
+        group: qemu
+        mode: "0644"
+        force: false
+      loop: "{{ libvirt_base_images | selectattr('url', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ── 6c. Local workstation tuning ─────────────────────────────────────
+    - name: Configure the host for the local workstation profile
+      when: libvirt_local_profile | bool
+      block:
+        # The demo guests are near-identical RHEL 9 installs, so KSM reclaims
+        # a meaningful slice of a laptop's RAM. qemu already marks guest
+        # memory mergeable; only ksmd itself needs switching on.
+        - name: Install ksmtuned
+          ansible.builtin.dnf:
+            name: ksmtuned
+            state: present
+          failed_when: false
+
+        - name: Enable and start KSM services
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            enabled: true
+            state: started
+          loop:
+            - ksm.service
+            - ksmtuned.service
+          register: ksm_units
+          failed_when: false
+
+        - name: Enable KSM directly when the systemd units are unavailable
+          ansible.builtin.copy:
+            content: "1\n"
+            dest: /sys/kernel/mm/ksm/run
+            mode: "0644"
+          when: >-
+            ksm_units is failed
+            or (ksm_units.results | default([]) | selectattr('failed', 'defined')
+                | selectattr('failed') | list | length > 0)
+          failed_when: false
+
+        # ansible_managed is only injected for the template action, so it is
+        # spelled out here rather than used as a variable.
+        - name: Persist KSM across reboots
+          ansible.builtin.copy:
+            content: |
+              # Ansible managed: demo-satellite-cloud-native libvirt-host-setup.yml
+              w /sys/kernel/mm/ksm/run - - - - 1
+            dest: /etc/tmpfiles.d/satellite-demo-ksm.conf
+            mode: "0644"
+            backup: true
+
+        # The hypervisor is also the user's desktop here, so this single
+        # stanza is what lets the browser reach the Satellite and Capsule UIs.
+        - name: Map the lab FQDNs in the host's /etc/hosts
+          ansible.builtin.blockinfile:
+            path: /etc/hosts
+            marker: "# {mark} satellite-demo"
+            block: |
+              192.168.150.11 {{ sat_fqdn }} satellite
+              192.168.150.12 {{ capsule_fqdn }} capsule
+            backup: true
+          when:
+            - sat_fqdn | length > 0
+            - capsule_fqdn | length > 0
 
     # ── 7. Docker conflict warning ───────────────────────────────────────
     - name: Check if Docker is installed

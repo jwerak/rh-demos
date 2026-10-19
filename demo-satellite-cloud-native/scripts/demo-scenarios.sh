@@ -8,8 +8,15 @@ fi
 NAMESPACE="satellite-cloud-native"
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../k8s/base" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -z "${DEMO_PASSWORD:-}" ] && [ -f "${SCRIPT_DIR}/../.env" ]; then
-  source "${SCRIPT_DIR}/../.env"
+# DEMO_ENV_FILE lets the local workstation profile use .env.local
+DEMO_ENV_PATH="${DEMO_ENV_FILE:-${SCRIPT_DIR}/../.env}"
+case "${DEMO_ENV_PATH}" in
+  /*) : ;;
+  *) DEMO_ENV_PATH="${SCRIPT_DIR}/../${DEMO_ENV_PATH}" ;;
+esac
+if [ -z "${DEMO_PASSWORD:-}" ] && [ -f "${DEMO_ENV_PATH}" ]; then
+  # shellcheck disable=SC1090
+  source "${DEMO_ENV_PATH}"
 fi
 : "${DEMO_PASSWORD:?DEMO_PASSWORD not set. Run: source .env}"
 
@@ -52,6 +59,13 @@ usage() {
   echo "  c2  Package Upgrade Rollout     - demo-app v1.0 → v2.0 through environments"
   echo "  c3  Composite Content Views     - Add new packages, verify isolation"
   echo "  c   Run all Lifecycle demos"
+  echo ""
+  echo "  Section D: Capsule (VMs: capsule, centos) — libvirt local profile only"
+  echo "  d1  Capsule Inventory           - Show the Capsule and its content sync state"
+  echo "  d2  Capsule-Served Content      - Custom + upstream repos, CentOS client via Capsule"
+  echo "  d3  Prove the Content Path      - Install RPMs, show they came from the Capsule"
+  echo "  d4  Ship an Update              - Publish v2.0, sync the Capsule, update the client"
+  echo "  d   Run all Capsule demos"
   echo ""
   echo "  Utilities:"
   echo "  all    Run sections A + B in sequence"
@@ -1443,14 +1457,24 @@ wait_lc_vm() {
   fi
 }
 
-# Build an RPM on the Satellite VM and upload it to the custom repo
+# Build an RPM on the Satellite VM and upload it to a custom repo.
+# Product and repository default to the Section C targets.
 build_and_upload_rpm() {
   local pkg_name="$1"
   local pkg_version="$2"
   local pkg_description="$3"
+  local product="${4:-Demo-App}"
+  local repo_name="${5:-}"
+
+  # Select by name when given one; Section C's single-repo product still
+  # works with the original "last row" lookup.
+  local repo_filter="tail -1"
+  if [ -n "${repo_name}" ]; then
+    repo_filter="grep -w \"${repo_name}\" | tail -1"
+  fi
 
   run_on_vm satellite "sudo bash -c '
-    REPO_ID=\$(hammer --csv repository list --product Demo-App --organization Demo_Org 2>/dev/null | tail -1 | cut -d, -f1)
+    REPO_ID=\$(hammer --csv repository list --product ${product} --organization Demo_Org 2>/dev/null | ${repo_filter} | cut -d, -f1)
 
     mkdir -p /tmp/${pkg_name}-rpm/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
     cat > /tmp/${pkg_name}-rpm/SPECS/${pkg_name}.spec <<SPEC
@@ -2038,6 +2062,435 @@ run_section_c() {
   demo_c3
 }
 
+# ══════════════════════════════════════════════════════════════════════════
+# Section D: Capsule Content Delivery
+# ══════════════════════════════════════════════════════════════════════════
+# A Capsule serves RPMs to a CentOS Stream 9 client, from a custom repo and
+# from a real synced upstream repo. The Capsule only exists on the libvirt
+# local profile — k8s/base/ has no Capsule manifests by design.
+#
+# Relies on helpers from this file and platform-libvirt.sh: run_on_vm,
+# run_on_vm_sudo, upload_to_vm, ensure_vm, build_and_upload_rpm.
+
+: "${CAPSULE_FQDN:=capsule.demo.lab}"
+: "${LAB_DOMAIN:=demo.lab}"
+CENTOS_VM="centos"
+CENTOS_FQDN="${CENTOS_VM}.${LAB_DOMAIN}"
+CAPSULE_PRODUCT="CentOS-Demo"
+CAPSULE_CUSTOM_REPO="centos9-demo-rpms"
+CAPSULE_UPSTREAM_REPO="centos9-extras-common"
+CAPSULE_UPSTREAM_URL="https://mirror.stream.centos.org/SIGs/9-stream/extras/x86_64/extras-common/"
+CAPSULE_CV="CentOS9-Capsule-CV"
+CAPSULE_AK="centos9-capsule-key"
+
+# The two proof assertions live in functions rather than inline
+# --validate-satellite strings: demo_lib wraps those in sudo bash -c '...',
+# which cannot carry the quoting these commands need.
+
+# The IP of the registered CentOS client, per the Satellite.
+# CSV field 4 is Host Group (empty) — ask for the field by name instead.
+_centos_client_ip() {
+  run_on_vm satellite \
+    "sudo hammer --csv host list --organization Demo_Org --search 'name ~ ${CENTOS_VM}' --fields ip" \
+    2>/dev/null | tail -1 | tr -dc '0-9.'
+}
+
+# True once the CentOS client appears in the Satellite's host list.
+# Polls, because registration completes asynchronously inside cloud-init
+# shortly after the VM is reported ready.
+centos_client_registered() {
+  local i
+  for i in $(seq 1 30); do
+    if run_on_vm satellite \
+         "sudo hammer --csv host list --organization Demo_Org --search 'name ~ ${CENTOS_VM}'" \
+         2>/dev/null | grep -q "${CENTOS_VM}"; then
+      return 0
+    fi
+    sleep 10
+  done
+  return 1
+}
+
+# True when a Capsule sync task succeeded in the last few minutes, i.e. the
+# promotion pushed content to the Capsule's mirror without an explicit sync.
+capsule_sync_ran_recently() {
+  run_on_vm satellite \
+    "sudo hammer --csv task list --search 'label ~ Capsule and state = stopped and result = success' --order 'started_at DESC' --per-page 5" \
+    2>/dev/null | grep -qiE 'Synchronize Capsule|Sync Content View on Capsule'
+}
+
+# True when the Capsule's access logs show a given package version fetched.
+capsule_served_version() {
+  local version="$1" count
+  count=$(run_on_vm_sudo capsule \
+    "cat /var/log/httpd/*access*log | grep -c capsule-demo-app-${version}" 2>/dev/null | tr -dc '0-9')
+  [ -n "${count}" ] && [ "${count}" -gt 0 ]
+}
+
+# True when the Capsule's access logs show content requests.
+capsule_served_content() {
+  local count
+  count=$(run_on_vm_sudo capsule \
+    "cat /var/log/httpd/*access*log | grep -c pulp/content" 2>/dev/null | tr -dc '0-9')
+  [ -n "${count}" ] && [ "${count}" -gt 0 ]
+}
+
+# True when the Satellite served NO content to the CentOS client.
+# An empty IP must fail rather than pass: grep -c "" matches every line.
+satellite_served_nothing() {
+  local cip count
+  cip=$(_centos_client_ip)
+  [ -n "${cip}" ] || return 1
+  count=$(run_on_vm_sudo satellite \
+    "cat /var/log/httpd/*access*log | grep pulp/content | grep -c ${cip}" 2>/dev/null | tr -dc '0-9')
+  [ "${count:-1}" -eq 0 ]
+}
+
+# Section D needs a real Capsule VM, which only the libvirt profile builds.
+require_capsule_platform() {
+  if [ "${DEMO_PLATFORM}" != "libvirt" ]; then
+    echo "Section D requires DEMO_PLATFORM=libvirt (the Capsule is libvirt-only)."
+    return 1
+  fi
+  if [ -z "${CAPSULE_FQDN}" ]; then
+    echo "CAPSULE_FQDN is not set. Run: source .env.local"
+    return 1
+  fi
+  return 0
+}
+
+demo_d1() {
+  require_capsule_platform || return 1
+  demo_section "Demo D1: Capsule Inventory"
+
+  demo_info "A Capsule is a content mirror and registration endpoint that"
+  demo_info "offloads the Satellite. This step confirms it is joined and"
+  demo_info "which lifecycle environments it carries."
+
+  demo_step "List Capsules known to the Satellite" \
+    --gui "Infrastructure -> Capsules" \
+    --cmd-satellite "
+      hammer capsule list
+      echo \"\"
+      hammer capsule info --name ${CAPSULE_FQDN}" \
+    --validate-satellite "hammer --csv capsule list 2>/dev/null | grep -q ${CAPSULE_FQDN}"
+
+  demo_step "Show the content the Capsule carries" \
+    --gui "Infrastructure -> Capsules -> ${CAPSULE_FQDN} -> Content" \
+    --cmd-satellite "
+      hammer capsule content info --name ${CAPSULE_FQDN} --organization Demo_Org \
+        || hammer smart-proxy content info --name ${CAPSULE_FQDN} --organization Demo_Org"
+
+  demo_step "Confirm the Capsule services are running" \
+    --cmd-vm capsule "
+      systemctl is-active pulpcore-api pulpcore-content foreman-proxy httpd || true
+      echo \"\"
+      satellite-maintain service status --brief 2>/dev/null | head -20 || true" \
+    --validate "run_on_vm capsule \"systemctl is-active pulpcore-content\" 2>/dev/null | grep -q active"
+}
+
+demo_d2() {
+  require_capsule_platform || return 1
+  demo_section "Demo D2: Publish Content Through the Capsule"
+
+  demo_info "Builds a content path that terminates at the Capsule:"
+  demo_info "  - a custom repo holding an RPM built on the Satellite"
+  demo_info "  - a real upstream repo (CentOS Stream 9 extras-common)"
+  demo_info "  - a content view promoted to the Lab lifecycle environment"
+  demo_info "  - an activation key whose registrations point at the Capsule"
+
+  demo_step "Create the ${CAPSULE_PRODUCT} product and its two repositories" \
+    --gui "Content -> Products -> Create Product" \
+    --cmd-satellite "
+      if hammer --csv product list --organization Demo_Org 2>/dev/null | grep -q ${CAPSULE_PRODUCT}; then
+        echo \"Product ${CAPSULE_PRODUCT} already exists\"
+      else
+        hammer product create \
+          --name \"${CAPSULE_PRODUCT}\" \
+          --description \"Content served to CentOS clients via the Capsule\" \
+          --organization \"Demo_Org\"
+        echo \"Product ${CAPSULE_PRODUCT} created\"
+      fi
+
+      if hammer --csv repository list --product ${CAPSULE_PRODUCT} --organization Demo_Org 2>/dev/null | grep -q ${CAPSULE_CUSTOM_REPO}; then
+        echo \"Repository ${CAPSULE_CUSTOM_REPO} already exists\"
+      else
+        hammer repository create \
+          --name \"${CAPSULE_CUSTOM_REPO}\" \
+          --content-type yum \
+          --product \"${CAPSULE_PRODUCT}\" \
+          --organization \"Demo_Org\" \
+          --download-policy immediate
+        echo \"Repository ${CAPSULE_CUSTOM_REPO} created (upload-only)\"
+      fi
+
+      if hammer --csv repository list --product ${CAPSULE_PRODUCT} --organization Demo_Org 2>/dev/null | grep -q ${CAPSULE_UPSTREAM_REPO}; then
+        echo \"Repository ${CAPSULE_UPSTREAM_REPO} already exists\"
+      else
+        hammer repository create \
+          --name \"${CAPSULE_UPSTREAM_REPO}\" \
+          --content-type yum \
+          --product \"${CAPSULE_PRODUCT}\" \
+          --organization \"Demo_Org\" \
+          --download-policy immediate \
+          --url \"${CAPSULE_UPSTREAM_URL}\"
+        echo \"Repository ${CAPSULE_UPSTREAM_REPO} created (mirrors upstream)\"
+      fi" \
+    --validate-satellite "hammer --csv repository list --product ${CAPSULE_PRODUCT} --organization Demo_Org 2>/dev/null | grep -q ${CAPSULE_UPSTREAM_REPO}"
+
+  # download-policy immediate matters here: with on_demand the Capsule would
+  # proxy misses back to the Satellite, which is exactly what this demo claims
+  # is not happening.
+  demo_step "Sync the upstream CentOS Stream repository (~100 small packages)" \
+    --gui "Content -> Products -> ${CAPSULE_PRODUCT} -> ${CAPSULE_UPSTREAM_REPO} -> Sync Now" \
+    --cmd-satellite "
+      hammer repository synchronize \
+        --name \"${CAPSULE_UPSTREAM_REPO}\" \
+        --product \"${CAPSULE_PRODUCT}\" \
+        --organization \"Demo_Org\"
+      hammer repository info \
+        --name \"${CAPSULE_UPSTREAM_REPO}\" \
+        --product \"${CAPSULE_PRODUCT}\" \
+        --organization \"Demo_Org\" | grep -iE \"packages|sync\"" \
+    --validate-satellite "hammer repository info --name ${CAPSULE_UPSTREAM_REPO} --product ${CAPSULE_PRODUCT} --organization Demo_Org 2>/dev/null | grep -qiE \"packages:[[:space:]]*[1-9]\""
+
+  demo_info "Building capsule-demo-app v1.0 RPM on the Satellite..."
+  demo_exec "build_and_upload_rpm \"capsule-demo-app\" \"1.0\" \"Capsule-served demo application\" \"${CAPSULE_PRODUCT}\" \"${CAPSULE_CUSTOM_REPO}\""
+
+  demo_step "Create, publish and promote the ${CAPSULE_CV} content view" \
+    --gui "Content -> Content Views -> Create Content View" \
+    --cmd-satellite "
+      if ! hammer --csv content-view list --organization Demo_Org 2>/dev/null | grep -q ${CAPSULE_CV}; then
+        hammer content-view create --name \"${CAPSULE_CV}\" --organization \"Demo_Org\"
+        for R in ${CAPSULE_CUSTOM_REPO} ${CAPSULE_UPSTREAM_REPO}; do
+          hammer content-view add-repository \
+            --name \"${CAPSULE_CV}\" \
+            --organization \"Demo_Org\" \
+            --product \"${CAPSULE_PRODUCT}\" \
+            --repository \"\${R}\"
+        done
+        echo \"Content view ${CAPSULE_CV} created with both repositories\"
+      else
+        echo \"Content view ${CAPSULE_CV} already exists\"
+      fi
+
+      hammer content-view publish --name \"${CAPSULE_CV}\" --organization \"Demo_Org\"
+      LATEST=\$(hammer --csv content-view version list --content-view \"${CAPSULE_CV}\" \
+        --organization \"Demo_Org\" --order \"version DESC\" | head -2 | tail -1 | cut -d, -f3)
+      hammer content-view version promote \
+        --content-view \"${CAPSULE_CV}\" \
+        --version \"\${LATEST}\" \
+        --to-lifecycle-environment \"Lab\" \
+        --organization \"Demo_Org\"
+      echo \"Published and promoted version \${LATEST} to Lab\"" \
+    --validate-satellite "hammer --csv content-view list --organization Demo_Org 2>/dev/null | grep -q ${CAPSULE_CV}"
+
+  # Custom repositories are disabled by default on a new subscription, so the
+  # content overrides below are mandatory, not cosmetic. The content labels
+  # are derived rather than hardcoded: Katello munges them.
+  demo_step "Create the ${CAPSULE_AK} activation key with content overrides" \
+    --gui "Content -> Activation Keys -> Create Activation Key" \
+    --cmd-satellite "
+      if ! hammer --csv activation-key list --organization Demo_Org 2>/dev/null | grep -q ${CAPSULE_AK}; then
+        hammer activation-key create \
+          --name \"${CAPSULE_AK}\" \
+          --organization \"Demo_Org\" \
+          --lifecycle-environment \"Lab\" \
+          --content-view \"${CAPSULE_CV}\" \
+          --unlimited-hosts
+        echo \"Activation key ${CAPSULE_AK} created\"
+      else
+        echo \"Activation key ${CAPSULE_AK} already exists\"
+      fi
+
+      for R in ${CAPSULE_CUSTOM_REPO} ${CAPSULE_UPSTREAM_REPO}; do
+        LABEL=\$(hammer --csv repository info --name \"\${R}\" \
+          --product \"${CAPSULE_PRODUCT}\" --organization \"Demo_Org\" \
+          --fields \"Content label\" | tail -1)
+        hammer activation-key content-override \
+          --name \"${CAPSULE_AK}\" \
+          --organization \"Demo_Org\" \
+          --content-label \"\${LABEL}\" \
+          --override-name enabled \
+          --value 1
+        echo \"Enabled content label \${LABEL}\"
+      done" \
+    --validate-satellite "hammer --csv activation-key list --organization Demo_Org 2>/dev/null | grep -q ${CAPSULE_AK}"
+
+  demo_step "Push the new content view out to the Capsule" \
+    --gui "Infrastructure -> Capsules -> ${CAPSULE_FQDN} -> Synchronize" \
+    --cmd-satellite "
+      hammer capsule content synchronize --name \"${CAPSULE_FQDN}\" --organization \"Demo_Org\" \
+        || hammer smart-proxy content synchronize --name \"${CAPSULE_FQDN}\" --organization \"Demo_Org\"
+      hammer capsule content info --name \"${CAPSULE_FQDN}\" --organization \"Demo_Org\" | head -30"
+
+  # --smart-proxy is the whole point: it makes the generated command register
+  # the host against the Capsule, so every repo baseurl names the Capsule. The
+  # grep below fails loudly if the Capsule lacks the Registration feature and
+  # Satellite quietly substitutes its own URL.
+  demo_step "Generate a Capsule-targeted registration command" \
+    --gui "Hosts -> Register Host -> Capsule: ${CAPSULE_FQDN}" \
+    --cmd-satellite "
+      REG_CMD=\$(hammer host-registration generate-command \
+        --organization \"Demo_Org\" \
+        --activation-keys \"${CAPSULE_AK}\" \
+        --smart-proxy \"${CAPSULE_FQDN}\" \
+        --force true \
+        --insecure true \
+        --setup-remote-execution false \
+        --setup-remote-execution-pull false \
+        --setup-insights false \
+        --jwt-expiration 0)
+      echo \"\${REG_CMD}\" > /var/www/html/pub/register-centos.sh
+      chmod 644 /var/www/html/pub/register-centos.sh
+      echo \"Registration endpoint: \$(grep -o \"https://[^/ ]*\" /var/www/html/pub/register-centos.sh | head -1)\"" \
+    --validate-satellite "grep -q ${CAPSULE_FQDN} /var/www/html/pub/register-centos.sh"
+
+  demo_info "Copying the registration script to the Capsule's /pub..."
+  demo_exec "run_on_vm satellite \"sudo cat /var/www/html/pub/register-centos.sh\" | upload_to_vm capsule /var/www/html/pub/register-centos.sh && run_on_vm_sudo capsule \"chmod 644 /var/www/html/pub/register-centos.sh\""
+
+  demo_info "Deploying the CentOS Stream 9 client (registers via the Capsule)..."
+  demo_exec "ensure_vm ${CENTOS_VM} centos-client"
+
+  demo_step "Confirm the client registered through the Capsule" \
+    --gui "Hosts -> All Hosts -> ${CENTOS_FQDN}" \
+    --cmd-satellite "
+      hammer host list --organization Demo_Org --search \"name ~ ${CENTOS_VM}\"
+      echo \"\"
+      hammer host info --name ${CENTOS_FQDN} --organization Demo_Org \
+        | grep -iE \"content source|lifecycle|content view|operating system\" || true" \
+    --validate "centos_client_registered"
+}
+
+demo_d3() {
+  require_capsule_platform || return 1
+  demo_section "Demo D3: Prove the Content Comes From the Capsule"
+
+  demo_info "The claim is that the CentOS client gets its RPMs from the"
+  demo_info "Capsule and not the Satellite. The last two steps prove both"
+  demo_info "halves: traffic at the Capsule, no traffic at the Satellite."
+
+  demo_step "Subscription status on the client" \
+    --cmd-vm "${CENTOS_VM}" "
+      subscription-manager identity
+      echo \"\"
+      subscription-manager status || true"
+
+  demo_step "Every repository baseurl points at the Capsule" \
+    --cmd-vm "${CENTOS_VM}" "grep -E \"^\\[|^baseurl\" /etc/yum.repos.d/redhat.repo" \
+    --validate "run_on_vm ${CENTOS_VM} \"grep -q ${CAPSULE_FQDN} /etc/yum.repos.d/redhat.repo\""
+
+  demo_step "Enabled repositories as dnf sees them" \
+    --cmd-vm "${CENTOS_VM}" "
+      dnf repolist --enabled
+      echo \"\"
+      dnf -v repoinfo \"*${CAPSULE_PRODUCT}*\" 2>/dev/null | grep -E \"Repo-id|Repo-baseurl|Repo-pkgs\" || true"
+
+  demo_step "Install the uploaded custom RPM" \
+    --cmd-vm "${CENTOS_VM}" "
+      dnf -y install capsule-demo-app
+      capsule-demo-app" \
+    --validate "run_on_vm ${CENTOS_VM} \"rpm -q capsule-demo-app\""
+
+  demo_step "Install a package from the real upstream mirror" \
+    --cmd-vm "${CENTOS_VM}" "
+      dnf -y install centos-release-cloud
+      rpm -qi centos-release-cloud | head -12" \
+    --validate "run_on_vm ${CENTOS_VM} \"rpm -q centos-release-cloud\""
+
+  # The Capsule logs content requests to rhsm-pulpcore-https-443_access_ssl.log,
+  # not foreman-ssl_access_ssl.log. Glob over the access logs so this keeps
+  # working if the vhost name changes; /var/log/httpd is root-only, so the
+  # glob must expand under sudo (run_on_vm_sudo already wraps in sudo bash -c).
+  demo_step "The Capsule served the packages" \
+    --cmd-vm capsule "
+      cat /var/log/httpd/*access*log | grep \"pulp/content\" | tail -15" \
+    --validate "capsule_served_content"
+
+  # IP is CSV field 5, not 4 (field 4 is Host Group and is empty), so ask
+  # hammer for the field by name. An empty CIP would make grep -c match every
+  # line and fabricate a non-zero count, inverting the conclusion.
+  demo_step "The Satellite served nothing to this client (negative proof)" \
+    --cmd-satellite "
+      CIP=\$(hammer --csv host list --organization Demo_Org --search \"name ~ ${CENTOS_VM}\" --fields ip | tail -1)
+      if [ -z \"\${CIP}\" ]; then echo \"ERROR: could not determine the client IP\"; exit 1; fi
+      echo \"CentOS client IP: \${CIP}\"
+      COUNT=\$(cat /var/log/httpd/*access*log | grep \"pulp/content\" | grep -c \"\${CIP}\" || true)
+      echo \"Content requests served by the Satellite to \${CIP}: \${COUNT}\"
+      echo \"(0 means every package came from the Capsule)\"" \
+    --validate "satellite_served_nothing"
+}
+
+demo_d4() {
+  require_capsule_platform || return 1
+  demo_section "Demo D4: Ship an Update Through the Capsule"
+
+  demo_info "The Capsule keeps its own mirror of each lifecycle environment,"
+  demo_info "so an update only reaches the client once that mirror is updated."
+  demo_info "Satellite does this for you: promoting a content view version"
+  demo_info "queues a Capsule sync automatically. This demo publishes v2.0,"
+  demo_info "shows that sync happening, and updates the client from the Capsule."
+
+  demo_step "The client is currently on v1.0" \
+    --cmd-vm "${CENTOS_VM}" "rpm -q capsule-demo-app" \
+    --validate "run_on_vm ${CENTOS_VM} \"rpm -q capsule-demo-app\" 2>/dev/null | grep -q 1[.]0"
+
+  demo_info "Building capsule-demo-app v2.0 on the Satellite..."
+  demo_exec "build_and_upload_rpm \"capsule-demo-app\" \"2.0\" \"Capsule-served demo application\" \"${CAPSULE_PRODUCT}\" \"${CAPSULE_CUSTOM_REPO}\""
+
+  demo_step "Publish a new content view version and promote it to Lab" \
+    --gui "Content -> Content Views -> ${CAPSULE_CV} -> Publish new version" \
+    --cmd-satellite "
+      hammer content-view publish --name \"${CAPSULE_CV}\" --organization \"Demo_Org\"
+      LATEST=\$(hammer --csv content-view version list --content-view \"${CAPSULE_CV}\" \
+        --organization \"Demo_Org\" --order \"version DESC\" | head -2 | tail -1 | cut -d, -f3)
+      hammer content-view version promote \
+        --content-view \"${CAPSULE_CV}\" \
+        --version \"\${LATEST}\" \
+        --to-lifecycle-environment \"Lab\" \
+        --organization \"Demo_Org\"
+      echo \"Promoted version \${LATEST} to Lab\"
+      hammer content-view version list --content-view \"${CAPSULE_CV}\" --organization \"Demo_Org\""
+
+  # Promotion to a lifecycle environment the Capsule carries makes Katello
+  # queue "Sync Content View on Capsule(s)" by itself — the update is pushed
+  # to the Capsule's mirror without an explicit sync command.
+  demo_step "Promotion queued a Capsule sync automatically" \
+    --gui "Monitor -> Tasks (filter: Capsule)" \
+    --cmd-satellite "
+      hammer task list --search \"label ~ Capsule\" --order \"started_at DESC\" --per-page 5" \
+    --validate "capsule_sync_ran_recently"
+
+  # Harmless when the automatic sync already finished; this is the command
+  # you reach for in a disconnected workflow or to force a re-mirror.
+  demo_step "Force an explicit sync as well (idempotent)" \
+    --gui "Infrastructure -> Capsules -> ${CAPSULE_FQDN} -> Synchronize" \
+    --cmd-satellite "
+      hammer capsule content synchronize --name \"${CAPSULE_FQDN}\" --organization \"Demo_Org\" \
+        || hammer smart-proxy content synchronize --name \"${CAPSULE_FQDN}\" --organization \"Demo_Org\"
+      echo \"Capsule mirror is up to date\""
+
+  demo_step "The update is now available and installs from the Capsule" \
+    --cmd-vm "${CENTOS_VM}" "
+      dnf clean metadata >/dev/null 2>&1
+      dnf -y update capsule-demo-app
+      rpm -q capsule-demo-app
+      capsule-demo-app" \
+    --validate "run_on_vm ${CENTOS_VM} \"rpm -q capsule-demo-app\" 2>/dev/null | grep -q 2[.]0"
+
+  demo_step "The v2.0 RPM was fetched from the Capsule" \
+    --cmd-vm capsule "
+      cat /var/log/httpd/*access*log | grep \"capsule-demo-app-2.0\" | tail -5" \
+    --validate "capsule_served_version 2.0"
+}
+
+run_section_d() {
+  demo_d1; echo ""; echo "---"; echo ""
+  demo_d2; echo ""; echo "---"; echo ""
+  demo_d3; echo ""; echo "---"; echo ""
+  demo_d4
+}
+
 run_section_b() {
   demo_b1; echo ""; echo "---"; echo ""
   demo_b2; echo ""; echo "---"; echo ""
@@ -2076,6 +2529,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     c2) demo_c2 ;;
     c3) demo_c3 ;;
     c) run_section_c ;;
+
+    # Section D: Capsule
+    d1) demo_d1 ;;
+    d2) demo_d2 ;;
+    d3) demo_d3 ;;
+    d4) demo_d4 ;;
+    d) run_section_d ;;
 
     # All sections
     all)

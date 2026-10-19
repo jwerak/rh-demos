@@ -1,0 +1,92 @@
+#cloud-config
+user: cloud-user
+password: {{ demo_password }}
+chpasswd:
+  expire: false
+ssh_pwauth: true
+runcmd:
+  - |
+    set -euo pipefail
+    exec > /var/log/client-setup.log 2>&1
+    echo "=== Client Onboarding Starting ==="
+
+    SAT_FQDN="{{ sat_fqdn }}"
+    CAPSULE_FQDN="{{ capsule_fqdn }}"
+    # Registration script is served from the Capsule, so that every byte this
+    # host fetches — bootstrap script, CA, RPMs — comes from the Capsule.
+    REG_URL="{{ reg_url | default('') }}"
+    if [ -z "${REG_URL}" ]; then
+      REG_URL="http://${CAPSULE_FQDN}/pub/register-centos.sh"
+    fi
+    FALLBACK_URL="http://${SAT_FQDN}/pub/register-centos.sh"
+
+    # --- Phase 0: Identity ---
+    VM_NAME="{{ vm_name | default('') }}"
+    if [ -z "${VM_NAME}" ]; then
+      VM_NAME=$(nmcli -t -f DHCP4.OPTION dev show eth0 2>/dev/null | grep ':host_name =' | sed 's/.*= //' | head -1)
+      VM_NAME="${VM_NAME:-centos-$(cut -c1-8 /proc/sys/kernel/random/boot_id)}"
+    fi
+    CLIENT_FQDN="${VM_NAME}.{{ lab_domain }}"
+    hostnamectl set-hostname "${CLIENT_FQDN}"
+    VM_IP=$(ip -4 addr show eth0 | grep -oP '(?<=inet )[\d.]+')
+    sed -i 's/^127\.0\.0\.1.*/127.0.0.1 localhost localhost.localdomain/' /etc/hosts
+    echo "${VM_IP} ${CLIENT_FQDN} ${VM_NAME}" >> /etc/hosts
+    echo "{{ capsule_ip }} ${CAPSULE_FQDN} capsule" >> /etc/hosts
+    echo "{{ sat_ip }} ${SAT_FQDN} satellite" >> /etc/hosts
+    echo "Hostname: ${CLIENT_FQDN} IP: ${VM_IP}"
+
+    # --- Phase 1: Prerequisites from the stock CentOS repos ---
+    # No RHSM/CDN step here: this is CentOS Stream, it has no Red Hat
+    # entitlement, and there is no CentOS build of satellite-client-6.
+    # No dnf-plugin-subscription-manager here: that is a RHEL 8 package name.
+    # On el9 the dnf plugin ships inside subscription-manager itself, and
+    # asking for the missing name makes dnf exit non-zero, which aborts this
+    # whole script under set -e.
+    echo "--- Installing registration prerequisites ---"
+    dnf -y install \
+      subscription-manager \
+      python3-subscription-manager-rhsm \
+      subscription-manager-rhsm-certificates \
+      ca-certificates \
+      curl
+    subscription-manager config --rhsm.manage_repos=1
+    echo "--- Prerequisites Installed ---"
+
+    # --- Phase 2: Trust the Capsule CA (best effort) ---
+    # Registration also passes --insecure, so a failure here is not fatal.
+    set +e
+    curl -sk -o /etc/pki/ca-trust/source/anchors/katello-server-ca.pem \
+      "http://${CAPSULE_FQDN}/pub/katello-server-ca.crt" && update-ca-trust
+    set -e
+
+    # --- Phase 3: Register through the Capsule ---
+    # The || true on each curl matters: while the Capsule is still coming up
+    # curl exits non-zero, and a bare assignment from a failed command
+    # substitution would abort this whole script under set -e.
+    echo "--- Registering via ${REG_URL} ---"
+    REG_SCRIPT=""
+    for i in $(seq 1 60); do
+      REG_SCRIPT=$(curl -sk "${REG_URL}" 2>/dev/null || true)
+      echo "${REG_SCRIPT}" | grep -q 'curl' && break
+      REG_SCRIPT=$(curl -sk "${FALLBACK_URL}" 2>/dev/null || true)
+      echo "${REG_SCRIPT}" | grep -q 'curl' && { echo "WARNING: using Satellite fallback URL"; break; }
+      echo "Waiting for registration script... attempt ${i}/60"
+      sleep 30
+    done
+
+    if echo "${REG_SCRIPT}" | grep -q 'curl'; then
+      eval "${REG_SCRIPT}" 2>&1 || echo "Registration init script had errors (non-fatal)"
+    else
+      echo "Registration script not available, skipping"
+    fi
+    echo "--- Registration Complete ---"
+
+    # --- Phase 4: Self-proof into the log ---
+    set +e
+    subscription-manager identity
+    echo "--- Content sources in redhat.repo ---"
+    grep -E '^\[|^baseurl' /etc/yum.repos.d/redhat.repo
+    dnf clean all && dnf -y makecache
+    set -e
+
+    echo "=== Client Onboarding Finished ==="

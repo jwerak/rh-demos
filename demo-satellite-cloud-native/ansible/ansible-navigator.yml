@@ -15,13 +15,29 @@ ansible-navigator:
         - LIBVIRT_POOL_DIR
         - LIBVIRT_NETWORK
         - LIBVIRT_RHEL9_IMAGE
+        - LIBVIRT_RHEL9_IMAGE_SOURCE
+        - LIBVIRT_CENTOS9_IMAGE
+        - LIBVIRT_CENTOS9_IMAGE_URL
         - IDM_FQDN
         - SAT_FQDN
+        - CAPSULE_FQDN
+        - LAB_DOMAIN
         - DEMO_PASSWORD
         - RHSM_ORG
         - RHSM_ACTIVATION_KEY
         - MANIFEST_PATH
         - SSH_AUTH_SOCK
+        # Profile switches. A name missing from this list is not an error —
+        # it simply arrives as an empty string inside the EE, which shows up
+        # much later as a VM built with the wrong FQDN or sizing.
+        - DEPLOY_IDM
+        - DEPLOY_CAPSULE
+        - DEMO_LOCAL_PROFILE
+        - SAT_TUNING
+        - SAT_DISABLE_SYSTEM_CHECKS
+        - SAT_ORGANIZATION
+        - CAPSULE_TUNING
+        - REG_URL
     volume-mounts:
       - src: "${HOME}/.cache/satellite-demo"
         dest: /home/runner/.cache/satellite-demo

@@ -8,10 +8,17 @@ set -euo pipefail
 
 NAMESPACE="satellite-cloud-native"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -z "${DEMO_PASSWORD:-}" ] && [ -f "${SCRIPT_DIR}/../.env" ]; then
-  source "${SCRIPT_DIR}/../.env"
+DEMO_ENV_PATH="${DEMO_ENV_FILE:-${SCRIPT_DIR}/../.env}"
+case "${DEMO_ENV_PATH}" in
+  /*) : ;;
+  *) DEMO_ENV_PATH="${SCRIPT_DIR}/../${DEMO_ENV_PATH}" ;;
+esac
+if [ -z "${DEMO_PASSWORD:-}" ] && [ -f "${DEMO_ENV_PATH}" ]; then
+  # shellcheck disable=SC1090
+  source "${DEMO_ENV_PATH}"
 fi
 : "${DEMO_PASSWORD:?DEMO_PASSWORD not set. Run: source .env}"
+: "${DEPLOY_IDM:=true}"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
@@ -24,12 +31,14 @@ echo ""
 if [ "${DEMO_PLATFORM:-openshift}" = "libvirt" ]; then
   # --- Libvirt platform ---
 
-  # Step 1: Delete all client VMs
+  # Step 1: Delete all client VMs.
+  # list_vms_by_role substring-matches, so the Section D CentOS client (named
+  # "centos", not "*client*") has to be named explicitly.
   echo "--- Step 1: Deleting client VMs ---"
-  for VM in $(list_vms_by_role client); do
-    # Skip infrastructure VMs (satellite, idm)
+  for VM in $(list_vms_by_role client) $(list_vms_by_role centos); do
+    # Never touch the infrastructure VMs
     case "${VM}" in
-      satellite|idm) continue ;;
+      satellite|idm|capsule) continue ;;
     esac
     delete_vm "${VM}"
   done
@@ -80,26 +89,32 @@ fi
 echo ""
 echo "--- Deregistering clients from Satellite ---"
 run_on_vm satellite "sudo bash -c '
-  for HOST in \$(hammer --csv host list --search \"name ~ client\" --organization Demo_Org 2>/dev/null | tail -n +2 | cut -d, -f2); do
-    echo \"  Removing from Satellite: \${HOST}\"
-    hammer host delete --name \"\${HOST}\" --organization Demo_Org 2>/dev/null || true
+  for PATTERN in client centos; do
+    for HOST in \$(hammer --csv host list --search \"name ~ \${PATTERN}\" --organization Demo_Org 2>/dev/null | tail -n +2 | cut -d, -f2); do
+      echo \"  Removing from Satellite: \${HOST}\"
+      hammer host delete --name \"\${HOST}\" --organization Demo_Org 2>/dev/null || true
+    done
   done
   echo \"  Remaining hosts:\"
   hammer host list --organization Demo_Org 2>/dev/null
 '" 2>/dev/null || true
 
-# Deregister from IdM (all at once in a single SSH session)
-echo ""
-echo "--- Deregistering clients from IdM ---"
-run_on_vm idm "sudo bash -c '
-  echo \"${DEMO_PASSWORD}\" | kinit admin 2>/dev/null
-  for HOST in \$(ipa host-find --sizelimit=100 2>/dev/null | grep -oP \"Host name: \K.*client.*\"); do
-    echo \"  Removing from IdM: \${HOST}\"
-    ipa host-del \"\${HOST}\" --updatedns 2>/dev/null || true
-  done
-  echo \"  Remaining hosts:\"
-  ipa host-find 2>/dev/null | grep \"Host name:\" || true
-'" 2>/dev/null || true
+# Deregister from IdM (all at once in a single SSH session).
+# Skipped on profiles without IdM — otherwise this burns minutes failing to
+# reach a VM that was never deployed.
+if [ "${DEPLOY_IDM}" = "true" ]; then
+  echo ""
+  echo "--- Deregistering clients from IdM ---"
+  run_on_vm idm "sudo bash -c '
+    echo \"${DEMO_PASSWORD}\" | kinit admin 2>/dev/null
+    for HOST in \$(ipa host-find --sizelimit=100 2>/dev/null | grep -oP \"Host name: \K.*client.*\"); do
+      echo \"  Removing from IdM: \${HOST}\"
+      ipa host-del \"\${HOST}\" --updatedns 2>/dev/null || true
+    done
+    echo \"  Remaining hosts:\"
+    ipa host-find 2>/dev/null | grep \"Host name:\" || true
+  '" 2>/dev/null || true
+fi
 
 echo ""
 echo "=== Client reset complete ==="

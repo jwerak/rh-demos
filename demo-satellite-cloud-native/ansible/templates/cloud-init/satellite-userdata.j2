@@ -28,7 +28,9 @@ runcmd:
     # Detect the persistent data disk for /var/lib/pulp (mounted after install)
     sleep 5
     PULP_DISK=""
-    for dev in /dev/vd{c,d,e,f}; do
+    # vdb is where vm.xml.j2 attaches the first extra disk on libvirt; on
+    # OpenShift the data disk lands further along the chain.
+    for dev in /dev/vd{b,c,d,e,f}; do
       if [ -b "$dev" ]; then
         SIZE=$(blockdev --getsize64 "$dev" 2>/dev/null || echo 0)
         # Pulp disk is >1GB
@@ -61,7 +63,21 @@ runcmd:
     # Install Satellite
     dnf install -y satellite
 
+    # Optional sizing flags. The local workstation profile runs Satellite on
+    # 12 GB, which is below the installer's RAM pre-check, so it passes
+    # --tuning development --disable-system-checks.
+    SAT_SIZING_ARGS=""
+{% if sat_tuning | default('') %}
+    SAT_SIZING_ARGS="${SAT_SIZING_ARGS} --tuning {{ sat_tuning }}"
+{% endif %}
+{% if sat_disable_system_checks | default(false) %}
+    # The flag is literally named this; there is no --disable-system-checks
+    # in Satellite 6.19 (satellite-installer exits with a usage error).
+    SAT_SIZING_ARGS="${SAT_SIZING_ARGS} --skip-checks-i-know-better"
+{% endif %}
+
     # Run satellite-installer
+    # shellcheck disable=SC2086
     satellite-installer --scenario satellite \
       --foreman-initial-admin-username admin \
       --foreman-initial-admin-password '{{ demo_password }}' \
@@ -70,7 +86,8 @@ runcmd:
       --certs-node-fqdn "${SAT_FQDN}" \
       --foreman-proxy-dns false \
       --foreman-proxy-dhcp false \
-      --foreman-proxy-tftp false
+      --foreman-proxy-tftp false \
+      ${SAT_SIZING_ARGS}
 
     echo "=== Satellite Installed ==="
 

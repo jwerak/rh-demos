@@ -40,6 +40,37 @@ vm_profiles:
     cloudinit_template: client
     base_image: cis-rhel9.qcow2
 
+  # ── Local workstation profile (DEMO_PLATFORM=libvirt, LIBVIRT_HOST=localhost) ──
+  # Trimmed to fit a 30 GB laptop alongside a desktop session. Satellite is
+  # installed with --tuning development --disable-system-checks to get past the
+  # installer's 20 GB RAM pre-check. Same MAC/IP as the "satellite" profile, so
+  # the VM name (and therefore every run_on_vm satellite ...) stays unchanged.
+  satellite-local:
+    vcpus: 4
+    ram_mb: 12288
+    disk_gb: 80
+    extra_disks:
+      - name: pulp-data
+        size_gb: 60
+        mount: /var/lib/pulp
+    mac: "52:54:00:de:a0:02"
+    ip: "192.168.150.11"
+    cloudinit_template: satellite
+  capsule:
+    vcpus: 2
+    ram_mb: 6144
+    disk_gb: 60
+    mac: "52:54:00:de:a0:03"
+    ip: "192.168.150.12"
+    cloudinit_template: capsule
+  centos-client:
+    vcpus: 1
+    ram_mb: 2048
+    disk_gb: 20
+    cloudinit_template: centos-client
+    base_image: centos-stream-9-x86_64-kvm.qcow2
+
 libvirt_network_name: satellite-demo
 libvirt_pool_dir: /var/lib/libvirt/images
 libvirt_rhel9_image: rhel-9.8-x86_64-kvm.qcow2
+libvirt_centos9_image: centos-stream-9-x86_64-kvm.qcow2

@@ -10,12 +10,14 @@ Red Hat Satellite + IdM (FreeIPA) + RHEL clients running entirely as KubeVirt VM
     - [2. Configure Environment](#2-configure-environment)
     - [3. Create the RHSM Credentials Secret](#3-create-the-rhsm-credentials-secret)
   - [Quick Start](#quick-start)
+    - [Local Workstation Deployment (libvirt)](#local-workstation-deployment-libvirt)
     - [(Optional) Satellite Subscription Manifest](#optional-satellite-subscription-manifest)
   - [Web UI Access](#web-ui-access)
-    - [URLs](#urls)
+    - [Access on the local profile](#access-on-the-local-profile)
+    - [URLs (OpenShift profile)](#urls-openshift-profile)
     - [Satellite Web UI](#satellite-web-ui)
     - [IdM (FreeIPA) Web UI](#idm-freeipa-web-ui)
-    - [SSH Access to VMs](#ssh-access-to-vms)
+    - [SSH Access to VMs (OpenShift profile)](#ssh-access-to-vms-openshift-profile)
   - [Demo Scenarios](#demo-scenarios)
     - [Section A: Platform (VMs: client, client-pool)](#section-a-platform-vms-client-client-pool)
       - [Demo a1: Zero-Touch Provisioning](#demo-a1-zero-touch-provisioning)
@@ -36,7 +38,14 @@ Red Hat Satellite + IdM (FreeIPA) + RHEL clients running entirely as KubeVirt VM
       - [Demo c1: Lifecycle Environments Pipeline](#demo-c1-lifecycle-environments-pipeline)
       - [Demo c2: Content View Versioning \& Promotion](#demo-c2-content-view-versioning--promotion)
       - [Demo c3: Composite Content Views](#demo-c3-composite-content-views)
+    - [Section D: Capsule (VMs: capsule, centos)](#section-d-capsule-vms-capsule-centos)
+      - [Demo d1: Capsule Inventory](#demo-d1-capsule-inventory)
+      - [Demo d2: Publish Content Through the Capsule](#demo-d2-publish-content-through-the-capsule)
+      - [Demo d3: Prove the Content Comes From the Capsule](#demo-d3-prove-the-content-comes-from-the-capsule)
+      - [Demo d4: Ship an Update Through the Capsule](#demo-d4-ship-an-update-through-the-capsule)
   - [Resource Requirements](#resource-requirements)
+    - [OpenShift / remote KVM host profile](#openshift--remote-kvm-host-profile)
+    - [Local workstation profile](#local-workstation-profile)
   - [Project Structure](#project-structure)
     - [Playbooks](#playbooks)
     - [Kustomize](#kustomize)
@@ -152,6 +161,65 @@ oc scale vmpool client-pool -n satellite-cloud-native --replicas=2
 
 The deploy script validates DNS resolution, checks for the RHSM secret, and substitutes your FQDNs into all manifests before applying them.
 
+### Local Workstation Deployment (libvirt)
+
+A second profile runs the whole stack on your own machine — **Satellite + Capsule + a CentOS Stream 9 client** — with no OpenShift, no remote KVM host, and no public DNS. IdM is left out to save memory.
+
+```bash
+cp .env.local.sample .env.local
+$EDITOR .env.local          # RHSM org + activation key are the only required edits
+./scripts/deploy-local.sh   # ~90 min to 2.5 h
+```
+
+`deploy-local.sh` pre-flights the workstation and then hands over to `deploy-libvirt.sh`. The hypervisor is reached over **loopback SSH** (`LIBVIRT_HOST=localhost`), so every existing code path — `qemu+ssh://`, the `ProxyCommand` hop to the VMs, the containerized execution environment — works unchanged.
+
+**Prerequisites**
+
+- `sshd` running locally, your key in `~/.ssh/authorized_keys`, and passwordless `sudo`:
+  ```bash
+  sudo systemctl enable --now sshd
+  ssh-copy-id -i ~/.ssh/id_ed25519.pub "$(id -un)@localhost"
+  ```
+- The execution environment image: `cd ansible && ansible-builder build -t satellite-demo-ee:latest`
+- A RHEL 9 cloud image downloaded from access.redhat.com, with `LIBVIRT_RHEL9_IMAGE_SOURCE` pointing at its directory. The CentOS Stream image is downloaded automatically.
+- An RHSM activation key entitling both `satellite-6.19-*` and `satellite-capsule-6.19-*`. Check before deploying — a missing Capsule entitlement only surfaces 30 minutes in:
+  ```bash
+  subscription-manager repos --list | grep capsule
+  ```
+- Membership of the `libvirt` group. Host setup adds you, but **you must log out and back in** before `qemu+ssh://` stops prompting polkit.
+
+**Topology**
+
+| Host | FQDN | IP |
+| --- | --- | --- |
+| Satellite | `satellite.demo.lab` | 192.168.150.11 |
+| Capsule | `capsule.demo.lab` | 192.168.150.12 |
+| CentOS client | `centos.demo.lab` | DHCP (.100–.200) |
+
+Names resolve three ways, all set up for you: the libvirt network's dnsmasq is authoritative for `demo.lab`, each VM gets `/etc/hosts` entries, and the host gets a `# BEGIN satellite-demo` block in its own `/etc/hosts` so your browser can reach the Satellite UI. No Caddy reverse proxy and no subscription manifest are needed.
+
+**Deployment phases**
+
+| Phase | What happens | Typical |
+| --- | --- | --- |
+| 1 | Host setup: packages, network, pool, base images, KSM, `/etc/hosts` | 2–10 min |
+| 3 | Satellite VM + `satellite-installer` | 45–75 min |
+| 3b | Capsule VM + `dnf install satellite-capsule` | 10–20 min |
+| 3c | `capsule-join.yml`: certs, installer, lifecycle envs, sync | 25–45 min |
+
+Phases run strictly serially — overlapping the Satellite and Capsule installs would save time but needs 18 G of concurrent guest memory.
+
+Verified on a 30 G / 14-core Fedora 44 laptop: Satellite installs on 12 G with `--tuning development --skip-checks-i-know-better`, and KSM deduplicates ~2.9 G across the two RHEL 9 guests once all three VMs are up.
+
+Re-run an individual phase with its tag:
+
+```bash
+cd ansible
+ansible-navigator run deploy-all.yml --tags capsule-join
+```
+
+When it finishes, see [Access on the local profile](#access-on-the-local-profile) for the Satellite UI URL, credentials, and how to SSH into each VM.
+
 ### (Optional) Satellite Subscription Manifest
 
 If you want Satellite to serve RPM packages to clients (required for `dnf install` via Satellite repos), set `MANIFEST_PATH` in `.env` before running `deploy.sh`. The deploy script will wait for Satellite to finish installing (~20-30 min) and upload the manifest automatically.
@@ -169,9 +237,68 @@ Without a manifest, Satellite still handles host lifecycle, REX, and Ansible —
 
 ## Web UI Access
 
-Both Satellite and IdM expose their web UIs via OpenShift Routes (TLS passthrough) using the DNS names you configured in `.env`. Your browser will show a certificate warning (self-signed certs) — accept it to proceed.
+> Two different access models. **Local workstation profile → see [Access on the local profile](#access-on-the-local-profile) below**; the Routes/`virtctl` instructions in the rest of this section apply to OpenShift only.
 
-### URLs
+### Access on the local profile
+
+No Routes and no `virtctl`. The VMs sit on the `satellite-demo` NAT network and the hypervisor *is* your workstation, so the browser reaches them directly via the `/etc/hosts` block that host setup writes.
+
+| What | Where | Credentials |
+|---|---|---|
+| Satellite UI | `https://satellite.demo.lab` | `admin` / `$DEMO_PASSWORD` |
+| Capsule | `https://capsule.demo.lab:9090/features` (no web UI — content + registration only) | — |
+| CentOS client | no UI | — |
+
+`DEMO_PASSWORD` is generated on first deploy and appended to `.env.local`:
+
+```bash
+cd demo-satellite-cloud-native
+grep DEMO_PASSWORD .env.local
+```
+
+Accept the self-signed certificate warning. If a name doesn't resolve, check the host's `/etc/hosts`:
+
+```bash
+grep -A3 'BEGIN satellite-demo' /etc/hosts
+```
+
+**SSH to any VM** — the helpers work once the environment is loaded, and they proxy through loopback SSH automatically:
+
+```bash
+cd demo-satellite-cloud-native
+source .env.local
+source scripts/demo-scenarios.sh
+
+ssh_exec satellite                              # interactive shell
+ssh_exec capsule
+ssh_exec centos
+
+run_on_vm satellite "sudo hammer host list"     # one-shot, returns output
+run_on_vm_sudo capsule "systemctl is-active pulpcore-content"
+```
+
+Raw equivalent, if you'd rather not source the scripts — note the double hop (your shell → `localhost` → the VM on the NAT network):
+
+```bash
+source .env.local
+sshpass -p "$DEMO_PASSWORD" ssh \
+  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  -o ProxyCommand="ssh -W %h:%p -i ~/.ssh/id_ed25519 $(id -un)@localhost" \
+  cloud-user@192.168.150.11        # .11 satellite, .12 capsule, DHCP for clients
+```
+
+VM login is `cloud-user` / `$DEMO_PASSWORD` (password auth; no key is injected). Current IPs:
+
+```bash
+cat ~/.cache/satellite-demo/vm-registry.json
+sudo virsh -c qemu:///system list --all
+```
+
+Serial console instead of SSH: `sudo virsh -c qemu:///system console satellite` (Ctrl-] to exit).
+
+### URLs (OpenShift profile)
+
+Both Satellite and IdM expose their web UIs via OpenShift Routes (TLS passthrough) using the DNS names you configured in `.env`. Your browser will show a certificate warning (self-signed certs) — accept it to proceed.
 
 - **Satellite:** `https://<SAT_FQDN>` (e.g., `https://satellite.veverak.net`)
 - **IdM:** `https://<IDM_FQDN>` (e.g., `https://idm.veverak.net`)
@@ -191,7 +318,9 @@ Both Satellite and IdM expose their web UIs via OpenShift Routes (TLS passthroug
 - Navigate to **Identity > Users** to see the `demouser` account
 - Navigate to **Identity > Host Groups** to see `satellite-clients`
 
-### SSH Access to VMs
+### SSH Access to VMs (OpenShift profile)
+
+> On the local libvirt profile use [Access on the local profile](#access-on-the-local-profile) instead — there is no `virtctl` and no namespace.
 
 All VM access uses `virtctl port-forward` + SSH (the `oc exec vmi/` syntax requires a separate kubectl plugin):
 
@@ -531,19 +660,131 @@ Demo c3 — Composite content flow:
 
 > **Note:** Custom product repositories are not auto-enabled on clients. The demo enables them via `subscription-manager repos --enable` on the activation key.
 
+### Section D: Capsule (VMs: capsule, centos)
+
+**Local workstation profile only** (`DEMO_PLATFORM=libvirt` with `DEPLOY_CAPSULE=true`). There are no Capsule manifests under `k8s/base/` — the Capsule exists on libvirt only, by design.
+
+The story: a Capsule mirrors content from the Satellite and serves it to clients, so branch offices and disconnected sites do not all hammer a central server. This section proves the content path actually terminates at the Capsule.
+
+```txt
+   Satellite                      Capsule                    CentOS Stream 9
+ satellite.demo.lab  ──sync──▶  capsule.demo.lab  ──RPMs──▶      centos
+   .11                            .12                             DHCP
+   content views                  pulp mirror                   dnf install
+   hammer, UI                     registration endpoint
+```
+
+#### Demo d1: Capsule Inventory
+
+```bash
+./scripts/demo-scenarios.sh d1
+```
+
+Lists the Capsule, its features and its lifecycle environments, and checks its services are up.
+
+#### Demo d2: Publish Content Through the Capsule
+
+```bash
+./scripts/demo-scenarios.sh d2
+```
+
+Builds the content path end to end:
+
+1. A `CentOS-Demo` product with two repositories — `centos9-demo-rpms` (an RPM built on the Satellite and uploaded) and `centos9-extras-common` (a real mirror of CentOS Stream 9 extras-common, ~100 small packages).
+2. A `CentOS9-Capsule-CV` content view holding both, published and promoted to `Lab`.
+3. A `centos9-capsule-key` activation key, with the content overrides custom repositories require.
+4. `hammer capsule content synchronize` to push the content view out.
+5. A registration command generated with `--smart-proxy capsule.demo.lab`, published to both `/pub` endpoints.
+6. The CentOS client VM, which registers through the Capsule on first boot.
+
+> Both repositories use `--download-policy immediate`. With `on_demand` the Capsule would proxy cache misses back to the Satellite, which is exactly what this demo claims is not happening.
+
+#### Demo d3: Prove the Content Comes From the Capsule
+
+```bash
+./scripts/demo-scenarios.sh d3
+```
+
+The evidence, in order:
+
+- every `baseurl` in the client's `redhat.repo` names `capsule.demo.lab`
+- `dnf install capsule-demo-app` succeeds — uploaded custom content
+- `dnf install centos-release-cloud` succeeds — real synced upstream content
+- the Capsule's `rhsm-pulpcore-https-443_access_ssl.log` shows the client's `pulp/content` requests
+- the Satellite's log shows **zero** content requests from that client — the negative proof
+
+Last verified run: 13/13 validations, with the decisive lines being
+
+```
+GET /pulp/content/Demo_Org/Lab/CentOS9-Capsule-CV/custom/CentOS-Demo/centos9-demo-rpms/Packages/c/capsule-demo-app-1.0-1.el9.noarch.rpm HTTP/2.0" 200
+Content requests served by the Satellite to 192.168.150.115: 0
+```
+
+> **Note:** the CentOS client is content-only. There is no CentOS build of `satellite-client-6`, so no yggdrasil and no remote execution pull provider.
+
+#### Demo d4: Ship an Update Through the Capsule
+
+```bash
+./scripts/demo-scenarios.sh d4
+```
+
+Builds `capsule-demo-app v2.0` on the Satellite, publishes and promotes a new `CentOS9-Capsule-CV` version to `Lab`, and updates the CentOS client from the Capsule.
+
+```txt
+  Satellite                         Capsule                    CentOS client
+  build v2.0  ──upload──▶ custom repo
+  publish CV v2  ──promote to Lab──▶ (auto) Sync Content View on Capsule(s)
+                                     mirror updated  ──dnf update──▶  v1.0 → v2.0
+```
+
+The point worth narrating: **the Capsule holds its own mirror of each lifecycle environment**, so an update is only visible to clients once that mirror is refreshed. Satellite handles this for you — promoting to a lifecycle environment the Capsule carries queues a `Sync Content View on Capsule(s)` task automatically, which step 3 shows in the task list. Step 4 runs an explicit `hammer capsule content synchronize` anyway; it is idempotent and is the command you would reach for in a disconnected workflow or to force a re-mirror.
+
+Last verified run: 4/4 validations, ending with
+
+```
+Upgrading : capsule-demo-app-2.0-1.el9.noarch
+GET /pulp/content/Demo_Org/Lab/CentOS9-Capsule-CV/custom/CentOS-Demo/centos9-demo-rpms/Packages/c/capsule-demo-app-2.0-1.el9.noarch.rpm
+```
+
+To run it again against a clean starting point, downgrade the client first:
+
+```bash
+source .env.local && source scripts/demo-scenarios.sh
+run_on_vm_sudo centos "dnf -y downgrade capsule-demo-app"
+```
+
 ## Resource Requirements
 
+### OpenShift / remote KVM host profile
 
 | VM               | vCPUs | RAM   | Storage                   |
 | ---------------- | ----- | ----- | ------------------------- |
 | IdM              | 2     | 4 Gi  | 30 Gi                     |
-| Satellite        | 4     | 22 Gi | 100 Gi root + 150 Gi data |
+| Satellite        | 4     | 22 Gi | 100 Gi root + 100 Gi data |
 | Client (each)    | 1     | 2 Gi  | 30 Gi                     |
 | Compliant Client | 1     | 2 Gi  | 30 Gi                     |
 | LC Client        | 1     | 2 Gi  | 30 Gi                     |
 
 
 **Total (infra + all clients):** 10 vCPUs, 34 Gi RAM, 400 Gi storage
+
+### Local workstation profile
+
+| VM            | vCPUs | RAM  | Storage                 |
+| ------------- | ----- | ---- | ----------------------- |
+| Satellite     | 4     | 12 G | 80 G root + 60 G data   |
+| Capsule       | 2     | 6 G  | 60 G                    |
+| CentOS client | 1     | 2 G  | 20 G                    |
+
+
+**Total:** 7 vCPUs, 20 G RAM, ~220 G of thin-provisioned qcow2 (roughly 50 G actually consumed).
+
+20 G of guests on a 30 G laptop only works because of two things, both configured automatically:
+
+- a virtio memballoon with `freePageReporting='on'`, so idle guest RAM goes back to the host
+- KSM, which deduplicates the two near-identical RHEL 9 guests
+
+Neither helps during `satellite-installer`, which is the peak. Close heavy applications for the install. The tightest moment is actually demo `d2`, when all three VMs run while the Satellite syncs a repository.
 
 ## Project Structure
 

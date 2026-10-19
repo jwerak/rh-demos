@@ -46,6 +46,15 @@ _libvirt_ssh() {
   ssh ${SSH_OPTS} -i "${LIBVIRT_SSH_KEY}" "${LIBVIRT_USER}@${LIBVIRT_HOST}" "$@"
 }
 
+# Always address the system libvirt instance explicitly. virsh defaults to
+# qemu:///session for a non-root user, so with LIBVIRT_USER set to a normal
+# account (the local workstation profile) every lookup would silently miss
+# the demo VMs. The remote profile runs as root and happened to be fine.
+: "${LIBVIRT_SYSTEM_URI:=qemu:///system}"
+_virsh() {
+  _libvirt_ssh "virsh -c ${LIBVIRT_SYSTEM_URI} $*"
+}
+
 # Look up a VM's IP address. Tries the local registry first, falls back to
 # virsh domifaddr on the remote host.
 _libvirt_get_vm_ip() {
@@ -66,8 +75,8 @@ except Exception:
 
   # Fall back to virsh domifaddr on the hypervisor
   if [ -z "${ip}" ]; then
-    ip=$(_libvirt_ssh "virsh domifaddr '${vm_name}' --source agent 2>/dev/null \
-      || virsh domifaddr '${vm_name}' 2>/dev/null" \
+    ip=$(_libvirt_ssh "virsh -c ${LIBVIRT_SYSTEM_URI} domifaddr '${vm_name}' --source agent 2>/dev/null \
+      || virsh -c ${LIBVIRT_SYSTEM_URI} domifaddr '${vm_name}' 2>/dev/null" \
       | grep -oP '(\d{1,3}\.){3}\d{1,3}' | head -1)
   fi
 
@@ -174,7 +183,7 @@ ensure_pool() {
 # Usage: vm_exists <vm_name>
 vm_exists() {
   local vm_name="$1"
-  _libvirt_ssh "virsh list --all --name" 2>/dev/null | grep -q "^${vm_name}$"
+  _virsh "list --all --name" 2>/dev/null | grep -q "^${vm_name}$"
 }
 
 # Delete a VM via Ansible.
@@ -228,6 +237,7 @@ wait_vm_ready() {
   for i in $(seq 1 60); do
     _vm_ssh "${vm_ip}" \
       "grep -qE '(Onboarding Finished|Satellite Registration Complete|registration init script|Cloud-init .* finished)' /var/log/client-setup.log 2>/dev/null || \
+       grep -q 'Capsule Base Ready' /var/log/capsule-setup.log 2>/dev/null || \
        test -f /var/lib/cloud/instance/boot-finished" \
       > /dev/null 2>&1 && break
     sleep 15
@@ -257,7 +267,7 @@ except Exception:
 
   # Fall back to virsh on the remote host
   if [ ! -f "${VM_REGISTRY}" ] || [ ! -s "${VM_REGISTRY}" ]; then
-    _libvirt_ssh "virsh list --all --name" 2>/dev/null | grep "${role}" || true
+    _virsh "list --all --name" 2>/dev/null | grep "${role}" || true
   fi
 }
 

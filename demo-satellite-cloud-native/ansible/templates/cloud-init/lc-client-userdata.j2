@@ -30,9 +30,13 @@ runcmd:
     echo "Hostname: ${CLIENT_FQDN} IP: ${VM_IP}"
 
     # Map server FQDNs to their known IPs
+{% if idm_fqdn %}
     echo "{{ idm_ip }} {{ idm_fqdn }} idm" >> /etc/hosts
+{% endif %}
     echo "{{ sat_ip }} {{ sat_fqdn }} satellite" >> /etc/hosts
+{% if idm_fqdn %}
     echo "IdM mapped: {{ idm_ip }} -> {{ idm_fqdn }}"
+{% endif %}
     echo "Satellite mapped: {{ sat_ip }} -> {{ sat_fqdn }}"
 
     # --- Phase 0: RHSM Registration (for package access) ---
@@ -45,9 +49,10 @@ runcmd:
       --enable=satellite-client-6-for-rhel-9-x86_64-rpms
 
     # Install all required packages while RHSM repos are available
-    dnf install -y ipa-client foreman_ygg_worker openscap-scanner scap-security-guide rubygem-foreman_scap_client ansible-core
+    dnf install -y {% if idm_fqdn %}ipa-client {% endif %}foreman_ygg_worker openscap-scanner scap-security-guide rubygem-foreman_scap_client ansible-core
     echo "--- RHSM Registration Complete ---"
 
+{% if idm_fqdn %}
     # --- Phase 1: IdM Enrollment (before Satellite, which removes RHSM repos) ---
     echo "--- Enrolling to IdM ---"
     for i in $(seq 1 30); do
@@ -75,6 +80,10 @@ runcmd:
     fi
 
     echo "--- IdM Enrollment Complete ---"
+{% else %}
+    # --- Phase 1: IdM Enrollment skipped (no IdM in this profile) ---
+    echo "--- IdM not deployed, skipping enrollment ---"
+{% endif %}
 
     # --- Phase 2: Satellite Registration (lifecycle-specific registration script) ---
     echo "--- Registering to Satellite (lifecycle: ${LC_REG_URL}) ---"

@@ -1,0 +1,67 @@
+#cloud-config
+user: cloud-user
+password: {{ demo_password }}
+chpasswd:
+  expire: false
+ssh_pwauth: true
+runcmd:
+  - |
+    set -euo pipefail
+    exec > /var/log/capsule-setup.log 2>&1
+    echo "=== Capsule Base Setup Starting ==="
+
+    CAPSULE_FQDN="{{ capsule_fqdn }}"
+    SAT_FQDN="{{ sat_fqdn }}"
+
+    # Set hostname
+    hostnamectl set-hostname "${CAPSULE_FQDN}"
+
+    # Map FQDN to the real VM IP, not loopback. The Satellite's
+    # capsule-certs-generate validates this name, and Katello rejects a
+    # Capsule whose FQDN resolves to 127.0.0.1.
+    VM_IP="{{ vm_ip | default('') }}"
+    if [ -z "${VM_IP}" ]; then
+      VM_IP=$(ip -4 addr show eth0 | grep -oP '(?<=inet )[\d.]+')
+    fi
+    sed -i 's/^127\.0\.0\.1.*/127.0.0.1 localhost localhost.localdomain/' /etc/hosts
+    echo "${VM_IP} ${CAPSULE_FQDN} capsule" >> /etc/hosts
+    echo "{{ sat_ip }} ${SAT_FQDN} satellite" >> /etc/hosts
+    echo "Capsule: ${VM_IP} -> ${CAPSULE_FQDN}"
+    echo "Satellite mapped: {{ sat_ip }} -> ${SAT_FQDN}"
+
+    # Register with RHSM. Capsule RPMs come straight from the CDN rather than
+    # from the Satellite: serving them from the Satellite would need a
+    # subscription manifest plus a multi-GB repository sync first.
+    subscription-manager register --org="{{ rhsm_org }}" --activationkey="{{ rhsm_activation_key }}"
+
+    # Enable Capsule repos
+    subscription-manager repos --disable '*'
+    subscription-manager repos \
+      --enable=rhel-9-for-x86_64-baseos-rpms \
+      --enable=rhel-9-for-x86_64-appstream-rpms \
+      --enable=satellite-capsule-6.19-for-rhel-9-x86_64-rpms \
+      --enable=satellite-maintenance-6.19-for-rhel-9-x86_64-rpms
+
+    # Install the Capsule packages (~2 GB, the long pole of this phase).
+    # satellite-installer is NOT run here: it needs a certificates tarball
+    # generated on the Satellite, which does not exist yet. ansible/capsule-join.yml
+    # performs the join once both VMs are up.
+    dnf install -y satellite-capsule
+
+    # Demo-only: the rest of this demo runs without firewalld, and the
+    # Capsule needs 443/5646/8000/8140/9090 open to clients and the Satellite.
+    systemctl disable --now firewalld || true
+
+    echo "=== Capsule Packages Installed ==="
+
+    # Best-effort wait so the join phase does not start against a half-up
+    # Satellite. Non-fatal: capsule-join.yml waits again on its own.
+    set +e
+    for i in $(seq 1 60); do
+      curl -sk "https://${SAT_FQDN}/" > /dev/null 2>&1 && break
+      echo "Waiting for Satellite... attempt ${i}/60"
+      sleep 30
+    done
+    set -e
+
+    echo "=== Capsule Base Ready ==="
