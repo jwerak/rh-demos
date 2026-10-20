@@ -43,6 +43,7 @@ Red Hat Satellite + IdM (FreeIPA) + RHEL clients running entirely as KubeVirt VM
       - [Demo d2: Publish Content Through the Capsule](#demo-d2-publish-content-through-the-capsule)
       - [Demo d3: Prove the Content Comes From the Capsule](#demo-d3-prove-the-content-comes-from-the-capsule)
       - [Demo d4: Ship an Update Through the Capsule](#demo-d4-ship-an-update-through-the-capsule)
+      - [Running the update by hand](#running-the-update-by-hand)
   - [Resource Requirements](#resource-requirements)
     - [OpenShift / remote KVM host profile](#openshift--remote-kvm-host-profile)
     - [Local workstation profile](#local-workstation-profile)
@@ -56,6 +57,7 @@ Red Hat Satellite + IdM (FreeIPA) + RHEL clients running entirely as KubeVirt VM
     - [Redeploying Satellite](#redeploying-satellite)
     - [Satellite installer failing](#satellite-installer-failing)
     - [IdM installer failing](#idm-installer-failing)
+    - [New package version won't install on the client](#new-package-version-wont-install-on-the-client)
     - [Client not registering](#client-not-registering)
     - [DataVolume stuck importing](#datavolume-stuck-importing)
   - [Clean Up](#clean-up)
@@ -753,6 +755,177 @@ source .env.local && source scripts/demo-scenarios.sh
 run_on_vm_sudo centos "dnf -y downgrade capsule-demo-app"
 ```
 
+#### Running the update by hand
+
+`d4` hides the moving parts. For presenting live, run it yourself — three terminals, one SSH session per VM, no scripts.
+
+**Open the sessions.** The servers have fixed addresses; the client is on DHCP, so look it up:
+
+```bash
+cd demo-satellite-cloud-native
+source .env.local                                     # provides DEMO_PASSWORD
+sudo virsh -c qemu:///system domifaddr centos         # e.g. 192.168.150.115
+```
+
+Then one terminal per VM. Same command each time, only the final address changes —
+`192.168.150.11` Satellite, `192.168.150.12` Capsule, the DHCP address for the client:
+
+```bash
+sshpass -p "$DEMO_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  -o ProxyCommand="ssh -W %h:%p -i ~/.ssh/id_ed25519 $(id -un)@localhost" \
+  cloud-user@192.168.150.11
+```
+
+(The `ProxyCommand` is the loopback hop: your shell → `localhost` → the VM on the NAT network.)
+
+Everything below is `hammer` on the **Satellite** unless marked otherwise. Prefix with `sudo`.
+
+**1. Show the current version and that there is nothing to upgrade to.** On the **client**:
+
+```bash
+rpm -q capsule-demo-app
+sudo dnf clean metadata
+sudo dnf upgrade capsule-demo-app          # "Nothing to do"
+```
+
+**2. Build and push a new RPM.** Pick the next version number. The helper builds the spec, runs `rpmbuild` on the Satellite and uploads it:
+
+```bash
+# on your workstation, from the repo directory
+source .env.local && source scripts/demo-scenarios.sh
+build_and_upload_rpm "capsule-demo-app" "3.0" "Capsule-served demo application" \
+                     "CentOS-Demo" "centos9-demo-rpms"
+```
+
+<details>
+<summary>Without the helper (pure <code>rpmbuild</code> on the Satellite)</summary>
+
+```bash
+V=3.0
+mkdir -p /tmp/app/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+cat > /tmp/app/SPECS/capsule-demo-app.spec <<SPEC
+Name:    capsule-demo-app
+Version: ${V}
+Release: 1%{?dist}
+Summary: Capsule-served demo application
+License: MIT
+BuildArch: noarch
+%description
+Capsule-served demo application
+%install
+mkdir -p %{buildroot}/usr/bin
+printf '#!/bin/bash\necho "capsule-demo-app v${V}"\n' > %{buildroot}/usr/bin/capsule-demo-app
+chmod 755 %{buildroot}/usr/bin/capsule-demo-app
+%files
+/usr/bin/capsule-demo-app
+SPEC
+rpmbuild --define "_topdir /tmp/app" -bb /tmp/app/SPECS/capsule-demo-app.spec
+
+REPO_ID=$(sudo hammer --csv repository list --product CentOS-Demo --organization Demo_Org \
+  | grep -w centos9-demo-rpms | cut -d, -f1)
+sudo hammer repository upload-content --id "${REPO_ID}" \
+  --path /tmp/app/RPMS/noarch/capsule-demo-app-${V}-1.el9.noarch.rpm --organization Demo_Org
+```
+</details>
+
+**3. Show it arrived in Satellite.**
+
+```bash
+hammer package list --repository centos9-demo-rpms --product CentOS-Demo \
+                    --organization Demo_Org --search name=capsule-demo-app
+```
+
+GUI: **Content → Products → CentOS-Demo → centos9-demo-rpms → Packages**.
+
+At this point the package is in the repository and in **Library** only. The client is bound to **Lab** and still sees nothing new — re-run step 1 on the client to make the point.
+
+**4. Publish, then promote.** These are two separate actions and the distinction is the single most common stumbling block:
+
+- **publish** snapshots the repository into a *new content view version*, which lands in **Library**
+- **promote** moves *one specific version* into a lifecycle environment such as **Lab**
+
+```bash
+hammer content-view publish --name CentOS9-Capsule-CV --organization Demo_Org
+
+# find the version you just created — the highest number, currently in Library only
+hammer content-view version list --content-view CentOS9-Capsule-CV --organization Demo_Org
+```
+
+```txt
+ID | NAME                    | VERSION | LIFECYCLE ENVIRONMENTS
+13 | CentOS9-Capsule-CV 11.0 | 11.0    | Library      <-- your new RPM is in here
+12 | CentOS9-Capsule-CV 10.0 | 10.0    | Lab          <-- what clients actually get
+```
+
+> **Watch the two different version numbers.** `11.0` is the *content view* version; `3.0` is the *RPM* version. They are unrelated and will drift apart — every publish bumps the content view version by one, whatever the package version is.
+
+Promote that version by its number:
+
+```bash
+hammer content-view version promote \
+  --content-view CentOS9-Capsule-CV --organization Demo_Org \
+  --version 11.0 --to-lifecycle-environment Lab
+```
+
+Verify Lab moved:
+
+```bash
+hammer content-view version list --content-view CentOS9-Capsule-CV --organization Demo_Org
+```
+
+If the client still won't upgrade, this is almost always the cause: the new version sits in Library and `Lab` is still pinned to the previous one.
+
+**5. The Capsule mirror.** Promotion queues a Capsule sync automatically:
+
+```bash
+hammer task list --search "label ~ Capsule" --order "started_at DESC" --per-page 5
+```
+
+Wait for `Sync Content View on Capsule(s)` to reach `success`. To force it (or in a disconnected workflow):
+
+```bash
+hammer capsule content synchronize --name capsule.demo.lab --organization Demo_Org
+hammer capsule content info        --name capsule.demo.lab --organization Demo_Org
+```
+
+**6. Upgrade on the client.**
+
+```bash
+sudo dnf clean metadata
+sudo dnf upgrade capsule-demo-app
+rpm -q capsule-demo-app
+capsule-demo-app
+```
+
+**7. Show the Capsule served it.** On the **Capsule** — note `/var/log/httpd` is root-only, so use `sudo`:
+
+```bash
+sudo grep capsule-demo-app-3.0 /var/log/httpd/rhsm-pulpcore-https-443_access_ssl.log
+sudo tail -f /var/log/httpd/rhsm-pulpcore-https-443_access_ssl.log   # live during step 6
+```
+
+```txt
+192.168.150.115 - - [...] "GET /pulp/content/Demo_Org/Lab/CentOS9-Capsule-CV/custom/
+  CentOS-Demo/centos9-demo-rpms/Packages/c/capsule-demo-app-3.0-1.el9.noarch.rpm HTTP/2.0" 200
+```
+
+And the negative proof, on the **Satellite** — zero content requests from that client:
+
+```bash
+sudo bash -c 'cat /var/log/httpd/*access*log | grep pulp/content | grep -c 192.168.150.115'
+```
+
+> The `sudo bash -c '...'` wrapper is required whenever the path contains a wildcard.
+> `/var/log/httpd` is mode 0700 root-owned, so your own shell cannot expand the glob and
+> `sudo cat /var/log/httpd/*access*log` fails with "No such file or directory". Commands
+> naming a single log file explicitly, like the Capsule ones above, work with plain `sudo`.
+
+**Resetting between runs.** On the client, go back a version:
+
+```bash
+sudo dnf -y downgrade capsule-demo-app
+```
+
 ## Resource Requirements
 
 ### OpenShift / remote KVM host profile
@@ -887,6 +1060,37 @@ oc exec -n satellite-cloud-native vmi/satellite -- cat /var/log/foreman-installe
 oc exec -n satellite-cloud-native vmi/satellite -- cat /var/log/idm-setup.log
 oc exec -n satellite-cloud-native vmi/idm -- cat /var/log/ipaserver-install.log
 ```
+
+### New package version won't install on the client
+
+Almost always because the new content view version is sitting in **Library** and the lifecycle environment the client is bound to still points at the previous one. Publishing does not promote.
+
+```bash
+# on the Satellite
+hammer content-view version list --content-view CentOS9-Capsule-CV --organization Demo_Org
+```
+
+```txt
+ID | NAME                    | VERSION | LIFECYCLE ENVIRONMENTS
+13 | CentOS9-Capsule-CV 11.0 | 11.0    | Library     <-- new RPM is here
+12 | CentOS9-Capsule-CV 10.0 | 10.0    | Lab         <-- what the client gets
+```
+
+Promote the newest version, then let the automatic Capsule sync finish:
+
+```bash
+hammer content-view version promote --content-view CentOS9-Capsule-CV \
+  --organization Demo_Org --version 11.0 --to-lifecycle-environment Lab
+hammer task list --search "label ~ Capsule" --order "started_at DESC" --per-page 5
+```
+
+Then on the client: `sudo dnf clean metadata && sudo dnf upgrade capsule-demo-app`.
+
+Other things to check, in order of likelihood:
+
+1. The RPM reached the repository at all — `hammer package list --repository centos9-demo-rpms --product CentOS-Demo --organization Demo_Org --search name=capsule-demo-app`
+2. The Capsule finished mirroring — `hammer capsule content info --name capsule.demo.lab --organization Demo_Org`
+3. Stale client metadata — `sudo dnf clean metadata` (dnf caches repodata and will not see new packages until it is cleared)
 
 ### Client not registering
 
