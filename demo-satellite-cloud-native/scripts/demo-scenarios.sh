@@ -8,17 +8,35 @@ fi
 NAMESPACE="satellite-cloud-native"
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../k8s/base" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# DEMO_ENV_FILE lets the local workstation profile use .env.local
-DEMO_ENV_PATH="${DEMO_ENV_FILE:-${SCRIPT_DIR}/../.env}"
+# DEMO_ENV_FILE selects the profile. With none set, a Satellite VM running
+# on this workstation is the SOE lab (.env.soe), not the remote KVM host
+# named in .env. The previous behaviour sourced .env whenever DEMO_PASSWORD
+# was unset, so a bare ./scripts/demo-scenarios.sh c2 tried to SSH to
+# loki.veverak.net and died with "No route to host".
+if [ -z "${DEMO_ENV_FILE:-}" ]; then
+  if [ -f "${SCRIPT_DIR}/../.env.soe" ] \
+     && virsh -c qemu:///system domstate satellite 2>/dev/null | grep -qx running; then
+    DEMO_ENV_FILE="${SCRIPT_DIR}/../.env.soe"
+  else
+    DEMO_ENV_FILE="${SCRIPT_DIR}/../.env"
+  fi
+fi
+DEMO_ENV_PATH="${DEMO_ENV_FILE}"
 case "${DEMO_ENV_PATH}" in
   /*) : ;;
   *) DEMO_ENV_PATH="${SCRIPT_DIR}/../${DEMO_ENV_PATH}" ;;
 esac
-if [ -z "${DEMO_PASSWORD:-}" ] && [ -f "${DEMO_ENV_PATH}" ]; then
-  # shellcheck disable=SC1090
-  source "${DEMO_ENV_PATH}"
+if [ ! -f "${DEMO_ENV_PATH}" ]; then
+  echo "ERROR: env file not found: ${DEMO_ENV_PATH}" >&2
+  echo "       For this workstation: DEMO_ENV_FILE=.env.soe $0" >&2
+  exit 1
 fi
-: "${DEMO_PASSWORD:?DEMO_PASSWORD not set. Run: source .env}"
+# Always source. Skipping when DEMO_PASSWORD was already exported kept
+# LIBVIRT_HOST from a previously sourced .env and sent the demo at the
+# remote hypervisor anyway.
+# shellcheck disable=SC1090
+source "${DEMO_ENV_PATH}"
+: "${DEMO_PASSWORD:?DEMO_PASSWORD not set in ${DEMO_ENV_PATH}}"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
 
@@ -28,6 +46,23 @@ source "${SCRIPT_DIR}/demo-lib.sh"
 # Source platform driver (openshift or libvirt)
 : "${DEMO_PLATFORM:=openshift}"
 source "${SCRIPT_DIR}/platform-${DEMO_PLATFORM}.sh"
+
+# Say which profile this invocation is using, and refuse to start a libvirt
+# demo against a hypervisor we cannot reach. The failure otherwise arrives
+# mid-step, as a proxied "No route to host", after the section banner.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  echo "Profile: $(basename "${DEMO_ENV_PATH}")  platform: ${DEMO_PLATFORM}  host: ${LIBVIRT_HOST:-<none>}  satellite: ${SAT_FQDN:-<unset>}"
+  if [ "${DEMO_PLATFORM}" = "libvirt" ]; then
+    : "${LIBVIRT_USER:=root}"
+    : "${LIBVIRT_SSH_KEY:=${HOME}/.ssh/id_ed25519}"
+    if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+         -i "${LIBVIRT_SSH_KEY}" "${LIBVIRT_USER}@${LIBVIRT_HOST}" true 2>/dev/null; then
+      echo "ERROR: cannot SSH to ${LIBVIRT_USER}@${LIBVIRT_HOST}, from $(basename "${DEMO_ENV_PATH}")." >&2
+      echo "       The SOE lab on this workstation is .env.soe (LIBVIRT_HOST=localhost)." >&2
+      exit 1
+    fi
+  fi
+fi
 
 usage() {
   echo "Usage: $0 <demo-id>"
@@ -56,7 +91,8 @@ usage() {
   echo ""
   echo "  Section C: Lifecycle (VMs: lc-dev, lc-qa, lc-prod)"
   echo "  c1  Lifecycle Pipeline          - Dev → QA → Prod with 3 clients"
-  echo "  c2  Package Upgrade Rollout     - demo-app v1.0 → v2.0 through environments"
+  echo "  c2  Package Upgrade Rollout     - demo-app through Dev → QA → Prod"
+  echo "      Usage: $0 c2 [version]   (default: 2.0; tomorrow: $0 c2 3.0)"
   echo "  c3  Composite Content Views     - Add new packages, verify isolation"
   echo "  c   Run all Lifecycle demos"
   echo ""
@@ -66,6 +102,11 @@ usage() {
   echo "  d3  Prove the Content Path      - Install RPMs, show they came from the Capsule"
   echo "  d4  Ship an Update              - Publish v2.0, sync the Capsule, update the client"
   echo "  d   Run all Capsule demos"
+  echo ""
+  echo "  Section E: Non-RHEL in the SOE (VMs: centos, lc-prod) — libvirt only"
+  echo "  e1  Non-RHEL Content Consumer   - CentOS registers to Satellite, installs an SOE RPM"
+  echo "  e2  The Remote Execution Limit  - Same REX job: works on RHEL, undeliverable to CentOS"
+  echo "  e   Run all Non-RHEL demos"
   echo ""
   echo "  Utilities:"
   echo "  all    Run sections A + B in sequence"
@@ -1420,15 +1461,18 @@ deploy_lc_vm() {
 
     echo "  ${vm_name} deployed (provisioning...)"
   else
-    # For libvirt, use lc-client profile with lifecycle-specific registration URL
+    # For libvirt, use lc-client profile with lifecycle-specific registration URL.
+    # LC_VM_PROFILE lets the SOE profile substitute the trimmed 1536 MB
+    # variant without duplicating this function.
+    local lc_profile="${LC_VM_PROFILE:-lc-client}"
     local lc_reg_url="http://${SAT_FQDN}/pub/${reg_script}"
     if vm_exists "lc-${env_name}"; then
       echo "  lc-${env_name} already exists"
       return 0
     fi
-    echo "  Deploying lc-${env_name} (profile: lc-client, reg: ${reg_script})..."
+    echo "  Deploying lc-${env_name} (profile: ${lc_profile}, reg: ${reg_script})..."
     (cd "${SCRIPT_DIR}/../ansible" && ansible-navigator run libvirt-vm-create.yml \
-      --extra-vars "vm_name=lc-${env_name} vm_profile=lc-client lc_reg_url=${lc_reg_url} libvirt_host=${LIBVIRT_HOST} libvirt_uri=qemu+ssh://${LIBVIRT_USER}@${LIBVIRT_HOST}/system")
+      --extra-vars "vm_name=lc-${env_name} vm_profile=${lc_profile} lc_reg_url=${lc_reg_url} libvirt_host=${LIBVIRT_HOST} libvirt_uri=qemu+ssh://${LIBVIRT_USER}@${LIBVIRT_HOST}/system")
     wait_vm_ready "lc-${env_name}"
     echo "  lc-${env_name} is ready."
   fi
@@ -1561,15 +1605,32 @@ demo_c1() {
         hammer content-view create \
           --name "RHEL9-Lifecycle" \
           --organization "Demo_Org" 2>/dev/null
-        hammer content-view add-repository \
-          --organization "Demo_Org" \
-          --name "RHEL9-Lifecycle" \
-          --repository-id 1 2>/dev/null || true
-        hammer content-view add-repository \
-          --organization "Demo_Org" \
-          --name "RHEL9-Lifecycle" \
-          --repository-id 2 2>/dev/null || true
-        echo "Content view RHEL9-Lifecycle created with BaseOS (id:1) + AppStream (id:2)"
+        # Attach the RHEL base repos by name, not by hardcoded id 1 and 2.
+        # Those ids only exist once a subscription manifest has been uploaded
+        # and the repos enabled; without one the Satellite has zero
+        # repositories, the adds failed silently behind || true, and the
+        # content view published empty with no indication why.
+        ADDED=0
+        for R in "Red Hat Enterprise Linux 9 for x86_64 - BaseOS RPMs 9" \
+                 "Red Hat Enterprise Linux 9 for x86_64 - AppStream RPMs 9"; do
+          RID=$(hammer --csv repository list --organization Demo_Org 2>/dev/null \
+                | grep -F "${R}" | head -1 | cut -d, -f1)
+          if [ -n "${RID}" ]; then
+            hammer content-view add-repository \
+              --organization "Demo_Org" \
+              --name "RHEL9-Lifecycle" \
+              --repository-id "${RID}" 2>/dev/null \
+              && { echo "  Added: ${R} (id ${RID})"; ADDED=$((ADDED+1)); }
+          fi
+        done
+        if [ "${ADDED}" -eq 0 ]; then
+          echo "  NOTE: no Red Hat base repositories are present on this Satellite."
+          echo "        RHEL9-Lifecycle is published empty; the lifecycle story in"
+          echo "        C1/C2/C3 runs on the custom Demo-App product instead."
+          echo "        To include RHEL content, upload a subscription manifest"
+          echo "        (scripts/upload-manifest.sh) and sync BaseOS + AppStream."
+        fi
+        echo "Content view RHEL9-Lifecycle created (${ADDED} Red Hat repo(s) attached)"
       fi' \
     --validate-satellite 'hammer --csv content-view list --organization Demo_Org 2>/dev/null | grep -q RHEL9-Lifecycle'
 
@@ -1769,8 +1830,13 @@ demo_c1() {
     done'
 
   demo_info "=== Lifecycle pipeline complete ==="
-  local SAT_URL
-  SAT_URL=$(oc get route satellite-ui -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null) || SAT_URL="${SAT_FQDN}"
+  # Only ask OpenShift for a route when running on OpenShift. On libvirt oc is
+  # usually not installed at all, and the bare call printed a command-not-found
+  # error in the middle of the demo.
+  local SAT_URL="${SAT_FQDN}"
+  if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    SAT_URL=$(oc get route satellite-ui -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null) || SAT_URL="${SAT_FQDN}"
+  fi
   demo_info "Satellite UI: https://${SAT_URL}"
   demo_info "  Content -> Lifecycle Environments     (Dev -> QA -> Prod chain)"
   demo_info "  Content -> Content Views              (RHEL9-Lifecycle, Demo-App-CV, RHEL9-FullStack)"
@@ -1779,20 +1845,25 @@ demo_c1() {
 }
 
 demo_c2() {
-  demo_section "Demo C2: Content View Versioning & Promotion (demo-app v2.0 rollout)"
+  # RPM version to publish. Must be higher than what the hosts already have:
+  # dnf update will not go backwards, and publishing the version they are
+  # already on makes "Prod sees nothing" and "Dev upgrades" look the same.
+  local ver="${1:-2.0}"
+
+  demo_section "Demo C2: Content View Versioning & Promotion (demo-app v${ver} rollout)"
 
   demo_info "This demo shows controlled content rollout across environments:"
-  demo_info "  - Build a new version of demo-app (v2.0)"
+  demo_info "  - Build a new version of demo-app (v${ver})"
   demo_info "  - Promote to Dev first, verify, then QA, then Prod"
   demo_info "  - Each environment only sees the version promoted to it"
 
-  demo_info "Building demo-app v2.0 RPM..."
-  demo_exec 'build_and_upload_rpm "demo-app" "2.0" "Demo Application"'
+  demo_info "Building demo-app v${ver} RPM..."
+  demo_exec "build_and_upload_rpm \"demo-app\" \"${ver}\" \"Demo Application\""
 
   demo_step "Publish new Demo-App-CV version" \
     --gui "Content -> Content Views -> Demo-App-CV -> Publish New Version" \
     --cmd-satellite '
-      echo "Publishing Demo-App-CV with demo-app v2.0..."
+      echo "Publishing Demo-App-CV with demo-app v'"${ver}"'..."
       hammer content-view publish \
         --name "Demo-App-CV" \
         --organization "Demo_Org" 2>&1 | tail -3
@@ -1832,13 +1903,13 @@ demo_c2() {
         --content-view RHEL9-FullStack \
         --organization Demo_Org 2>/dev/null'
 
-  demo_step "Verify Dev sees v2.0" \
+  demo_step "Verify Dev sees v${ver}" \
     --gui "Hosts -> All Hosts -> lc-dev -> Content -> Packages" \
     --cmd 'run_on_vm_sudo lc-dev "dnf clean all > /dev/null 2>&1" || true
       echo "  [lc-dev] Checking for updates:"
       run_on_vm_sudo lc-dev "dnf check-update demo-app 2>&1" || true
       echo ""
-      echo "  [lc-dev] Upgrading to v2.0:"
+      echo "  [lc-dev] Upgrading to v'"${ver}"':"
       run_on_vm_sudo lc-dev "dnf update -y demo-app 2>&1 | tail -5" || true
       echo "  [lc-dev] Running demo-app:"
       run_on_vm lc-dev "demo-app 2>&1" || true'
@@ -1864,9 +1935,9 @@ demo_c2() {
         --to-lifecycle-environment "QA" \
         --organization "Demo_Org" 2>&1 | tail -2'
 
-  demo_step "Verify QA sees v2.0" \
+  demo_step "Verify QA sees v${ver}" \
     --cmd 'run_on_vm_sudo lc-qa "dnf clean all > /dev/null 2>&1" || true
-      echo "  [lc-qa] Upgrading to v2.0:"
+      echo "  [lc-qa] Upgrading to v'"${ver}"':"
       run_on_vm_sudo lc-qa "dnf update -y demo-app 2>&1 | tail -5" || true
       echo "  [lc-qa] Running demo-app:"
       run_on_vm lc-qa "demo-app 2>&1" || true'
@@ -1885,9 +1956,9 @@ demo_c2() {
         --to-lifecycle-environment "Prod" \
         --organization "Demo_Org" 2>&1 | tail -2'
 
-  demo_step "Verify Prod now has v2.0" \
+  demo_step "Verify Prod now has v${ver}" \
     --cmd 'run_on_vm_sudo lc-prod "dnf clean all > /dev/null 2>&1" || true
-      echo "  [lc-prod] Upgrading to v2.0:"
+      echo "  [lc-prod] Upgrading to v'"${ver}"':"
       run_on_vm_sudo lc-prod "dnf update -y demo-app 2>&1 | tail -5" || true
       echo "  [lc-prod] Running demo-app:"
       run_on_vm lc-prod "demo-app 2>&1" || true'
@@ -1904,7 +1975,7 @@ demo_c2() {
       printf "| %-11s | %-40s |\n" "Prod" "${PROD_VER}"
       echo "+-------------+------------------------------------------+"
       echo ""
-      echo "All 3 environments now run demo-app v2.0."'
+      echo "All 3 environments now run demo-app v'"${ver}"'."'
 
   demo_info "=== Content view versioning & promotion complete ==="
   local SAT_URL
@@ -2491,6 +2562,289 @@ run_section_d() {
   demo_d4
 }
 
+# ══════════════════════════════════════════════════════════════════════════
+# Section E: Non-RHEL in a Standard Operating Environment
+# ══════════════════════════════════════════════════════════════════════════
+# The same Satellite that drives the Dev/QA/Prod pipeline in Section C also
+# serves a CentOS Stream 9 client — but only content. This section proves
+# both halves of that sentence:
+#
+#   e1  the CentOS client registers and installs the SOE's custom RPM
+#   e2  the identical remote-execution job succeeds on lc-prod (RHEL) and
+#       cannot run on the CentOS host, because there is no CentOS build of
+#       satellite-client-6 and therefore no pull-mqtt worker to receive it
+#
+# Section D makes the same point behind a Capsule. Section E is the
+# Capsule-free version for the SOE profile, and unlike D it demonstrates the
+# remote-execution limit rather than switching it off at registration time.
+
+SOE_CENTOS_VM="centos"
+SOE_CENTOS_PRODUCT="SOE-NonRHEL"
+SOE_CENTOS_REPO="centos9-soe-rpms"
+SOE_CENTOS_CV="CentOS9-SOE-CV"
+SOE_CENTOS_AK="centos9-soe-key"
+# Satellite's built-in Script-provider template. Using the stock one keeps
+# the comparison honest (no custom plumbing for either host) and avoids a
+# heredoc, which demo_step cannot carry through sudo bash -c '...'.
+SOE_REX_JOB="Run Command - Script Default"
+
+require_soe_platform() {
+  if [ "${DEMO_PLATFORM}" != "libvirt" ]; then
+    echo "Section E requires DEMO_PLATFORM=libvirt (the CentOS client is libvirt-only)."
+    return 1
+  fi
+  return 0
+}
+
+# True once the CentOS client appears in the Satellite's host list. Polls,
+# because registration finishes asynchronously inside cloud-init shortly
+# after the VM itself is reported ready.
+soe_centos_registered() {
+  local i
+  for i in $(seq 1 30); do
+    if run_on_vm satellite \
+         "sudo hammer --csv host list --organization Demo_Org --search 'name ~ ${SOE_CENTOS_VM}'" \
+         2>/dev/null | grep -q "${SOE_CENTOS_VM}"; then
+      return 0
+    fi
+    sleep 10
+  done
+  return 1
+}
+
+# True when the CentOS host has no usable remote-execution path: either
+# Satellite reports no REX interface/proxy for it, or the pull worker package
+# is simply absent on the host. Both are the same root cause.
+soe_centos_has_no_rex() {
+  ! run_on_vm "${SOE_CENTOS_VM}" "rpm -q foreman_ygg_worker" >/dev/null 2>&1
+}
+
+demo_e1() {
+  require_soe_platform || return 1
+  demo_section "Demo E1: A Non-RHEL Host Joins the SOE for Content"
+
+  demo_info "CentOS Stream 9 has no Red Hat entitlement and no"
+  demo_info "satellite-client-6 build. It can still be a content consumer:"
+  demo_info "  - a custom product and repository on the Satellite"
+  demo_info "  - its own content view and activation key"
+  demo_info "  - registration straight to the Satellite, no Capsule"
+
+  demo_step "Create the ${SOE_CENTOS_PRODUCT} product and repository" \
+    --gui "Content -> Products -> Create Product" \
+    --cmd-satellite "
+      if hammer --csv product list --organization Demo_Org 2>/dev/null | grep -q ${SOE_CENTOS_PRODUCT}; then
+        echo \"Product ${SOE_CENTOS_PRODUCT} already exists\"
+      else
+        hammer product create \
+          --name \"${SOE_CENTOS_PRODUCT}\" \
+          --description \"SOE content served to non-RHEL hosts\" \
+          --organization \"Demo_Org\"
+        echo \"Product ${SOE_CENTOS_PRODUCT} created\"
+      fi
+      if hammer --csv repository list --product ${SOE_CENTOS_PRODUCT} --organization Demo_Org 2>/dev/null | grep -q ${SOE_CENTOS_REPO}; then
+        echo \"Repository ${SOE_CENTOS_REPO} already exists\"
+      else
+        hammer repository create \
+          --name \"${SOE_CENTOS_REPO}\" \
+          --content-type yum \
+          --product \"${SOE_CENTOS_PRODUCT}\" \
+          --organization \"Demo_Org\" \
+          --download-policy immediate
+        echo \"Repository ${SOE_CENTOS_REPO} created (upload-only)\"
+      fi" \
+    --validate-satellite "hammer --csv repository list --product ${SOE_CENTOS_PRODUCT} --organization Demo_Org 2>/dev/null | grep -q ${SOE_CENTOS_REPO}"
+
+  demo_info "Building soe-agent v1.0 RPM on the Satellite..."
+  demo_exec "build_and_upload_rpm \"soe-agent\" \"1.0\" \"SOE baseline agent\" \"${SOE_CENTOS_PRODUCT}\" \"${SOE_CENTOS_REPO}\""
+
+  demo_step "Publish and promote ${SOE_CENTOS_CV} to Prod" \
+    --gui "Content -> Content Views -> Create Content View" \
+    --cmd-satellite "
+      if ! hammer --csv content-view list --organization Demo_Org 2>/dev/null | grep -q ${SOE_CENTOS_CV}; then
+        hammer content-view create --name \"${SOE_CENTOS_CV}\" --organization \"Demo_Org\"
+        hammer content-view add-repository \
+          --name \"${SOE_CENTOS_CV}\" \
+          --organization \"Demo_Org\" \
+          --product \"${SOE_CENTOS_PRODUCT}\" \
+          --repository \"${SOE_CENTOS_REPO}\"
+        echo \"Content view ${SOE_CENTOS_CV} created\"
+      else
+        echo \"Content view ${SOE_CENTOS_CV} already exists\"
+      fi
+      hammer content-view publish --name \"${SOE_CENTOS_CV}\" --organization \"Demo_Org\"
+      LATEST=\$(hammer --csv content-view version list --content-view \"${SOE_CENTOS_CV}\" \
+        --organization \"Demo_Org\" --order \"version DESC\" | head -2 | tail -1 | cut -d, -f3)
+      # Katello will not place a version in Prod until it has walked the
+      # path. Promoting straight to Prod fails with \"Couldn't find content
+      # view environment\", the activation key is then never created, and
+      # the CentOS host registers with a 404. Dev and QA are the gates.
+      for ENV in Dev QA Prod; do
+        hammer content-view version promote \
+          --content-view \"${SOE_CENTOS_CV}\" \
+          --version \"\${LATEST}\" \
+          --to-lifecycle-environment \"\${ENV}\" \
+          --organization \"Demo_Org\"
+        echo \"Promoted version \${LATEST} to \${ENV}\"
+      done" \
+    --validate-satellite "hammer --csv content-view list --organization Demo_Org 2>/dev/null | grep -q ${SOE_CENTOS_CV}"
+
+  # Custom repositories are disabled by default on a new subscription, so the
+  # content override below is mandatory, not cosmetic. The content label is
+  # derived rather than hardcoded: Katello munges it.
+  demo_step "Create the ${SOE_CENTOS_AK} activation key with a content override" \
+    --gui "Content -> Activation Keys -> Create Activation Key" \
+    --cmd-satellite "
+      if ! hammer --csv activation-key list --organization Demo_Org 2>/dev/null | grep -q ${SOE_CENTOS_AK}; then
+        hammer activation-key create \
+          --name \"${SOE_CENTOS_AK}\" \
+          --organization \"Demo_Org\" \
+          --lifecycle-environment \"Prod\" \
+          --content-view \"${SOE_CENTOS_CV}\" \
+          --unlimited-hosts
+        echo \"Activation key ${SOE_CENTOS_AK} created\"
+      else
+        echo \"Activation key ${SOE_CENTOS_AK} already exists\"
+      fi
+      LABEL=\$(hammer --csv repository info --name \"${SOE_CENTOS_REPO}\" \
+        --product \"${SOE_CENTOS_PRODUCT}\" --organization \"Demo_Org\" \
+        --fields \"Content label\" | tail -1)
+      hammer activation-key content-override \
+        --name \"${SOE_CENTOS_AK}\" \
+        --organization \"Demo_Org\" \
+        --content-label \"\${LABEL}\" \
+        --override-name enabled \
+        --value 1
+      echo \"Enabled content label \${LABEL}\"" \
+    --validate-satellite "hammer --csv activation-key list --organization Demo_Org 2>/dev/null | grep -q ${SOE_CENTOS_AK}"
+
+  # Deliberately NOT passing --setup-remote-execution-pull false here. The
+  # registration asks for the pull provider exactly as it does for a RHEL
+  # host; what happens next is the point of E2.
+  demo_step "Generate the registration command (REX pull requested)" \
+    --gui "Hosts -> Register Host" \
+    --cmd-satellite "
+      REG_CMD=\$(hammer host-registration generate-command \
+        --organization \"Demo_Org\" \
+        --activation-keys \"${SOE_CENTOS_AK}\" \
+        --force true \
+        --insecure true \
+        --setup-remote-execution-pull true \
+        --setup-insights false \
+        --jwt-expiration 0)
+      echo \"\${REG_CMD}\" > /var/www/html/pub/register-centos.sh
+      chmod 644 /var/www/html/pub/register-centos.sh
+      echo \"Registration endpoint: \$(grep -o \"https://[^/ ]*\" /var/www/html/pub/register-centos.sh | head -1)\"" \
+    --validate-satellite "test -s /var/www/html/pub/register-centos.sh"
+
+  demo_info "Deploying the CentOS Stream 9 client (registers to the Satellite)..."
+  demo_exec "ensure_vm ${SOE_CENTOS_VM} \"${CENTOS_VM_PROFILE:-centos-client}\""
+
+  demo_step "Confirm the CentOS host registered" \
+    --gui "Hosts -> All Hosts -> ${SOE_CENTOS_VM}" \
+    --cmd-satellite "
+      hammer host list --organization Demo_Org --search \"name ~ ${SOE_CENTOS_VM}\"
+      echo \"\"
+      hammer host info --name ${SOE_CENTOS_VM}.${LAB_DOMAIN} --organization Demo_Org \
+        | grep -iE \"content source|lifecycle|content view|operating system\" || true" \
+    --validate "soe_centos_registered"
+
+  demo_step "It receives content: install the SOE agent RPM" \
+    --cmd-vm "${SOE_CENTOS_VM}" "
+      dnf clean all >/dev/null 2>&1
+      dnf -y install soe-agent
+      soe-agent" \
+    --validate "run_on_vm ${SOE_CENTOS_VM} \"rpm -q soe-agent\""
+}
+
+demo_e2() {
+  require_soe_platform || return 1
+  demo_section "Demo E2: The Limit — Content Yes, Remote Execution No"
+
+  demo_info "Both hosts asked the Satellite for the pull-based remote"
+  demo_info "execution provider at registration. Only one of them could"
+  demo_info "install it, because foreman_ygg_worker ships in"
+  demo_info "satellite-client-6-for-rhel-9 — a repository CentOS Stream"
+  demo_info "has no entitlement for and no equivalent build of."
+
+  demo_step "The RHEL host has the pull worker; the CentOS host does not" \
+    --cmd 'echo "  [lc-prod]  RHEL 9, entitled to satellite-client-6:"
+      run_on_vm_sudo lc-prod "rpm -q foreman_ygg_worker yggdrasil 2>&1 | sed \"s/^/    /\"" || true
+      run_on_vm_sudo lc-prod "systemctl is-active yggdrasild 2>&1 | sed \"s/^/    yggdrasild: /\"" || true
+      echo ""
+      echo "  [centos]   CentOS Stream 9, no such repository:"
+      run_on_vm_sudo centos "rpm -q foreman_ygg_worker 2>&1 | sed \"s/^/    /\"" || true
+      run_on_vm_sudo centos "dnf -q list --available foreman_ygg_worker 2>&1 | tail -3 | sed \"s/^/    /\"" || true' \
+    --validate "soe_centos_has_no_rex"
+
+  demo_step "Satellite agrees: no remote execution interface on the CentOS host" \
+    --gui "Hosts -> All Hosts -> centos -> (no Schedule Remote Job action)" \
+    --cmd-satellite "
+      echo \"Hosts registered through a REX proxy:\"
+      hammer --csv host list --organization Demo_Org \
+        --fields name,operating_system 2>/dev/null
+      echo \"\"
+      for H in lc-prod centos; do
+        echo \"-- \${H} --\"
+        hammer host info --name \"\${H}.${LAB_DOMAIN}\" --organization Demo_Org 2>/dev/null \
+          | grep -iE \"operating system|subscription status|registered through\" || echo \"   (host not found)\"
+      done"
+
+  # Satellite's stock Script-provider template, not a custom one. Nothing is
+  # special-cased for either host, which is the point — and it keeps this
+  # section free of the heredoc that demo_step's sudo bash -c '...' wrapper
+  # cannot carry (the wrapper breaks on any single quote).
+  demo_step "One stock job template will be used for both hosts" \
+    --gui "Hosts -> Templates -> Job Templates -> ${SOE_REX_JOB}" \
+    --cmd-satellite "
+      hammer job-template info --name \"${SOE_REX_JOB}\" --fields name,job_category,provider 2>/dev/null
+      echo \"\"
+      echo \"Stock template, Script provider. Delivered over pull-mqtt because\"
+      echo \"the Satellite was installed with remote-execution-script-mode=pull-mqtt.\"" \
+    --validate-satellite "hammer --csv job-template list 2>/dev/null | grep -q \"${SOE_REX_JOB}\""
+
+  demo_step "Run it on the RHEL host — it succeeds" \
+    --gui "Hosts -> All Hosts -> lc-prod -> Schedule Remote Job" \
+    --cmd-satellite "
+      hammer job-invocation create \
+        --job-template \"${SOE_REX_JOB}\" \
+        --inputs command=\"hostname -f; cat /etc/redhat-release; rpm -qa | wc -l\" \
+        --search-query \"name ~ lc-prod\" \
+        --organization \"Demo_Org\" 2>&1 | tail -10
+      JOB_ID=\$(hammer --csv job-invocation list --order \"id DESC\" --per-page 1 2>/dev/null | tail -1 | cut -d, -f1)
+      echo \"\"
+      echo \"-- output of job \${JOB_ID} --\"
+      hammer job-invocation output --id \"\${JOB_ID}\" --host \"lc-prod.${LAB_DOMAIN}\" 2>&1 | tail -15"
+
+  demo_step "Run the same job on the CentOS host — it cannot be delivered" \
+    --gui "Hosts -> All Hosts -> centos -> Schedule Remote Job" \
+    --cmd-satellite "
+      hammer job-invocation create \
+        --job-template \"${SOE_REX_JOB}\" \
+        --inputs command=\"hostname -f; cat /etc/os-release; rpm -qa | wc -l\" \
+        --search-query \"name ~ ${SOE_CENTOS_VM}\" \
+        --organization \"Demo_Org\" 2>&1 | tail -15
+      JOB_ID=\$(hammer --csv job-invocation list --order \"id DESC\" --per-page 1 2>/dev/null | tail -1 | cut -d, -f1)
+      echo \"\"
+      echo \"-- status of job \${JOB_ID} --\"
+      hammer job-invocation info --id \"\${JOB_ID}\" 2>&1 | tail -15
+      echo \"\"
+      echo \"The host is in the inventory and takes content, but the job has\"
+      echo \"no transport to it: no satellite-client-6 build for CentOS Stream\"
+      echo \"means no yggdrasil worker subscribed to the Satellite MQTT broker.\""
+
+  demo_info ""
+  demo_info "=== The SOE argument, demonstrated ==="
+  demo_info "  Same Satellite, same lifecycle environment, same job template."
+  demo_info "  RHEL host:   content + remote execution + errata + compliance."
+  demo_info "  CentOS host: content only. Every automation path that AAP or"
+  demo_info "               Satellite would drive has to be built separately."
+}
+
+run_section_e() {
+  demo_e1; echo ""; echo "---"; echo ""
+  demo_e2
+}
+
 run_section_b() {
   demo_b1; echo ""; echo "---"; echo ""
   demo_b2; echo ""; echo "---"; echo ""
@@ -2526,7 +2880,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 
     # Section C: Lifecycle
     c1) demo_c1 ;;
-    c2) demo_c2 ;;
+    c2) demo_c2 "${2:-2.0}" ;;
     c3) demo_c3 ;;
     c) run_section_c ;;
 
@@ -2536,6 +2890,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     d3) demo_d3 ;;
     d4) demo_d4 ;;
     d) run_section_d ;;
+
+    # Section E: Non-RHEL in the SOE
+    e1) demo_e1 ;;
+    e2) demo_e2 ;;
+    e) run_section_e ;;
 
     # All sections
     all)

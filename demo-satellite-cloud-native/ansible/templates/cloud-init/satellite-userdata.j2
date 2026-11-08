@@ -60,6 +60,12 @@ runcmd:
       --enable=satellite-6.19-for-rhel-9-x86_64-rpms \
       --enable=satellite-maintenance-6.19-for-rhel-9-x86_64-rpms
 
+    # Entitlement checkpoint. Everything above is fast (~5 min) and is the
+    # only part that can fail because of the activation key. The deploy
+    # playbook watches for this marker so a key that does not entitle
+    # satellite-6.19 fails in minutes rather than at the 80-minute timeout.
+    echo "=== Satellite Repositories Enabled ==="
+
     # Install Satellite
     dnf install -y satellite
 

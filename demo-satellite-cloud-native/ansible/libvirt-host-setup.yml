@@ -384,17 +384,22 @@
 
         # The hypervisor is also the user's desktop here, so this single
         # stanza is what lets the browser reach the Satellite and Capsule UIs.
+        #
+        # Gated on sat_fqdn alone. Requiring capsule_fqdn as well meant that
+        # any profile without a Capsule (DEPLOY_CAPSULE=false, e.g. the SOE
+        # profile) got no /etc/hosts entry at all, so the browser could not
+        # resolve the Satellite — the one thing this block exists for.
         - name: Map the lab FQDNs in the host's /etc/hosts
           ansible.builtin.blockinfile:
             path: /etc/hosts
             marker: "# {mark} satellite-demo"
             block: |
               192.168.150.11 {{ sat_fqdn }} satellite
+              {% if capsule_fqdn | length > 0 %}
               192.168.150.12 {{ capsule_fqdn }} capsule
+              {% endif %}
             backup: true
-          when:
-            - sat_fqdn | length > 0
-            - capsule_fqdn | length > 0
+          when: sat_fqdn | length > 0
 
     # ── 7. Docker conflict warning ───────────────────────────────────────
     - name: Check if Docker is installed

@@ -12,13 +12,25 @@ runcmd:
 
     SAT_FQDN="{{ sat_fqdn }}"
     CAPSULE_FQDN="{{ capsule_fqdn }}"
-    # Registration script is served from the Capsule, so that every byte this
-    # host fetches — bootstrap script, CA, RPMs — comes from the Capsule.
+    # With a Capsule the registration script is served from it, so that every
+    # byte this host fetches — bootstrap script, CA, RPMs — comes from the
+    # Capsule. Without one (the SOE profile) the Satellite serves everything.
     REG_URL="{{ reg_url | default('') }}"
     if [ -z "${REG_URL}" ]; then
+{% if capsule_fqdn %}
       REG_URL="http://${CAPSULE_FQDN}/pub/register-centos.sh"
+{% else %}
+      REG_URL="http://${SAT_FQDN}/pub/register-centos.sh"
+{% endif %}
     fi
     FALLBACK_URL="http://${SAT_FQDN}/pub/register-centos.sh"
+
+    # Where the CA and content actually come from.
+{% if capsule_fqdn %}
+    CONTENT_HOST="${CAPSULE_FQDN}"
+{% else %}
+    CONTENT_HOST="${SAT_FQDN}"
+{% endif %}
 
     # --- Phase 0: Identity ---
     VM_NAME="{{ vm_name | default('') }}"
@@ -31,7 +43,9 @@ runcmd:
     VM_IP=$(ip -4 addr show eth0 | grep -oP '(?<=inet )[\d.]+')
     sed -i 's/^127\.0\.0\.1.*/127.0.0.1 localhost localhost.localdomain/' /etc/hosts
     echo "${VM_IP} ${CLIENT_FQDN} ${VM_NAME}" >> /etc/hosts
+{% if capsule_fqdn %}
     echo "{{ capsule_ip }} ${CAPSULE_FQDN} capsule" >> /etc/hosts
+{% endif %}
     echo "{{ sat_ip }} ${SAT_FQDN} satellite" >> /etc/hosts
     echo "Hostname: ${CLIENT_FQDN} IP: ${VM_IP}"
 
@@ -52,14 +66,14 @@ runcmd:
     subscription-manager config --rhsm.manage_repos=1
     echo "--- Prerequisites Installed ---"
 
-    # --- Phase 2: Trust the Capsule CA (best effort) ---
+    # --- Phase 2: Trust the content host's CA (best effort) ---
     # Registration also passes --insecure, so a failure here is not fatal.
     set +e
     curl -sk -o /etc/pki/ca-trust/source/anchors/katello-server-ca.pem \
-      "http://${CAPSULE_FQDN}/pub/katello-server-ca.crt" && update-ca-trust
+      "http://${CONTENT_HOST}/pub/katello-server-ca.crt" && update-ca-trust
     set -e
 
-    # --- Phase 3: Register through the Capsule ---
+    # --- Phase 3: Register against the content host ---
     # The || true on each curl matters: while the Capsule is still coming up
     # curl exits non-zero, and a bare assignment from a failed command
     # substitution would abort this whole script under set -e.

@@ -20,7 +20,7 @@
     ao_workflow_file: "{{ playbook_dir }}/../../../demo-cve-remediation/ao/rhel-cve-remediation.json"
     ao_workflow_name: RHEL CVE Remediation - Intelligent Patching
     ao_aap_organization: Ansible Product Demos (APD)
-    ao_llm_name: MaaS
+    ao_llm_name: "{{ lookup('env', 'AO_LLM_NAME') | default('MaaS', true) }}"
     ao_aap_mcp_name: AAP MCP
     ao_lightspeed_mcp_name: Lightspeed MCP
     ao_aap_name: AAP

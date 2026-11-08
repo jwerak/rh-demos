@@ -14,7 +14,11 @@
   vars:
     ao_url: "{{ lookup('env', 'AO_URL') }}"
     ao_project: default
-    ao_llm_name: MaaS
+    # Product Demos auto-wires an "APD LiteMaaS" LLM provider from the
+    # controller's LiteMaaS credential. Set AO_LLM_NAME to that name to reuse
+    # it instead of creating one from AO_MODEL_ACCESS_TOKEN, whose MaaS key
+    # expires independently of the lab.
+    ao_llm_name: "{{ lookup('env', 'AO_LLM_NAME') | default('MaaS', true) }}"
     ao_aap_mcp_name: AAP MCP
     ao_lightspeed_mcp_name: Lightspeed MCP
     ao_aap_name: AAP
@@ -237,6 +241,73 @@
         headers: "{{ ao_headers }}"
         validate_certs: false
       register: ao_integrations_after
+
+    # AO records the model selection when the integration is created, so the
+    # create task above cannot fix an integration that already points at the
+    # wrong model. Reconcile it on every run instead: a demo that silently
+    # keeps a stale AO_MODEL_NAME fails much later, as AgentTimeoutError on
+    # the first agent node.
+    - name: Find the LLM provider integration
+      ansible.builtin.set_fact:
+        ao_llm_integration_id: >-
+          {{ (ao_integrations_after.json.resources
+              | selectattr('name', 'equalto', ao_llm_name) | first).id }}
+
+    - name: Read the models on the LLM provider
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/integrations/{{ ao_llm_integration_id }}/models?limit=100"
+        headers: "{{ ao_headers }}"
+        validate_certs: false
+      register: ao_llm_models
+
+    - name: Fail when the LLM provider does not offer AO_MODEL_NAME
+      ansible.builtin.assert:
+        that: ao_wanted_model | length > 0
+        fail_msg: >-
+          {{ ao_llm_name }} does not offer {{ lookup('env', 'AO_MODEL_NAME') }}.
+          It offers: {{ ao_llm_models.json.resources | map(attribute='name') | join(', ') }}.
+      vars:
+        ao_wanted_model: >-
+          {{ ao_llm_models.json.resources
+             | selectattr('name', 'equalto', lookup('env', 'AO_MODEL_NAME')) | list }}
+
+    # Enable the wanted model before disabling the others, so the integration
+    # is never left without a default.
+    - name: Enable AO_MODEL_NAME and make it the default
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/integrations/{{ ao_llm_integration_id }}/models/{{ item.id }}"
+        method: PATCH
+        headers: "{{ ao_headers }}"
+        body_format: json
+        body:
+          enabled: true
+          is_default: true
+        validate_certs: false
+        status_code: [200]
+      loop: "{{ ao_llm_models.json.resources }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - item.name == lookup('env', 'AO_MODEL_NAME')
+        - not (item.enabled and item.is_default)
+
+    - name: Disable the other models on the LLM provider
+      ansible.builtin.uri:
+        url: "{{ ao_url }}/api/v1/integrations/{{ ao_llm_integration_id }}/models/{{ item.id }}"
+        method: PATCH
+        headers: "{{ ao_headers }}"
+        body_format: json
+        body:
+          enabled: false
+          is_default: false
+        validate_certs: false
+        status_code: [200]
+      loop: "{{ ao_llm_models.json.resources }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - item.name != lookup('env', 'AO_MODEL_NAME')
+        - item.enabled or item.is_default
 
     - name: Validate every integration
       ansible.builtin.uri:

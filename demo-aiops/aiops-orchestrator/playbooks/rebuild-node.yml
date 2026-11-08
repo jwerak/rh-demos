@@ -1,0 +1,278 @@
+---
+# Replace one lab node with a fresh unpatched instance and wait until
+# Insights scores CVEs on it. The dev node (node1) loses its CVEs the moment
+# the auto-patch path runs, and the demo trigger then has nothing to show.
+#
+# Only the named node is touched. Pass -e ao_rebuild_node=node1 (the default)
+# or the full lab name. The match is the lab-inventory name, which is what
+# Insights uses as the display name.
+#
+# Run from aiops-orchestrator/local:
+#
+#   ansible-navigator run ../playbooks/rebuild-node.yml \
+#     --penv CONTROLLER_HOST --penv CONTROLLER_USERNAME --penv CONTROLLER_PASSWORD \
+#     --penv LIGHTSPEED_CLIENT_ID --penv LIGHTSPEED_CLIENT_SECRET \
+#     -e ao_rebuild_node=node1
+- name: Rebuild one AO lab node so Insights scores CVEs again
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars/rhel-nodes.yml
+  vars:
+    ao_rebuild_node: node1
+    ao_lab_inventory: lab-inventory
+    ao_machine_credential: APD Machine Credential
+    ao_delete_vm_template: Cloud | AWS | Delete VM
+    ao_create_vm_template: Cloud | AWS | Create VM
+    ao_wire_template: AO Lab | Wire inventory
+    ao_register_template: AO Lab | Register nodes
+    # Set false to register and wait on an instance this play already created.
+    ao_replace_instance: true
+
+  tasks:
+    - name: Require the controller settings from the environment
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'CONTROLLER_HOST') | length > 0
+          - lookup('env', 'CONTROLLER_USERNAME') | length > 0
+          - lookup('env', 'CONTROLLER_PASSWORD') | length > 0
+        fail_msg: >-
+          Source aiops-orchestrator/.env and pass CONTROLLER_HOST,
+          CONTROLLER_USERNAME, and CONTROLLER_PASSWORD with --penv.
+
+    - name: Select the node to rebuild
+      ansible.builtin.set_fact:
+        ao_node_matches: >-
+          {{ ao_nodes | selectattr('lab_name', 'match',
+             '^' ~ (ao_rebuild_node | regex_escape) ~ '(-|$)') | list }}
+        ao_rebuild_started: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+    - name: Require exactly one matching node
+      ansible.builtin.assert:
+        that: ao_node_matches | length == 1
+        fail_msg: >-
+          {{ ao_rebuild_node }} matched {{ ao_node_matches | map(attribute='lab_name') | list }},
+          expected one of {{ ao_nodes | map(attribute='lab_name') | join(', ') }}.
+
+    - name: Record the node
+      ansible.builtin.set_fact:
+        ao_node: "{{ ao_node_matches[0] }}"
+
+    - name: Report the rebuild
+      ansible.builtin.debug:
+        msg: >-
+          Rebuilding {{ ao_node.name }} as {{ ao_node.lab_name }}
+          from {{ ao_image_filter }}. Started {{ ao_rebuild_started }}.
+
+    - name: Create a gateway token
+      ansible.builtin.include_tasks: tasks/create-gateway-token.yml
+
+    - name: Replace the instance and register it
+      block:
+        - name: Replace the instance
+          when: ao_replace_instance | bool
+          block:
+          # Unregister from the host itself. The inventory API delete needs
+          # Inventory Hosts administrator, which this service account does not
+          # have, and once the instance is gone the old display name stays and
+          # the triage agent can match it instead of the new system.
+          - name: Unregister the node from Insights and RHSM
+            ansible.controller.ad_hoc_command:
+              inventory: "{{ ao_lab_inventory }}"
+              limit: "{{ ao_node.lab_name }}"
+              credential: "{{ ao_machine_credential }}"
+              module_name: shell
+              module_args: insights-client --unregister || true; subscription-manager unregister || true
+              become_enabled: true
+              wait: true
+              timeout: 600
+              controller_oauthtoken: "{{ ao_controller_token }}"
+              validate_certs: false
+            register: ao_unregister
+            failed_when: false
+
+          - name: Note when the node could not be unregistered
+            ansible.builtin.debug:
+              msg: >-
+                Unregistering {{ ao_node.lab_name }} failed
+                ({{ ao_unregister.status | default('no status') }}).
+                Its Insights entry will stay behind and the new instance will
+                share that display name. Delete the old system from Inventory
+                by hand before demoing.
+            when: ao_unregister.status | default('') != 'successful'
+
+          - name: Remove the lab-inventory host
+            ansible.controller.host:
+              name: "{{ ao_node.lab_name }}"
+              inventory: "{{ ao_lab_inventory }}"
+              state: absent
+              controller_oauthtoken: "{{ ao_controller_token }}"
+              validate_certs: false
+
+          # Create VM skips the launch when an instance already carries the
+          # Name tag, so the patched instance has to go first.
+          - name: Terminate the AWS instance
+            ansible.controller.job_launch:
+              job_template: "{{ ao_delete_vm_template }}"
+              extra_vars:
+                create_vm_aws_region: "{{ ao_aws_region }}"
+                create_vm_vm_name: "{{ ao_node.name }}"
+              wait: true
+              timeout: 900
+              controller_oauthtoken: "{{ ao_controller_token }}"
+              validate_certs: false
+
+          - name: Launch a fresh instance from the unpatched image
+            ansible.controller.job_launch:
+              job_template: "{{ ao_create_vm_template }}"
+              extra_vars:
+                create_vm_aws_region: "{{ ao_aws_region }}"
+                create_vm_vm_name: "{{ ao_node.name }}"
+                create_vm_vm_owner: "{{ ao_aws_owner }}"
+                create_vm_vm_deployment: ao-lab
+                create_vm_vm_purpose: "{{ ao_node.purpose }}"
+                create_vm_vm_environment: "{{ ao_node.environment }}"
+                vm_blueprint: rhel9
+                create_vm_aws_image_filter: "{{ ao_image_filter }}"
+                create_vm_aws_vpc_subnet_name: "{{ ao_aws_subnet }}"
+                create_vm_aws_securitygroup_name: "{{ ao_aws_sg }}"
+                create_vm_aws_keypair_name: "{{ ao_aws_keypair }}"
+              wait: true
+              timeout: 1800
+              controller_oauthtoken: "{{ ao_controller_token }}"
+              validate_certs: false
+
+          # The AWS inventory source only imports the instance once it is
+          # running and tagged, which lags the Create VM job. A miss here is
+          # timing, so retry rather than failing the rebuild.
+          - name: Wire the new instance into lab-inventory
+            ansible.controller.job_launch:
+              job_template: "{{ ao_wire_template }}"
+              wait: true
+              timeout: 900
+              controller_oauthtoken: "{{ ao_controller_token }}"
+              validate_certs: false
+            register: ao_wire
+            retries: 8
+            delay: 30
+            until: ao_wire is succeeded
+
+        - name: Allow the register job to take a host limit
+          ansible.builtin.uri:
+            url: >-
+              {{ lookup('env', 'CONTROLLER_HOST') }}/api/controller/v2/job_templates/?name={{
+              ao_register_template | urlencode }}
+            headers:
+              Authorization: "Bearer {{ ao_controller_token }}"
+            validate_certs: false
+            status_code: [200]
+          register: ao_register_template_lookup
+
+        - name: Enable limit override on the register job
+          ansible.builtin.uri:
+            url: >-
+              {{ lookup('env', 'CONTROLLER_HOST') }}/api/controller/v2/job_templates/{{
+              ao_register_template_lookup.json.results[0].id }}/
+            method: PATCH
+            headers:
+              Authorization: "Bearer {{ ao_controller_token }}"
+            body_format: json
+            body:
+              ask_limit_on_launch: true
+            validate_certs: false
+            status_code: [200]
+          when: not (ao_register_template_lookup.json.results[0].ask_limit_on_launch | bool)
+
+        - name: Register the node with RHSM and Insights
+          ansible.controller.job_launch:
+            job_template: "{{ ao_register_template }}"
+            limit: "{{ ao_node.lab_name }}"
+            wait: true
+            timeout: 1800
+            controller_oauthtoken: "{{ ao_controller_token }}"
+            validate_certs: false
+      always:
+        - name: Delete the gateway token
+          ansible.builtin.include_tasks: tasks/delete-gateway-token.yml
+
+    - name: Wait until Insights scores CVEs on the new system
+      when:
+        - lookup('env', 'LIGHTSPEED_CLIENT_ID') | length > 0
+        - lookup('env', 'LIGHTSPEED_CLIENT_SECRET') | length > 0
+      block:
+        - name: Get a console.redhat.com token
+          ansible.builtin.uri:
+            url: https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token
+            method: POST
+            body_format: form-urlencoded
+            body:
+              grant_type: client_credentials
+              scope: api.console
+              client_id: "{{ lookup('env', 'LIGHTSPEED_CLIENT_ID') }}"
+              client_secret: "{{ lookup('env', 'LIGHTSPEED_CLIENT_SECRET') }}"
+            status_code: [200]
+          register: ao_console_login
+          no_log: true
+
+        # A system created before this play is the one we just replaced. Match
+        # on created time so a leftover display name cannot satisfy the wait.
+        - name: Wait for the new system in the Insights inventory
+          ansible.builtin.uri:
+            url: >-
+              https://console.redhat.com/api/inventory/v1/hosts?display_name={{
+              ao_node.lab_name | urlencode }}&per_page=100
+            headers:
+              Authorization: "Bearer {{ ao_console_login.json.access_token }}"
+            status_code: [200]
+          register: ao_insights_hosts
+          retries: 20
+          delay: 30
+          until: >-
+            ao_insights_hosts.json.results | default([])
+            | selectattr('created', 'ge', ao_rebuild_started) | list | length > 0
+
+        - name: Record the new Insights system
+          ansible.builtin.set_fact:
+            ao_fresh_system: >-
+              {{ (ao_insights_hosts.json.results
+                  | selectattr('created', 'ge', ao_rebuild_started)
+                  | sort(attribute='created') | last) }}
+
+        # The inventory wait can burn most of a 15 minute token.
+        - name: Refresh the console.redhat.com token
+          ansible.builtin.uri:
+            url: https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token
+            method: POST
+            body_format: form-urlencoded
+            body:
+              grant_type: client_credentials
+              scope: api.console
+              client_id: "{{ lookup('env', 'LIGHTSPEED_CLIENT_ID') }}"
+              client_secret: "{{ lookup('env', 'LIGHTSPEED_CLIENT_SECRET') }}"
+            status_code: [200]
+          register: ao_console_login
+          no_log: true
+
+        - name: Wait for applicable CVEs
+          ansible.builtin.uri:
+            url: >-
+              https://console.redhat.com/api/vulnerability/v1/systems/{{
+              ao_fresh_system.id }}/cves?limit=5&sort=-cvss_score
+            headers:
+              Authorization: "Bearer {{ ao_console_login.json.access_token }}"
+            # 404 "inventory_id exists but is not evaluated" is the gap between
+            # the archive upload and vulnerability scoring, not a missing host.
+            status_code: [200, 404]
+          register: ao_cves
+          retries: 30
+          delay: 60
+          until: (ao_cves.json.meta.total_items | default(0) | int) > 0
+
+        - name: Report the scored system
+          ansible.builtin.debug:
+            msg: >-
+              {{ ao_node.lab_name }} ({{ ao_fresh_system.id }}) has
+              {{ ao_cves.json.meta.total_items }} applicable CVEs.
+              Top: {{ ao_cves.json.data | map(attribute='id') | join(', ') }}.
+              Re-run configure-ao-workflow.yml so the trigger uses one of them.

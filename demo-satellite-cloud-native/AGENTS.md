@@ -24,10 +24,13 @@ Cloud-native Satellite + IdM demo: RHEL VMs running on OpenShift Virtualization 
 | OpenShift | KubeVirt on OCP | `scripts/deploy.sh` | idm, satellite, clients |
 | Remote KVM | libvirt over SSH | `scripts/deploy-libvirt.sh` + `.env` | idm, satellite, clients |
 | **Local workstation** | libvirt on this machine | `scripts/deploy-local.sh` + `.env.local` | satellite, capsule, centos |
+| **Local SOE** | libvirt on this machine | `scripts/deploy-soe.sh` + `.env.soe` | satellite, lc-dev, lc-qa, lc-prod, centos |
 
 The local profile is the remote libvirt path with `LIBVIRT_HOST=localhost`: the deploy still goes over SSH, it just loops back, so `qemu+ssh://`, scp and the `ProxyCommand` hop to VMs are all unchanged. Switches: `DEMO_LOCAL_PROFILE=true`, `DEPLOY_IDM=false`, `DEPLOY_CAPSULE=true`. Deploy phases are strictly serial (Satellite -> Capsule base -> Capsule join); overlapping them would need 18 GB of concurrent guest RAM.
 
 **The Capsule and CentOS client are libvirt-only by design** — `k8s/base/` deliberately has no manifests for them, and demo Section D refuses to run unless `DEMO_PLATFORM=libvirt`.
+
+The **SOE profile** is a variant of the local profile for a 25-minute Standard Operating Environment talk: the Capsule is off (`DEPLOY_CAPSULE=false`) and its 6 GB pays for `lc-dev`/`lc-qa`/`lc-prod`, while the CentOS client moves from behind the Capsule to straight off the Satellite (`DEPLOY_CENTOS=true`). Guests are trimmed via `LC_VM_PROFILE=lc-client-soe` and `CENTOS_VM_PROFILE=centos-client-soe` (1536 MB each), so the whole stack is 12288 + 4×1536 = 18 GB — inside the local profile's 20 GB envelope. Entry points: `scripts/deploy-soe.sh` (phased, `--check` / `--infra-only` / `--clients-only`), `scripts/teardown-soe.sh` (`--orphans` / `--all` / `--dry-run`), run sheet in `RUNSHEET-soe.md`.
 
 ## Important Notes
 
@@ -52,6 +55,20 @@ The local profile is the remote libvirt path with `LIBVIRT_HOST=localhost`: the 
 - **Never let `delete_vm` glob a base image.** `libvirt-vm-delete.yml` matches `<vm_name>-*.qcow2`, which for the VM named `centos` also matches `centos-stream-9-x86_64-kvm.qcow2` — the shared backing file. A protected-paths list now excludes every `base_image` in `vm-profiles.yml`; keep it in sync when adding images.
 - **`DEMO_PASSWORD` must be written to the env file with `export`.** The documented flow is `source .env && ./scripts/demo-scenarios.sh …`, and a bare assignment is not inherited by the child, which then falls back to its default env file and targets the wrong hypervisor.
 - **The EE runs as root**, so `$HOME` is `/root` while the host cache is bind-mounted at `/home/runner/.cache/satellite-demo`. The VM registry path must prefer the mount, or every write is discarded inside the container.
+- **The VM registry is consulted before `virsh`.** `_libvirt_get_vm_ip` reads `~/.cache/satellite-demo/vm-registry.json` first, so a stale entry for a deleted VM hands out a dead DHCP address and every `run_on_vm` silently targets nothing. `teardown-soe.sh` prunes entries whose VM is no longer defined; any new teardown path must do the same.
+- **The host's `/etc/hosts` block was gated on `capsule_fqdn` as well as `sat_fqdn`.** Any profile without a Capsule therefore got *no* entry at all and the browser could not resolve the Satellite — the one thing that block exists for. It is now gated on `sat_fqdn` alone, with the Capsule line conditional.
+- **Phase 5 of `deploy-all.yml` mkdir'd the client-template directory over SSH without sudo.** `LIBVIRT_POOL_DIR` is root-owned, so this only worked when `LIBVIRT_USER=root` (the remote profile) and failed with "Permission denied" on both local profiles, after the Satellite had already finished installing. The directory is now created with sudo and the templates are staged through `/tmp`.
+- **Section C's `RHEL9-Lifecycle` attached repositories by hardcoded id 1 and 2.** Those ids only exist after a subscription manifest is uploaded and the RHEL repos enabled; with no manifest both adds failed behind `|| true` and the content view published empty with no indication why. It now looks the repos up by name and prints an explicit note when none are present.
+
+## Running Section C on libvirt
+
+Section C was written for OpenShift and `PLAN-libvirt-platform.md` called it platform-agnostic, but it had not been run on libvirt. Three things were actually platform-specific and are now fixed: the hardcoded repository ids above, a bare `oc get route` in `demo_c1`'s summary (printed a command-not-found error mid-demo on libvirt), and `deploy_lc_vm` hardcoding `vm_profile=lc-client` (now honours `LC_VM_PROFILE`).
+
+**Without a subscription manifest the lifecycle demo runs entirely on the custom `Demo-App` product.** That is enough for the promotion story — content view, version, environment, activation key are the same mechanism — but it means no RHEL errata are being promoted, and the run sheet says so out loud rather than letting a presenter imply otherwise.
+
+## Section E: non-RHEL in the SOE
+
+`e1` registers the CentOS Stream client straight to the Satellite (no Capsule) and installs a custom RPM; `e2` proves the remote-execution limit instead of asserting it. The distinction from Section D matters: D registers CentOS with `--setup-remote-execution-pull false`, which *configures the limit away*. E registers with it set to `true`, exactly as a RHEL host does, and then shows that `foreman_ygg_worker` is unavailable because `satellite-client-6` has no CentOS Stream build — so the same job template runs on `lc-prod` and has no transport to `centos`.
 
 ## satellite-installer Gotchas (6.19)
 
@@ -73,6 +90,9 @@ Verified against `satellite-installer --scenario <s> --full-help` on this releas
 - `scripts/deploy.sh` - Sequenced deployment (IdM first, then Satellite, then clients)
 - `scripts/deploy-libvirt.sh` - Libvirt deployment; honours `DEMO_ENV_FILE`
 - `scripts/deploy-local.sh` - Local workstation pre-flight, then hands over to `deploy-libvirt.sh`
+- `scripts/deploy-soe.sh` - SOE profile: pre-flight, Satellite, then builds Section C1 + E1 state in batch mode
+- `scripts/teardown-soe.sh` - Returns the workstation to its prior state (`--orphans`, `--all`, `--dry-run`)
+- `RUNSHEET-soe.md` - 25-minute run sheet for the SOE talk: timings, UI vs CLI, what to say, recovery
 - `ansible/capsule-join.yml` - Cross-VM Capsule join (certs-generate on Satellite, installer on Capsule)
 - `ansible/templates/capsule-certs-generate.sh.j2` - Runs on the Satellite; distils the installer command `capsule-certs-generate` prints into one runnable line
 - `scripts/verify-registration.sh` - Check Satellite + IdM + Capsule enrollment status
@@ -94,6 +114,21 @@ k8s/overlays/demo/   # Adds environment: demo label
 ```
 
 ## Key Commands
+
+```bash
+# SOE profile (Satellite + lc-dev/lc-qa/lc-prod + CentOS client, no Capsule, no IdM)
+cp .env.soe.sample .env.soe && $EDITOR .env.soe
+./scripts/deploy-soe.sh --check       # pre-flight only, changes nothing
+./scripts/deploy-soe.sh               # ~2 - 3.5 h (Satellite 70-150 min of it)
+./scripts/deploy-soe.sh --infra-only  # stop after the Satellite
+./scripts/deploy-soe.sh --clients-only  # just the 4 clients, Satellite must exist
+
+source .env.soe
+./scripts/demo-scenarios.sh c2        # the promotion act
+./scripts/demo-scenarios.sh e2        # the non-RHEL REX limit
+
+./scripts/teardown-soe.sh --all --dry-run   # see the full undo first
+```
 
 ```bash
 # Local workstation profile (Satellite + Capsule + CentOS client, no IdM)
@@ -170,6 +205,11 @@ oc scale vmpool client-pool -n satellite-cloud-native --replicas=5
 ./scripts/demo-scenarios.sh d3   # Prove the content path terminates at the Capsule
 ./scripts/demo-scenarios.sh d4   # Publish capsule-demo-app v2.0 and update the client
 ./scripts/demo-scenarios.sh d    # Run all Capsule demos
+
+# Section E: Non-RHEL in the SOE (VMs: centos, lc-prod) — local libvirt profile only
+./scripts/demo-scenarios.sh e1   # CentOS registers to the Satellite, installs an SOE RPM
+./scripts/demo-scenarios.sh e2   # Same REX job: runs on RHEL, undeliverable to CentOS
+./scripts/demo-scenarios.sh e    # Run all Non-RHEL demos
 
 # Old numeric IDs (1-13) still work as aliases
 

@@ -32,7 +32,11 @@ ansible-navigator:
         # much later as a VM built with the wrong FQDN or sizing.
         - DEPLOY_IDM
         - DEPLOY_CAPSULE
+        - DEPLOY_CENTOS
         - DEMO_LOCAL_PROFILE
+        - DEMO_SOE_PROFILE
+        - LC_VM_PROFILE
+        - CENTOS_VM_PROFILE
         - SAT_TUNING
         - SAT_DISABLE_SYSTEM_CHECKS
         - SAT_ORGANIZATION

@@ -3,11 +3,18 @@
 ansible-navigator.log
 
 # Environment files
+# Real env files hold RHSM activation keys and demo passwords. The *.sample
+# files are the tracked templates and must stay visible.
 .env
 .env.local
+.env.soe
 **/.env
+**/.env.local
+**/.env.soe
 !**/.env.example
 !**/.env.sample
+!**/.env.local.sample
+!**/.env.soe.sample
 
 
 # Vault files (if they contain real secrets)

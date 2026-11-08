@@ -70,6 +70,24 @@ vm_profiles:
     cloudinit_template: centos-client
     base_image: centos-stream-9-x86_64-kvm.qcow2
 
+  # ── SOE profile (DEMO_SOE_PROFILE=true) ──────────────────────────────
+  # satellite-local + lc-dev + lc-qa + lc-prod + centos all run at once, so
+  # the four guests are trimmed from 2048 to 1536 MB: 12288 + 4*1536 =
+  # 18 GB, which is 2 GB under the capsule profile's 20 GB envelope. RHEL 9
+  # and CentOS Stream 9 minimal cloud images idle at ~400 MB; 1536 leaves
+  # enough headroom for dnf transactions and the yggdrasil worker.
+  lc-client-soe:
+    vcpus: 1
+    ram_mb: 1536
+    disk_gb: 20
+    cloudinit_template: lc-client
+  centos-client-soe:
+    vcpus: 1
+    ram_mb: 1536
+    disk_gb: 20
+    cloudinit_template: centos-client
+    base_image: centos-stream-9-x86_64-kvm.qcow2
+
 libvirt_network_name: satellite-demo
 libvirt_pool_dir: /var/lib/libvirt/images
 libvirt_rhel9_image: rhel-9.8-x86_64-kvm.qcow2

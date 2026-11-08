@@ -264,6 +264,10 @@
             playbook: demo-aiops/aiops-orchestrator/playbooks/register-rhel-nodes.yml
             extra_vars:
               ao_insights_group: "{{ ao_insights_group }}"
+            # A patched node is rebuilt on its own, and re-registering the
+            # other two would upload fresh archives for hosts the demo still
+            # needs in their current state.
+            ask_limit_on_launch: true
             credentials:
               - "{{ ao_machine_credential }}"
               - "{{ ao_rhsm_credential }}"

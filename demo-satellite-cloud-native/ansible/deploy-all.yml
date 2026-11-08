@@ -49,14 +49,18 @@
     # ── Profile switches ──────────────────────────────────────────────
     deploy_idm: "{{ lookup('env', 'DEPLOY_IDM') | default('true', true) | bool }}"
     deploy_capsule: "{{ lookup('env', 'DEPLOY_CAPSULE') | default('false', true) | bool }}"
+    # The SOE profile runs a CentOS client straight off the Satellite, with no
+    # Capsule in the path, so image staging can no longer key off the Capsule.
+    deploy_centos: "{{ lookup('env', 'DEPLOY_CENTOS') | default('false', true) | bool }}"
     local_profile: "{{ lookup('env', 'DEMO_LOCAL_PROFILE') | default('false', true) | bool }}"
     satellite_profile: "{{ 'satellite-local' if (local_profile | bool) else 'satellite' }}"
     sat_tuning: "{{ lookup('env', 'SAT_TUNING') }}"
     sat_disable_system_checks: "{{ lookup('env', 'SAT_DISABLE_SYSTEM_CHECKS') | default('false', true) | bool }}"
 
     # Extra base images to stage into the pool. The CentOS Stream image is
-    # only needed where a Capsule serves content to a CentOS client.
-    _extra_base_images: "{{ [{'name': libvirt_centos9_image, 'url': libvirt_centos9_image_url}] if (deploy_capsule | bool) else [] }}"
+    # needed wherever a CentOS client runs: behind a Capsule (Section D) or
+    # straight off the Satellite (Section E, the SOE profile).
+    _extra_base_images: "{{ [{'name': libvirt_centos9_image, 'url': libvirt_centos9_image_url}] if ((deploy_capsule | bool) or (deploy_centos | bool)) else [] }}"
     _base_images_extra_var: "{{ {'libvirt_base_images': _extra_base_images} | to_json }}"
 
     # SSH to the hypervisor host (direct)
@@ -231,6 +235,48 @@
           delay: 10
           changed_when: false
 
+        # Fail fast on a bad activation key. Registering with RHSM and
+        # enabling the four repositories takes ~5 min; everything after it
+        # takes over an hour. Without this checkpoint a key that does not
+        # entitle satellite-6.19 only surfaced when the 80-minute wait below
+        # expired, by which time the operator had walked away.
+        - name: Wait for the Satellite to enable its repositories (up to 15 min)
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ satellite_ip }} \
+              "grep -q 'Satellite Repositories Enabled' /var/log/satellite-setup.log 2>/dev/null"
+          register: sat_repos_result
+          until: sat_repos_result.rc == 0
+          retries: 30
+          delay: 30
+          changed_when: false
+          failed_when: false
+
+        - name: Show the installer log when the entitlement checkpoint was not reached
+          ansible.builtin.shell: |
+            {{ _ssh_cmd }} cloud-user@{{ satellite_ip }} \
+              "sudo tail -40 /var/log/satellite-setup.log 2>/dev/null"
+          register: sat_repo_failure_log
+          when: sat_repos_result.rc != 0
+          changed_when: false
+          failed_when: false
+
+        - name: Fail loudly if the activation key does not entitle Satellite 6.19
+          ansible.builtin.fail:
+            msg: |
+              The Satellite VM did not reach the repository checkpoint within 15 minutes.
+
+              This almost always means RHSM_ACTIVATION_KEY / RHSM_ORG do not entitle:
+                satellite-6.19-for-rhel-9-x86_64-rpms
+                satellite-maintenance-6.19-for-rhel-9-x86_64-rpms
+
+              Last 40 lines of /var/log/satellite-setup.log on {{ satellite_ip }}:
+              {{ sat_repo_failure_log.stdout | default('(log unavailable)') }}
+
+              Fix the activation key at
+              https://console.redhat.com/settings/connector/activation-keys
+              then: ./scripts/teardown-soe.sh --vms-only && ./scripts/deploy-soe.sh
+          when: sat_repos_result.rc != 0
+
         # 80 min: the local profile runs Satellite on 12 GB with development
         # tuning, which is materially slower than the 22 GB remote profile.
         - name: Wait for Satellite installation to complete (up to 80 min)
@@ -364,10 +410,14 @@
     - name: "Phase 5: Prepare client cloud-init template"
       tags: [client-prep]
       block:
+        # sudo is required: libvirt_pool_dir is root-owned. Without it this
+        # worked only on the remote profile, where LIBVIRT_USER is root, and
+        # failed with "Permission denied" for every profile that uses a
+        # normal account (both local profiles).
         - name: Ensure cloud-init template directory exists on libvirt host
           ansible.builtin.shell: |
             ssh {{ _host_ssh_opts }} {{ libvirt_user }}@{{ libvirt_host }} \
-              "mkdir -p {{ libvirt_pool_dir }}/cloud-init-templates"
+              "sudo mkdir -p {{ libvirt_pool_dir }}/cloud-init-templates"
           changed_when: false
 
         - name: Generate client cloud-init meta-data template
@@ -385,12 +435,19 @@
             dest: /tmp/satellite-demo-client-network-config
             mode: "0644"
 
+        # Staged through /tmp and moved with sudo, the same two-step
+        # libvirt-vm-create.yml uses for the cloud-init ISO: scp cannot write
+        # into the root-owned pool directory as a normal user.
         - name: Copy client cloud-init templates to libvirt host
           ansible.builtin.shell: |
             scp {{ _host_ssh_opts }} \
               /tmp/satellite-demo-client-meta-data \
               /tmp/satellite-demo-client-network-config \
-              {{ libvirt_user }}@{{ libvirt_host }}:{{ libvirt_pool_dir }}/cloud-init-templates/
+              {{ libvirt_user }}@{{ libvirt_host }}:/tmp/
+            ssh {{ _host_ssh_opts }} {{ libvirt_user }}@{{ libvirt_host }} \
+              "sudo mv /tmp/satellite-demo-client-meta-data \
+                       /tmp/satellite-demo-client-network-config \
+                       {{ libvirt_pool_dir }}/cloud-init-templates/"
           changed_when: true
 
         - name: Clean up local temporary files
