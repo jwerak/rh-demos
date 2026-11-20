@@ -1,0 +1,25 @@
+---
+# SAT · Status - the AAP twin of `status.sh`: what Git declares vs what
+# Satellite serves, and whether they agree.
+- name: Git vs Satellite
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: [_vars.yml]
+  module_defaults:
+    group/redhat.satellite.satellite:
+      server_url: "{{ satellite_url }}"
+      username: "{{ lookup('ansible.builtin.env', 'FOREMAN_USERNAME') }}"
+      password: "{{ lookup('ansible.builtin.env', 'FOREMAN_PASSWORD') }}"
+      validate_certs: false
+  tasks:
+    - name: Read Git and Satellite
+      ansible.builtin.include_tasks: tasks/releases-read.yml
+
+    - name: Status
+      ansible.builtin.debug:
+        msg:
+          - "Git declares:     Dev={{ rel_declared.Dev }} QA={{ rel_declared.QA }} Prod={{ rel_declared.Prod }}"
+          - "Satellite serves: Dev={{ sat_serves.Dev | default('-') }} QA={{ sat_serves.QA | default('-') }} Prod={{ sat_serves.Prod | default('-') }}"
+          - "{{ 'Git and Satellite agree.' if (rel_declared.Dev, rel_declared.QA, rel_declared.Prod) == (sat_serves.Dev | default(''), sat_serves.QA | default(''), sat_serves.Prod | default('')) else 'DRIFT: record it with GitOps · Record Satellite state, or promote/roll back through Git.' }}"
+          - "Newest published: {{ sat_versions | last }}"

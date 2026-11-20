@@ -7,8 +7,10 @@ set -euo pipefail
 # shellcheck source=lib.sh
 source "$(dirname "$0")/lib.sh"
 
+echo "== Satellite as code: executor ${SATELLITE_EXECUTOR}, last apply run: $(satellite_apply_last || echo '?')"
+echo
 echo "== Argo CD"
-oc get applications.argoproj.io -n openshift-gitops rhel-fleet satellite-config \
+oc get applications.argoproj.io -n openshift-gitops rhel-fleet $([ "${SATELLITE_EXECUTOR}" = argo ] && echo satellite-config) \
   -o custom-columns='APP:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,REVISION:.status.sync.revision' \
   2>/dev/null || echo "  (applications not found)"
 

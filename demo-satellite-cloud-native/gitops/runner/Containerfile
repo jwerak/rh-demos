@@ -1,31 +1,26 @@
-# Runner image for the Satellite-as-code Job (gitops/repo/satellite/job.yaml).
+# Execution environment for the GitOps layer: AAP job templates, the Argo CD
+# fallback Job (gitops/repo/satellite/job.yaml) and run-local.sh all use it.
+#
+# Base: AAP's supported EE, which already ships redhat.satellite,
+# kubernetes.core, redhat.openshift_virtualization and python kubernetes.
+# Pulled with the cluster pull secret (no Automation Hub token needed).
+# Added here: rpm-build, so SAT · Publish new version can build demo-app.
 #
 # Built in the cluster by `gitops/scripts/bootstrap.sh runner` (oc new-build,
 # Docker strategy) into ImageStream satellite-cloud-native/satellite-cac-runner.
-# Local build for the laptop fallback (run-local.sh):
-#   podman build -t localhost/satellite-cac-runner:latest gitops/runner
-#
-# theforeman.foreman comes from Ansible Galaxy (no token needed). It is the
-# upstream of redhat.satellite; in AAP use the supported redhat.satellite
-# collection from Automation Hub, the playbooks only change their prefix.
-FROM registry.access.redhat.com/ubi9/python-312:latest
+# Laptop (run-local.sh): podman build needs `podman login registry.redhat.io`.
+ARG EE_BASE=registry.redhat.io/ansible-automation-platform-27/ee-supported-rhel9:latest
+FROM ${EE_BASE}
 
 USER 0
-# ansible-runner: ansible-navigator (run-local.sh) needs it inside the EE.
-RUN pip install --no-cache-dir "ansible-core>=2.16,<2.20" ansible-runner requests PyYAML \
- && ansible-galaxy collection install --collections-path /usr/share/ansible/collections \
-      "theforeman.foreman>=5.0.0,<7.0.0" \
- && chmod -R g=u /usr/share/ansible/collections
+RUN (microdnf -y install rpm-build || dnf -y install rpm-build) \
+ && (microdnf clean all || dnf clean all) \
+ && rpmbuild --version
 
-# OpenShift runs the container with a random UID in group 0.
-USER 1001
-# The UID has no passwd entry, so "~" is unusable: pin every Ansible temp path
-# to /tmp (the project directory is a read-only ConfigMap mount).
-ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections \
-    ANSIBLE_HOST_KEY_CHECKING=False \
+# OpenShift runs the container with a random UID in group 0. The project
+# directory can be a read-only mount, so pin Ansible's temp paths to /tmp.
+USER 1000
+ENV ANSIBLE_HOST_KEY_CHECKING=False \
     ANSIBLE_RETRY_FILES_ENABLED=False \
     ANSIBLE_LOCAL_TEMP=/tmp/.ansible/tmp \
-    ANSIBLE_REMOTE_TMP=/tmp/.ansible/tmp \
-    HOME=/tmp
-WORKDIR /runner/project
-CMD ["ansible-playbook", "--version"]
+    ANSIBLE_REMOTE_TMP=/tmp/.ansible/tmp

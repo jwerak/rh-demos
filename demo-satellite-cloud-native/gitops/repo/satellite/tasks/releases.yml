@@ -23,7 +23,7 @@
       loop: [Dev, QA, Prod]
 
     - name: Read content view versions
-      theforeman.foreman.content_view_version_info:
+      redhat.satellite.content_view_version_info:
         organization: "{{ satellite_organization }}"
         content_view: "{{ content_view }}"
       register: cv_versions_before
@@ -63,32 +63,16 @@
         quiet: true
       when: not (allow_out_of_order | default(false) | bool)
 
-    - name: Read last applied declaration (in cluster)
-      ansible.builtin.uri:
-        url: "https://kubernetes.default.svc/api/v1/namespaces/{{ registration_namespace }}/configmaps/{{ releases_applied_cm }}"
-        headers:
-          Authorization: "Bearer {{ lookup('ansible.builtin.file', '/var/run/secrets/kubernetes.io/serviceaccount/token') }}"
-        ca_path: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-        status_code: [200, 404]
-      register: applied_api
-      when: sa_token.stat.exists
-
-    - name: Read last applied declaration (laptop)
-      ansible.builtin.command:
-        cmd: oc get configmap {{ releases_applied_cm }} -n {{ registration_namespace }} -o json
-      register: applied_oc
-      failed_when: false
-      changed_when: false
-      when: not sa_token.stat.exists
+    - name: Read last applied declaration
+      kubernetes.core.k8s_info:
+        kind: ConfigMap
+        name: "{{ releases_applied_cm }}"
+        namespace: "{{ registration_namespace }}"
+      register: applied_cm
 
     - name: Last applied declaration
       ansible.builtin.set_fact:
-        releases_applied: >-
-          {{ (applied_api.json.data | default({}))
-             if (sa_token.stat.exists and applied_api.status | default(0) == 200)
-             else ((applied_oc.stdout | from_json).data | default({}))
-             if (not sa_token.stat.exists and applied_oc.rc | default(1) == 0)
-             else {} }}
+        releases_applied: "{{ (applied_cm.resources | first).data | default({}) if applied_cm.resources else {} }}"
         release_plan: {}
 
     - name: Plan per environment (in-sync / promote / drift)
@@ -105,7 +89,7 @@
       loop: [Dev, QA, Prod]
 
     - name: Promote (Dev, then QA, then Prod)
-      theforeman.foreman.content_view_version:
+      redhat.satellite.content_view_version:
         organization: "{{ satellite_organization }}"
         content_view: "{{ content_view }}"
         version: "{{ environments[item] | string }}"
@@ -128,25 +112,12 @@
           {% else %}{{ item }}: {{ environments[item] }} (unchanged){% endif %}
       loop: [Dev, QA, Prod]
 
-    - name: Remember the applied declaration (in cluster)
-      ansible.builtin.uri:
-        url: "https://kubernetes.default.svc/api/v1/namespaces/{{ registration_namespace }}/configmaps/{{ releases_applied_cm }}?fieldManager=satellite-as-code&force=true"
-        method: PATCH
-        headers:
-          Authorization: "Bearer {{ lookup('ansible.builtin.file', '/var/run/secrets/kubernetes.io/serviceaccount/token') }}"
-          Content-Type: application/apply-patch+yaml
-        body: "{{ releases_applied_obj | to_json }}"
-        body_format: raw
-        ca_path: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-        status_code: [200, 201]
-      when: sa_token.stat.exists
-
-    - name: Remember the applied declaration (laptop)
-      ansible.builtin.command:
-        cmd: oc apply -f -
-        stdin: "{{ releases_applied_obj | to_json }}"
-      changed_when: true
-      when: not sa_token.stat.exists
+    - name: Remember the applied declaration
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        force: true
+        definition: "{{ releases_applied_obj }}"
 
   rescue:
     - name: Record failure

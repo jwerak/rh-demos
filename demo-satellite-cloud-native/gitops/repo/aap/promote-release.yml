@@ -1,0 +1,77 @@
+---
+# GitOps · Promote release - the AAP twin of `release.sh promote ENV [VERSION]`.
+# Opens a pull request that changes one line in satellite/releases.yml; the
+# merge is the approval, "SAT · Apply Satellite as code" then promotes.
+# Survey: lifecycle_env (dev|qa|prod), version (optional), auto_merge (yes|no).
+# Default version: dev = newest published, qa = what Dev declares, prod = what QA declares.
+- name: Promote a release through a pull request
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: [_vars.yml]
+  module_defaults:
+    group/redhat.satellite.satellite:
+      server_url: "{{ satellite_url }}"
+      username: "{{ lookup('ansible.builtin.env', 'FOREMAN_USERNAME') }}"
+      password: "{{ lookup('ansible.builtin.env', 'FOREMAN_PASSWORD') }}"
+      validate_certs: false
+  tasks:
+    - name: Validate the request
+      ansible.builtin.assert:
+        that:
+          - lifecycle_env in ['dev', 'qa', 'prod']
+          - (version | default('', true) | string) is match('^([0-9]+([.][0-9]+)?)?$')
+        fail_msg: "lifecycle_env: dev|qa|prod; version: empty or like 6.0 / 5.1"
+        quiet: true
+
+    - name: Read Git and Satellite
+      ansible.builtin.include_tasks: tasks/releases-read.yml
+
+    - name: Target version
+      ansible.builtin.set_fact:
+        env_name: "{{ lce_names[lifecycle_env] }}"
+        target: >-
+          {{ (version | string) if version | default('', true) | string | length > 0
+             else sat_versions | last if lifecycle_env == 'dev'
+             else rel_declared.Dev if lifecycle_env == 'qa'
+             else rel_declared.QA }}
+
+    - name: Normalise and check
+      ansible.builtin.set_fact:
+        target: "{{ target if '.' in target else target ~ '.0' }}"
+        current: "{{ rel_declared[env_name] }}"
+
+    - name: Version exists and is a change
+      ansible.builtin.assert:
+        that:
+          - target in sat_versions
+          - target != current
+        fail_msg: >-
+          {{ env_name }}: {{ target }} {{ 'does not exist in Satellite (publish first)' if target not in sat_versions
+          else 'is already declared in Git' }}. Available: {{ sat_versions | join(', ') }}.
+        quiet: true
+
+    - name: Open the pull request
+      ansible.builtin.include_tasks: tasks/gitea-pr.yml
+      vars:
+        pr_branch: "release-{{ lifecycle_env }}-{{ target }}"
+        pr_file: satellite/releases.yml
+        pr_sha: "{{ rel_sha }}"
+        pr_content: "{{ rel_text | regex_replace('(?m)^(  ' ~ env_name ~ ': ).*$', '\\1\"' ~ target ~ '\"') }}"
+        pr_title: "Promote {{ env_name }}: {{ current }} -> {{ target }}"
+        pr_body: |
+          Requested by **{{ requested_by }}** through AAP ({{ job_ref }}).
+
+          `satellite/releases.yml`: {{ env_name }} serves RHEL9-FullStack **{{ target }}** after the merge;
+          "SAT · Apply Satellite as code" promotes it.
+          {% if sat_serves[env_name] | default('') == target %}
+
+          Satellite already serves {{ env_name }}={{ target }} (promoted in the UI): this PR records it, nothing changes in Satellite.
+          {% endif %}
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "Promote {{ env_name }}: {{ current }} -> {{ target }}"
+          - "Pull request #{{ pr_number }}: {{ pr_url }}"
+          - "{{ 'Merged - Satellite applies it in ~1.5 min (AAP -> Jobs -> SAT · Apply Satellite as code).' if pr_merged | bool else 'Waiting for approval: merge the PR in Gitea.' }}"

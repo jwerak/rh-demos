@@ -8,8 +8,21 @@
     fail_msg: Set FOREMAN_SERVER_URL, FOREMAN_USERNAME and FOREMAN_PASSWORD.
     quiet: true
 
+# The AAP job template accepts extra vars (EDA passes the push payload). Extra
+# vars beat play vars, so refuse a launch that redirects the Satellite
+# connection or the target namespace: the credential's password must only go
+# to the credential's URL.
+- name: Connection comes from the credential, not from extra vars
+  ansible.builtin.assert:
+    that:
+      - satellite_url == lookup('ansible.builtin.env', 'FOREMAN_SERVER_URL')
+      - satellite_user == lookup('ansible.builtin.env', 'FOREMAN_USERNAME')
+      - registration_namespace == (lookup('ansible.builtin.env', 'POD_NAMESPACE') | default('satellite-cloud-native', true))
+    fail_msg: satellite_url, satellite_user and registration_namespace must not be overridden at launch.
+    quiet: true
+
 - name: Satellite answers
-  theforeman.foreman.status_info:
+  redhat.satellite.status_info:
   register: satellite_status
 
 - name: Show target
@@ -18,7 +31,28 @@
       Satellite {{ satellite_url }} version {{ satellite_status.status.version | default('?') }},
       organization {{ satellite_organization }}, location {{ satellite_location }}
 
-- name: Detect in-cluster service account
-  ansible.builtin.stat:
-    path: /var/run/secrets/kubernetes.io/serviceaccount/token
-  register: sa_token
+# Launched by EDA for a push: skip the run when no pushed commit touches
+# satellite/ (fleet/ and aap/ changes are not this playbook's business).
+- name: Paths changed by the push
+  ansible.builtin.set_fact:
+    gitops_changed_paths: >-
+      {{ (gitops_payload_commits | map(attribute='added') | flatten)
+         + (gitops_payload_commits | map(attribute='modified') | flatten)
+         + (gitops_payload_commits | map(attribute='removed') | flatten) }}
+  # Gitea lists at most 5 commits per push (UI.FEED_MAX_COMMIT_NUM): when the
+  # push had more, the list is incomplete, so do a full run instead.
+  when: >-
+    gitops_payload_commits is defined and gitops_payload_commits is iterable
+    and gitops_payload_commits is not string
+    and (gitops_total_commits | default(0) | int) <= (gitops_payload_commits | length)
+
+- name: Nothing under satellite/ changed
+  ansible.builtin.debug:
+    msg: >-
+      Push {{ gitops_commit | default('?') | truncate(10, true, '') }} by {{ gitops_pusher | default('?') }}
+      changes only {{ gitops_changed_paths | unique | join(', ') }}; Satellite is left alone.
+  when: gitops_changed_paths is defined and (gitops_changed_paths | select('match', 'satellite/') | list | length == 0)
+
+- name: End the run (no satellite/ change)
+  ansible.builtin.meta: end_host
+  when: gitops_changed_paths is defined and (gitops_changed_paths | select('match', 'satellite/') | list | length == 0)

@@ -4,7 +4,7 @@
 - name: Structure
   block:
     - name: Lifecycle environments
-      theforeman.foreman.lifecycle_environment:
+      redhat.satellite.lifecycle_environment:
         organization: "{{ satellite_organization }}"
         name: "{{ item.name }}"
         prior: "{{ item.prior }}"
@@ -15,7 +15,7 @@
         label: "{{ item.prior }} -> {{ item.name }}"
 
     - name: Custom products
-      theforeman.foreman.product:
+      redhat.satellite.product:
         organization: "{{ satellite_organization }}"
         name: "{{ item.name }}"
         description: "{{ item.description | default(omit) }}"
@@ -25,7 +25,7 @@
         label: "{{ item.name }}"
 
     - name: Custom repositories
-      theforeman.foreman.repository:
+      redhat.satellite.repository:
         organization: "{{ satellite_organization }}"
         product: "{{ item.0.name }}"
         name: "{{ item.1.name }}"
@@ -37,7 +37,7 @@
         label: "{{ item.0.name }}/{{ item.1.name }}"
 
     - name: Content views
-      theforeman.foreman.content_view:
+      redhat.satellite.content_view:
         organization: "{{ satellite_organization }}"
         name: "{{ item.name }}"
         description: "{{ item.description | default(omit) }}"
@@ -49,7 +49,7 @@
         label: "{{ item.name }}"
 
     - name: Composite content views
-      theforeman.foreman.content_view:
+      redhat.satellite.content_view:
         organization: "{{ satellite_organization }}"
         name: "{{ item.name }}"
         description: "{{ item.description | default(omit) }}"
@@ -61,7 +61,7 @@
         label: "{{ item.name }}"
 
     - name: Host collections (patch waves)
-      theforeman.foreman.host_collection:
+      redhat.satellite.host_collection:
         organization: "{{ satellite_organization }}"
         name: "{{ item.name }}"
         description: "{{ item.description | default(omit) }}"
@@ -71,7 +71,7 @@
         label: "{{ item.name }}"
 
     - name: Activation keys
-      theforeman.foreman.activation_key:
+      redhat.satellite.activation_key:
         organization: "{{ satellite_organization }}"
         name: "{{ item.name }}"
         lifecycle_environment: "{{ item.lifecycle_environment }}"
@@ -85,7 +85,7 @@
         label: "{{ item.name }} ({{ item.lifecycle_environment }})"
 
     - name: Host groups (parents before children)
-      theforeman.foreman.hostgroup:
+      redhat.satellite.hostgroup:
         name: "{{ item.name }}"
         parent: "{{ item.parent | default(omit) }}"
         description: "{{ item.description | default(omit) }}"
@@ -102,7 +102,7 @@
         label: "{{ (item.parent ~ '/') if item.parent is defined else '' }}{{ item.name }}"
 
     - name: Roles
-      theforeman.foreman.role:
+      redhat.satellite.role:
         name: "{{ item.name }}"
         description: "{{ item.description | default(omit) }}"
         organizations: ["{{ satellite_organization }}"]
@@ -114,7 +114,7 @@
         label: "{{ item.name }}"
 
     - name: User groups
-      theforeman.foreman.usergroup:
+      redhat.satellite.usergroup:
         name: "{{ item.name }}"
         roles: "{{ item.roles }}"
         state: present

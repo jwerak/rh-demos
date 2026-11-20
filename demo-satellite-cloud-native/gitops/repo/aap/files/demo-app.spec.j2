@@ -1,0 +1,52 @@
+{# demo-app RPM for "SAT · Publish new version". Same package as the CLI build
+   (scripts/demo-scenarios.sh build_and_upload_rpm): CLI + a web page with the
+   version and host, served by python3 http.server (no new dependencies). #}
+Name:    demo-app
+Version: {{ app_version }}
+Release: 1%{?dist}
+Summary: {{ app_description }}
+License: MIT
+BuildArch: noarch
+Requires: python3
+
+%description
+{{ app_description }}
+
+%install
+mkdir -p %{buildroot}/usr/bin %{buildroot}/usr/share/demo-app/www %{buildroot}/usr/lib/systemd/system
+cat > %{buildroot}/usr/bin/demo-app <<'SCRIPT'
+#!/bin/bash
+echo "{{ app_description }} v{{ app_version }} — managed via Red Hat Satellite"
+SCRIPT
+chmod 755 %{buildroot}/usr/bin/demo-app
+cat > %{buildroot}/usr/share/demo-app/www/index.html <<'HTML'
+<!doctype html><html><head><meta charset=utf-8><meta http-equiv=refresh content=10>
+<title>__HOST__ - demo-app {{ app_version }}</title>
+<style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font-family:Red Hat Display,Helvetica,Arial,sans-serif;background:#151515;color:#fff;text-align:center}
+.h{font-size:40px;color:#a3a3a3}.v{font-size:140px;font-weight:700;color:#ee0000;line-height:1.1}.d{font-size:24px}</style></head>
+<body><div><div class=h>__HOST__</div><div class=v>v{{ app_version }}</div><div class=d>{{ app_description }}</div>
+<div class=h style=font-size:18px;margin-top:24px>package demo-app-{{ app_version }} delivered by Red Hat Satellite</div></div></body></html>
+HTML
+cat > %{buildroot}/usr/lib/systemd/system/demo-app-web.service <<'UNIT'
+[Unit]
+Description={{ app_description }} web page
+After=network-online.target
+[Service]
+ExecStart=/usr/bin/python3 -m http.server 80 --directory /usr/share/demo-app/www
+Restart=always
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+%post
+sed -i "s/__HOST__/$(hostname -s)/g" /usr/share/demo-app/www/index.html || :
+systemctl daemon-reload >/dev/null 2>&1 || :
+systemctl enable --now demo-app-web.service >/dev/null 2>&1 || :
+
+%preun
+[ $1 -eq 0 ] && systemctl disable --now demo-app-web.service >/dev/null 2>&1 || :
+
+%files
+/usr/bin/demo-app
+/usr/share/demo-app/www/index.html
+/usr/lib/systemd/system/demo-app-web.service

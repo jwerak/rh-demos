@@ -1,0 +1,89 @@
+---
+# HOST · Update package / HOST · Undo last package transaction.
+# Runs a remote execution job in Satellite (script provider = pull-mqtt, the
+# hosts fetch it themselves) and waits for the result; the same job can be
+# started in the Satellite UI: Hosts -> select -> Schedule remote job.
+# AAP twins of `run_on_vm <host> "sudo dnf -y upgrade demo-app"` and
+# `run_on_vm <host> "sudo dnf -y history undo last"`.
+#
+# Template extra var: host_action = update | undo.
+# Survey: host_search (Satellite search, e.g. "name ~ lc-dev"), package
+# (update, default demo-app), advisory (update, optional: install exactly
+# this erratum instead of the newest package).
+- name: Package action on hosts through Satellite remote execution
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: [_katello.yml]
+  vars:
+    host_action: update
+    package: demo-app
+    advisory: ""
+    api: &api
+      url_username: "{{ sat_user }}"
+      url_password: "{{ sat_password }}"
+      force_basic_auth: true
+      validate_certs: false
+  module_defaults:
+    group/redhat.satellite.satellite:
+      server_url: "{{ sat_url }}"
+      username: "{{ sat_user }}"
+      password: "{{ sat_password }}"
+      validate_certs: false
+  tasks:
+    - name: Validate the request
+      ansible.builtin.assert:
+        that:
+          - host_search is defined and host_search | length > 0
+          - host_action in ['update', 'undo']
+        quiet: true
+
+    - name: Job template and inputs
+      ansible.builtin.set_fact:
+        rex: >-
+          {{ {'job_template': 'Run Command - Script Default',
+              'inputs': {'command': 'dnf -y history undo last && rpm -q ' ~ package}} if host_action == 'undo'
+             else {'job_template': 'Install Errata - Katello Script Default',
+                   'inputs': {'errata': advisory}} if advisory | length > 0
+             else {'job_template': 'Update Package - Katello Script Default',
+                   'inputs': {'package': package}} }}
+
+    - name: Start the remote execution job ({{ rex.job_template }})
+      redhat.satellite.job_invocation:
+        search_query: "{{ host_search }}"
+        job_template: "{{ rex.job_template }}"
+        inputs: "{{ rex.inputs }}"
+        description_format: "AAP {{ awx_job_id | default('local') }}: {{ host_action }} {{ advisory or package }}"
+      register: rex_job
+
+    - name: Wait for the hosts (pull-mqtt, usually under a minute)
+      ansible.builtin.uri:
+        url: "{{ sat_url }}/api/job_invocations/{{ rex_job.entity.job_invocations[0].id }}"
+        <<: *api
+      register: rex_state
+      # status_label settles a few seconds after the last host reported
+      until: rex_state.json.status_label in ['succeeded', 'failed', 'cancelled']
+      retries: 60
+      delay: 5
+
+    - name: Output per host
+      ansible.builtin.uri:
+        url: "{{ sat_url }}/api/job_invocations/{{ rex_job.entity.job_invocations[0].id }}/hosts/{{ item.id }}"
+        <<: *api
+      loop: "{{ rex_state.json.targeting.hosts }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: rex_out
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ item.item.name }}: {{ (item.json.output | default([]) | selectattr('output_type', 'equalto', 'stdout') | map(attribute='output') | join('')).splitlines() | map('trim') | reject('match', '^(Exit status|$)') | list | last | default('?') }}"
+      loop: "{{ rex_out.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Job succeeded
+      ansible.builtin.assert:
+        that: rex_state.json.status_label == 'succeeded'
+        fail_msg: "Remote execution {{ rex_state.json.status_label }}: Satellite -> Monitor -> Jobs -> #{{ rex_job.entity.job_invocations[0].id }}"
+        quiet: true

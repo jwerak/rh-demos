@@ -8,7 +8,7 @@
 - name: Registration commands
   block:
     - name: Generate registration commands
-      theforeman.foreman.registration_command:
+      redhat.satellite.registration_command:
         organization: "{{ satellite_organization }}"
         location: "{{ satellite_location }}"
         hostgroup: "{{ item.hostgroup }}"
@@ -50,33 +50,16 @@
           data: "{{ registration_data }}"
       no_log: true
 
-    - name: Detect in-cluster service account
-      ansible.builtin.stat:
-        path: /var/run/secrets/kubernetes.io/serviceaccount/token
-      register: sa_token
-
-    - name: Apply Secret via Kubernetes API (in cluster)
-      ansible.builtin.uri:
-        url: "{{ k8s_api }}/namespaces/{{ registration_namespace }}/secrets/{{ registration_secret_name }}?fieldManager=satellite-as-code&force=true"
-        method: PATCH
-        headers:
-          Authorization: "Bearer {{ lookup('ansible.builtin.file', '/var/run/secrets/kubernetes.io/serviceaccount/token') }}"
-          Content-Type: application/apply-patch+yaml
-        body: "{{ registration_secret | to_json }}"
-        body_format: raw
-        ca_path: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-        status_code: [200, 201]
-      vars:
-        k8s_api: https://kubernetes.default.svc/api/v1
-      when: sa_token.stat.exists
-      no_log: true
-
-    - name: Apply Secret with oc (laptop fallback)
-      ansible.builtin.command:
-        cmd: oc apply -f -
-        stdin: "{{ registration_secret | to_json }}"
-      when: not sa_token.stat.exists
-      changed_when: true
+    # kubernetes.core picks the credentials up from the environment: the AAP
+    # "OpenShift API Bearer Token" credential (K8S_AUTH_HOST/K8S_AUTH_API_KEY),
+    # KUBECONFIG on a laptop (run-local.sh), or the pod's service account in
+    # the Argo CD fallback Job.
+    - name: Apply Secret
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        force: true
+        definition: "{{ registration_secret }}"
       no_log: true
 
     - name: Registration commands stored

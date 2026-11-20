@@ -1,0 +1,73 @@
+---
+# GitOps · Roll back last release - the AAP twin of `release.sh rollback`.
+# Opens a pull request that restores satellite/releases.yml to what it was
+# before the last commit that changed it (a revert of that file).
+- name: Roll back the last change of releases.yml
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: [_vars.yml]
+  vars:
+    gitea_auth: &auth
+      url_username: "{{ gitea_owner }}"
+      url_password: "{{ gitea_token }}"
+      force_basic_auth: true
+      validate_certs: false
+  tasks:
+    - name: Last commit on main that touched releases.yml
+      ansible.builtin.uri:
+        url: "{{ gitea_api }}/commits?sha=main&path=satellite/releases.yml&limit=1&stat=false"
+        <<: *auth
+      register: last_commit
+
+    - name: Its parent
+      ansible.builtin.uri:
+        url: "{{ gitea_api }}/git/commits/{{ last_commit.json[0].sha }}"
+        <<: *auth
+      register: last_detail
+
+    - name: releases.yml before that commit, and now
+      ansible.builtin.uri:
+        url: "{{ gitea_api }}/contents/satellite/releases.yml?ref={{ item }}"
+        <<: *auth
+      loop:
+        - "{{ last_detail.json.parents[0].sha }}"
+        - main
+      register: rel_versions
+
+    - name: What goes back
+      ansible.builtin.set_fact:
+        before: "{{ (rel_versions.results[0].json.content | b64decode | from_yaml).environments }}"
+        current: "{{ (rel_versions.results[1].json.content | b64decode | from_yaml).environments }}"
+        reverted_subject: "{{ last_commit.json[0].commit.message.splitlines() | first }}"
+
+    - name: Changes
+      ansible.builtin.set_fact:
+        changes: "{{ changes | default([]) + [item ~ ': ' ~ current[item] ~ ' -> ' ~ before[item]] }}"
+      loop: [Dev, QA, Prod]
+      when: before[item] != current[item]
+
+    - name: Something to roll back
+      ansible.builtin.assert:
+        that: changes is defined
+        fail_msg: "The last change of releases.yml ({{ reverted_subject }}) changed no environment."
+        quiet: true
+
+    - name: Open the pull request
+      ansible.builtin.include_tasks: tasks/gitea-pr.yml
+      vars:
+        pr_branch: "rollback-{{ last_commit.json[0].sha[:7] }}"
+        pr_file: satellite/releases.yml
+        pr_sha: "{{ rel_versions.results[1].json.sha }}"
+        pr_content: "{{ rel_versions.results[0].json.content | b64decode }}"
+        pr_title: "Rollback {{ changes | join(', ') }}"
+        pr_body: |
+          Requested by **{{ requested_by }}** through AAP ({{ job_ref }}).
+
+          Reverts "{{ reverted_subject }}" ({{ last_commit.json[0].sha[:10] }}).
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "Rollback {{ changes | join(', ') }}"
+          - "Pull request #{{ pr_number }}: {{ pr_url }} ({{ 'merged' if pr_merged | bool else 'waiting for approval' }})"

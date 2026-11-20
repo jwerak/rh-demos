@@ -16,7 +16,7 @@ source "$(dirname "$0")/lib.sh"
 ERRATUM="${1:-}"; [ -n "${ERRATUM}" ] || { sed -n '2,12p' "$0"; exit 1; }
 ENV=$(lce_name "${2:-prod}") || die "environment must be dev, qa or prod"
 SAT_URL="https://${SAT_FQDN}"
-api() { curl -sSk --fail-with-body -u "admin:${DEMO_PASSWORD}" -H 'Content-Type: application/json' "$@"; }
+api() { curl -K <(printf 'user = "admin:%s"\n' "$(_curl_cfg_quote "${DEMO_PASSWORD}")") -sSk --fail-with-body -H 'Content-Type: application/json' "$@"; }
 
 # Which Demo-App-CV version does the composite in ENV contain? Components of
 # a composite version come from ?composite_version_id=<id>.

@@ -1,0 +1,88 @@
+---
+# SAT · Publish new version - the AAP twin of `publish-version.sh VERSION`.
+# Builds demo-app VERSION inside the EE (files/demo-app.spec.j2), uploads it to
+# Demo-App/demo-app-rpms, publishes Demo-App-CV and the composite
+# RHEL9-FullStack. Promotes nothing: that is "GitOps · Promote release".
+# Survey: app_version (higher than installed; an existing version is refused).
+- name: Build demo-app and publish a new content view version
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: [_katello.yml]
+  vars:
+    app_description: Demo Application
+    build_dir: /tmp/demo-app-build
+  module_defaults:
+    group/redhat.satellite.satellite:
+      server_url: "{{ sat_url }}"
+      username: "{{ sat_user }}"
+      password: "{{ sat_password }}"
+      validate_certs: false
+      organization: "{{ sat_org }}"
+  tasks:
+    - name: Validate the request
+      ansible.builtin.assert:
+        that: (app_version | default('') | string) is match('^[0-9]+([.][0-9]+)*$')
+        fail_msg: "app_version like 5.0"
+        quiet: true
+
+    - name: demo-app versions already in Satellite
+      redhat.satellite.resource_info:
+        resource: packages
+        search: name = demo-app
+      register: pkgs
+
+    - name: Version is new
+      ansible.builtin.assert:
+        that: (app_version | string) not in (pkgs.resources | map(attribute='version') | list)
+        fail_msg: >-
+          demo-app {{ app_version }} already exists ({{ pkgs.resources | map(attribute='version') | unique | join(', ') }});
+          pick a new version, e.g. {{ (pkgs.resources | map(attribute='version') | map('regex_replace', '[.].*$', '') | map('int') | max) + 1 }}.0
+        quiet: true
+
+    - name: Build tree
+      ansible.builtin.file:
+        path: "{{ build_dir }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [BUILD, RPMS, SOURCES, SPECS, SRPMS]
+
+    - name: Spec file
+      ansible.builtin.template:
+        src: files/demo-app.spec.j2
+        dest: "{{ build_dir }}/SPECS/demo-app.spec"
+        mode: "0644"
+
+    - name: Build the RPM
+      ansible.builtin.command:
+        cmd: rpmbuild --define "_topdir {{ build_dir }}" -bb {{ build_dir }}/SPECS/demo-app.spec
+      changed_when: true
+
+    - name: Built package
+      ansible.builtin.find:
+        paths: "{{ build_dir }}/RPMS/noarch"
+        patterns: "demo-app-{{ app_version }}-*.rpm"
+      register: rpm
+
+    - name: Upload to Demo-App/demo-app-rpms
+      redhat.satellite.content_upload:
+        src: "{{ rpm.files[0].path }}"
+        repository: demo-app-rpms
+        product: Demo-App
+
+    - name: Publish Demo-App-CV, then the composite RHEL9-FullStack
+      redhat.satellite.content_view_version:
+        content_view: "{{ item }}"
+        description: "demo-app {{ app_version }} (AAP {{ awx_job_id | default('local') }})"
+      loop: [Demo-App-CV, RHEL9-FullStack]
+
+    - name: Newest composite version
+      redhat.satellite.content_view_version_info:
+        content_view: RHEL9-FullStack
+      register: cvv
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "RHEL9-FullStack {{ (cvv.content_view_versions | sort(attribute='major,minor') | last).version }} published (demo-app {{ app_version }}), Library only."
+          - "Promote it through Git: GitOps · Promote release (lifecycle_env dev, version empty = newest)"

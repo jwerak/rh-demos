@@ -1,0 +1,6 @@
+---
+# HOST · Update package (see host-action.yml)
+- name: Update a package through Satellite remote execution
+  ansible.builtin.import_playbook: host-action.yml
+  vars:
+    host_action: update

@@ -1,0 +1,6 @@
+---
+# HOST · Undo last package transaction (see host-action.yml)
+- name: Undo the last dnf transaction through Satellite remote execution
+  ansible.builtin.import_playbook: host-action.yml
+  vars:
+    host_action: undo

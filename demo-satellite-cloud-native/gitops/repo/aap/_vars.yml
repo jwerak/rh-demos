@@ -1,0 +1,12 @@
+---
+# Common variables of the "GitOps ·" playbooks (vars_files).
+gitea_url: "{{ lookup('ansible.builtin.env', 'GITEA_URL') }}"
+gitea_token: "{{ lookup('ansible.builtin.env', 'GITEA_TOKEN') }}"
+gitea_owner: gitops
+gitea_repo: rhel-fleet
+gitea_api: "{{ gitea_url | regex_replace('/$', '') }}/api/v1/repos/{{ gitea_owner }}/{{ gitea_repo }}"
+auto_merge: "no"
+requested_by: "{{ awx_user_name | default(lookup('ansible.builtin.env', 'USER'), true) | default('unknown', true) }}"
+job_ref: "{{ ('AAP job ' ~ awx_job_id) if awx_job_id is defined else 'local run' }}"
+lce_names: {dev: Dev, qa: QA, prod: Prod}
+satellite_url: "{{ lookup('ansible.builtin.env', 'FOREMAN_SERVER_URL') }}"

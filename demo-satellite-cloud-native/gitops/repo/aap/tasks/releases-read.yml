@@ -1,0 +1,37 @@
+---
+# Read satellite/releases.yml from main (content + blob sha) and what Satellite
+# serves per lifecycle environment. Output: rel_text, rel_sha, rel_declared
+# {Dev,QA,Prod}, sat_serves {Dev,QA,Prod}, sat_versions (sorted, newest last).
+- name: Read satellite/releases.yml on main
+  ansible.builtin.uri:
+    url: "{{ gitea_api }}/contents/satellite/releases.yml?ref=main"
+    url_username: "{{ gitea_owner }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: rel_file
+
+- name: Declared versions
+  ansible.builtin.set_fact:
+    rel_text: "{{ rel_file.json.content | b64decode }}"
+    rel_sha: "{{ rel_file.json.sha }}"
+    rel_declared: "{{ (rel_file.json.content | b64decode | from_yaml).environments }}"
+
+- name: Content view versions in Satellite
+  redhat.satellite.content_view_version_info:
+    organization: Demo_Org
+    content_view: RHEL9-FullStack
+  register: cv_info
+
+- name: Satellite versions, oldest first
+  ansible.builtin.set_fact:
+    sat_versions: "{{ cv_info.content_view_versions | sort(attribute='major,minor') | map(attribute='version') | map('string') | list }}"
+    sat_serves: {}
+
+- name: What Satellite serves per environment
+  ansible.builtin.set_fact:
+    sat_serves: "{{ sat_serves | combine({item.1.name: item.0.version | string}) }}"
+  loop: "{{ cv_info.content_view_versions | subelements('environments', skip_missing=True) }}"
+  loop_control:
+    label: "{{ item.1.name }}={{ item.0.version }}"
+  when: item.1.name in ['Dev', 'QA', 'Prod']

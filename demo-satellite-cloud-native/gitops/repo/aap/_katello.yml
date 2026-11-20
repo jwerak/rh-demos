@@ -1,0 +1,8 @@
+---
+# Katello REST API access for the "SAT ·" playbooks (vars_files), from the
+# "Satellite API" credential (FOREMAN_* environment).
+sat_url: "{{ lookup('ansible.builtin.env', 'FOREMAN_SERVER_URL') | regex_replace('/$', '') }}"
+sat_user: "{{ lookup('ansible.builtin.env', 'FOREMAN_USERNAME') }}"
+sat_password: "{{ lookup('ansible.builtin.env', 'FOREMAN_PASSWORD') }}"
+sat_org: Demo_Org
+lce_names: {dev: Dev, qa: QA, prod: Prod}

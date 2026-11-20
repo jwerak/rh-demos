@@ -5,7 +5,7 @@
 - name: Host collection membership
   block:
     - name: Find matching hosts per collection
-      theforeman.foreman.resource_info:
+      redhat.satellite.resource_info:
         organization: "{{ satellite_organization }}"
         resource: hosts
         search: "{{ item.hosts_search }}"
@@ -15,7 +15,7 @@
       register: hc_matches
 
     - name: Read current members
-      theforeman.foreman.resource_info:
+      redhat.satellite.resource_info:
         organization: "{{ satellite_organization }}"
         resource: host_collections
         search: 'name = "{{ item.item.name }}"'

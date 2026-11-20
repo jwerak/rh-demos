@@ -138,7 +138,7 @@ echo
 
 # Argo CD skips the auto-sync of a commit merged while a sync is running, so
 # a PR merged during a running satellite-cac Job would never get its own Job.
-if [ "$(oc get applications.argoproj.io satellite-config -n openshift-gitops -o jsonpath='{.status.operationState.phase}' 2>/dev/null)" = "Running" ]; then
+if satellite_apply_busy; then
   warn "satellite-config is syncing right now (a Job runs): merge this PR only after it has finished, or press Sync afterwards"
 fi
 
@@ -150,11 +150,11 @@ fi
 PR=$(gitea_pr "${BRANCH}" "${TITLE}" "$(git log -1 --format=%b; echo; echo "Opened by release.sh (${ACTION}) as ${USER:-presenter}.")")
 echo "Pull request #${PR}: ${GITEA_HTTP}/${GITEA_USER}/${GITEA_REPO}/pulls/${PR}"
 if [ "${MERGE}" = "true" ]; then
-  for _ in $(seq 1 60); do   # wait for a running Job (see above), max 5 min
-    [ "$(oc get applications.argoproj.io satellite-config -n openshift-gitops -o jsonpath='{.status.operationState.phase}' 2>/dev/null)" = "Running" ] || break
+  for _ in $(seq 1 60); do   # argo executor: wait for a running Job (see above), max 5 min
+    satellite_apply_busy || break
     sleep 5
   done
   gitea_merge "${PR}"
-  argocd_refresh satellite-config
-  echo "Merged. Argo CD syncs satellite-config, the PostSync job promotes (~1-3 min)."
+  [ "${SATELLITE_EXECUTOR}" = "argo" ] && argocd_refresh satellite-config
+  echo "Merged. Satellite applies it in ~1.5 min: $(satellite_apply_where)"
 fi

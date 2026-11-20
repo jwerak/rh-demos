@@ -1,6 +1,6 @@
 # Plan: AAP as the operator interface and the Satellite executor
 
-Status: **approved 2026-11-20**. Decisions: D1 = EDA, D2 = prefix scheme as
+Status: **implemented 2026-11-20** (P0-P6 done; D4 optional template not built). Decisions: D1 = EDA, D2 = prefix scheme as
 proposed, D3 = `redhat.satellite`, D4 = reset as an optional last package,
 D5 = baseline committed before P0.
 
@@ -94,7 +94,28 @@ Gitea push (main) ──webhook──▶ Argo CD rhel-fleet ──▶ VirtualMac
 
 ## Work packages
 
-### P0 - Spike: verify the risky assumptions (~1 h)
+### P0 - Spike: verify the risky assumptions (~1 h) - DONE 2026-11-20
+
+Results:
+- **EE: GO, no Automation Hub token.** AAP 2.7's default EE
+  `ee-supported-rhel9` contains `redhat.satellite` 5.13.0, `kubernetes.core`
+  6.4.0, `redhat.openshift_virtualization` 2.3.0 and python `kubernetes`. An
+  in-cluster Docker build `FROM` it works (cluster pull secret) and
+  `rpm-build` installs from UBI repos -> one custom EE = ee-supported + rpm-build.
+- **EDA: GO.** Enabled in instance `aap` (pods up in ~6 min). Event Streams
+  API present; credential types include "HMAC Event Stream" (Gitea signs with
+  `X-Gitea-Signature` / `X-Hub-Signature-256`) and "Basic Event Stream". No
+  decision environment exists yet -> create one (de-supported-rhel9) in P2.
+  The end-to-end Gitea -> event stream -> rulebook test is the first task of P2.
+- **Satellite REX pull-mqtt: GO after a fix.** `yggdrasild` had exited on
+  lc-prod and app-dev-00 ("cannot connect to broker ... no route to host" at
+  boot, `Restart=no`) and never came back; after a restart a "Run Command"
+  job succeeded on both hosts (lc-prod: demo-app-1.2). Fix in P4: systemd
+  drop-in `Restart=always`, `RestartSec=30` in lc and fleet cloud-init, plus a
+  one-off restart for existing hosts.
+- **Kubernetes API from a job pod:** not separately tested (standard bearer-token
+  credential); covered in P1.
+
 - Log in, cluster still alive and demo in start state.
 - `registry.redhat.io/ansible-automation-platform-*/ee-supported-rhel9`
   (pulled with the cluster pull secret, no Automation Hub token): does it
@@ -107,7 +128,16 @@ Gitea push (main) ──webhook──▶ Argo CD rhel-fleet ──▶ VirtualMac
 - An AAP job pod can talk to the Kubernetes API with a bearer-token credential.
 Exit: go/no-go per item; plan adjusted before P1.
 
-### P1 - Execution environment, credentials, RBAC (~1.5 h)
+### P1 - Execution environment, credentials, RBAC (~1.5 h) - DONE 2026-11-20
+
+Done: runner image = ee-supported-rhel9 + rpm-build ("GitOps EE"), playbooks
+on `redhat.satellite`, cluster writes via `kubernetes.core` (one path for the
+Argo Job, AAP and run-local.sh), `bootstrap/aap-rbac.yaml` (SA `aap-demo`,
+namespace Role, image-puller for `system:serviceaccounts:aap`), AAP
+credentials "Satellite API" + "OpenShift API (demo namespace)", EE "GitOps
+EE", templates `SAT · Apply Satellite as code` and `GitOps · Request RHEL
+server` (old name removed). Verified: AAP job 22 successful in 83 s.
+
 - One EE for everything (D3): `gitops/runner/Containerfile` becomes
   `FROM ee-supported-rhel9` (+ `rpm-build`, python `kubernetes` if missing).
   The same image runs AAP jobs, the Argo fallback Job and `run-local.sh`, and
@@ -120,7 +150,18 @@ Exit: go/no-go per item; plan adjusted before P1.
   and "Gitea API" (exists), "OpenShift API Bearer Token" credential, EE, project.
 - `bootstrap.sh aapconfig` creates the SA token and the credentials.
 
-### P2 - Satellite as code executed by AAP (~2.5 h)
+### P2 - Satellite as code executed by AAP (~2.5 h) - DONE 2026-11-20
+
+Done and verified: EDA objects as code (credentials `aap_controller`,
+`gitea_push_hmac` [HMAC, X-Hub-Signature-256, hex, prefix "sha256="], DE
+`de_supported`, project `rhel_fleet`, event stream `gitea_push`, activation
+`satellite_as_code`), rulebook `rulebooks/satellite-as-code.yml`, Gitea
+webhook to the event stream, `SATELLITE_EXECUTOR=aap` (default) removes the
+Argo CD app `satellite-config`, playbook ends early when a push changes nothing
+under `satellite/`, `release.sh`/`reset.sh`/`status.sh` follow the AAP job.
+Measured: PR merge -> AAP job created 7 s, done 84 s (Argo CD path ~2 min);
+push without satellite/ changes -> job ends in 14 s, Satellite untouched.
+
 - `site.yml`: write the Secret and the ConfigMap with `kubernetes.core.k8s`
   (in-cluster SA, AAP credential, or kubeconfig on the laptop: one code path
   instead of three).
@@ -131,7 +172,16 @@ Exit: go/no-go per item; plan adjusted before P1.
 - `release.sh --merge`, `reset.sh`, `status.sh`: wait for / report the AAP job
   instead of the Kubernetes Job (through the AAP API).
 
-### P3 - Release and content templates (~3 h)
+### P3 - Release and content templates (~3 h) - DONE 2026-11-20
+
+Done: `aap/promote-release.yml`, `record-state.yml`, `rollback-release.yml`,
+`hotfix.yml`, `publish-version.yml`, `status.yml`, shared `aap/tasks/`
+(Gitea PR, releases read) and `aap/files/demo-app.spec.j2`; templates with
+surveys. Deviation: the CLI keeps its own spec in `build_and_upload_rpm`
+(shared with c1 and the SOE profile); both produce the same package and the
+AGENTS.md note says to change them together. `gitops/scripts/aap-run.sh`
+launches any template from the terminal. Verified: whole Demo 1 through AAP.
+
 - Playbooks in `aap/`: `promote-release.yml`, `record-state.yml`,
   `rollback-release.yml` (Gitea contents API: read, edit, branch, PR, optional
   merge with retry), `hotfix.yml` (Katello incremental-update API + task wait),
@@ -141,7 +191,13 @@ Exit: go/no-go per item; plan adjusted before P1.
   and `publish-version.yml`.
 - CLI scripts keep their behaviour; acceptance checks are run on both paths.
 
-### P4 - Host and VM templates, Satellite UI path (~1.5 h)
+### P4 - Host and VM templates, Satellite UI path (~1.5 h) - DONE 2026-11-20 (UI clicks documented in P5)
+
+Done: `HOST · Update package` (update or one erratum), `HOST · Undo last
+package transaction` (Satellite REX, pull-mqtt), `VM · Create server by hand
+(V1)`; yggdrasild `Restart=always` drop-in in lc and fleet cloud-init and on
+the running hosts. Verified on lc-dev, lc-qa, lc-prod; V1 VM created in 12 s.
+
 - `HOST · Update package`, `HOST · Undo last package transaction`:
   `job_invocation` through Satellite (pull-mqtt), wait for the result.
 - Satellite UI steps for the same actions documented with exact clicks.
@@ -149,7 +205,17 @@ Exit: go/no-go per item; plan adjusted before P1.
   `provisioned_by=manual` and applies it with `kubernetes.core.k8s`.
 - Console "Create from template" snippets (`templates/console-snippets.md`).
 
-### P5 - Run sheet and static page (~2 h)
+### P5 - Run sheet and static page (~2 h) - DONE 2026-11-20
+
+Done: `gitops/README.md` rewritten (architecture with AAP/EDA, template table
+with CLI twins, run sheet with `CLI ▸ / AAP ▸ / Satellite UI ▸ / Gitea ▸ /
+Console ▸` per step, `{{placeholders}}`, fallbacks, tear-down);
+`gitops/scripts/render-runsheet.sh` + `render_runsheet.py` (stdlib only,
+offline, CSP, secrets masked with show/copy, file mode 0600, refuses to write
+into the work tree unless the name is gitignored); `.gitignore` covers
+`*.local.html` and `runsheet*.html`. Satellite UI path "Select Action ->
+Schedule Remote Job" checked on the live UI.
+
 - Restructure `gitops/README.md`: per step the alternatives `CLI ▸ / AAP ▸ /
   Satellite UI ▸`, with timings for each path.
 - Placeholders in the Markdown: `{{SAT_URL}}`, `{{GITEA_URL}}`, `{{AAP_URL}}`,
@@ -163,7 +229,18 @@ Exit: go/no-go per item; plan adjusted before P1.
   `.gitignore` also covers `*.local.html` and `runsheet*.html` in case it is
   rendered into the tree. Renderer: python3 stdlib only (no new dependency).
 
-### P6 - Verification (~2.5 h)
+### P6 - Verification (~2.5 h) - DONE 2026-11-20
+
+Done: whole Demo 1 through AAP (me), independent code review (0 blockers, 10
+risks - all fixed), fresh-eyes rehearsal of the new run sheet by a subagent
+(T-30, Demo 1, Demo 2; all 11 templates worked, two launched through the AAP
+web UI, package update through the Satellite UI job wizard; doc fixes applied),
+new reset.sh tested (full apply launched and awaited), narrowed RBAC verified
+(`can-i get secret/rhsm-credentials` = no), Argo CD fallback executor
+exercised and switched back, run-local.sh not re-run (needs `podman login
+registry.redhat.io` on the laptop). Not done: `DEMO · Reset` template (D4,
+optional; `reset.sh` stays the reset path).
+
 - Demo 1 and Demo 2 end to end through the AAP path, then a CLI regression run.
 - Independent verifier subagent per demo (acceptance criteria 1-12, plus: each
   CLI step has a working AAP twin; package update works from the Satellite UI).

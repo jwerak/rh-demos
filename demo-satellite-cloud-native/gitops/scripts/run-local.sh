@@ -6,18 +6,21 @@
 #
 # Source of truth stays Git: the playbook runs from a fresh checkout of main in
 # Gitea (falls back to gitops/repo/ if Gitea is unreachable, and says so).
-# Runs with ansible-navigator in the runner image (podman build if missing);
+# Runs with ansible-navigator in AAP's supported EE (redhat.satellite);
 # Satellite is reached on https://SAT_FQDN, so the laptop needs that name to
-# resolve (route CNAME). The registration Secret is applied with `oc`.
+# resolve (route CNAME). Cluster writes use the laptop's kubeconfig.
 set -euo pipefail
 # shellcheck source=lib.sh
 source "$(dirname "$0")/lib.sh"
 require_cmd ansible-navigator podman git
 
-IMAGE=localhost/satellite-cac-runner:latest
+# site.yml needs only what AAP's supported EE ships (redhat.satellite,
+# kubernetes.core), so use it directly. Needs `podman login registry.redhat.io`.
+IMAGE="${RUN_LOCAL_EE:-registry.redhat.io/ansible-automation-platform-27/ee-supported-rhel9:latest}"
 if ! podman image exists "${IMAGE}"; then
-  log "Building ${IMAGE}"
-  podman build -t "${IMAGE}" "${GITOPS_DIR}/runner"
+  log "Pulling ${IMAGE}"
+  podman pull -q "${IMAGE}" >/dev/null \
+    || die "cannot pull ${IMAGE}: run 'podman login registry.redhat.io' (Customer Portal or service account) once"
 fi
 
 WORK=$(mktemp -d)
@@ -30,13 +33,11 @@ else
   cp -a "${GITOPS_DIR}/repo" "${WORK}/repo"
 fi
 
-# The playbook falls back to `oc apply` for the registration Secret when it
-# is not running in a pod; inside the EE that needs oc and a kubeconfig.
-# Copies, not the originals: ":Z" would relabel the host files, and the EE
-# user (UID 1001 under rootless podman) cannot read a 0600 kubeconfig.
+# kubernetes.core writes the registration Secret and the drift ConfigMap with
+# the laptop's kubeconfig. A copy, not the original: ":Z" would relabel the
+# host file, and the EE user cannot read a 0600 kubeconfig.
 cp "${KUBECONFIG:-${HOME}/.kube/config}" "${WORK}/kubeconfig"
-cp "$(command -v oc)" "${WORK}/oc"
-chmod 0644 "${WORK}/kubeconfig"; chmod 0755 "${WORK}/oc"
+chmod 0644 "${WORK}/kubeconfig"
 
 cd "${WORK}/repo/satellite"
 FOREMAN_SERVER_URL="https://${SAT_FQDN}" \
@@ -49,6 +50,6 @@ ansible-navigator run site.yml --mode stdout \
   --penv FOREMAN_SERVER_URL --penv FOREMAN_USERNAME --penv FOREMAN_PASSWORD \
   --penv FOREMAN_VALIDATE_CERTS --penv POD_NAMESPACE \
   --senv KUBECONFIG=/runner/kubeconfig \
-  --eev "${WORK}/kubeconfig:/runner/kubeconfig:Z" --eev "${WORK}/oc:/usr/local/bin/oc:Z" \
+  --eev "${WORK}/kubeconfig:/runner/kubeconfig:Z" \
   --playbook-artifact-enable false \
   "$@"

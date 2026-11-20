@@ -1,0 +1,27 @@
+---
+# Satellite as code, GitOps with AAP: Gitea pushes to an AAP Event Stream
+# (HMAC-signed webhook), this rulebook launches "SAT · Apply Satellite as code"
+# for every push to main. The job template runs one job at a time, so merges
+# queue instead of being skipped. The playbook ends early when the pushed
+# commits change nothing under satellite/ (a new server in fleet/, for example).
+- name: Satellite as code from Gitea pushes
+  hosts: all
+  sources:
+    # Replaced by the event stream "gitea_push" at activation time.
+    - name: gitea
+      ansible.eda.webhook:
+        host: 0.0.0.0
+        port: 5000
+  rules:
+    - name: Push to main
+      condition: event.payload.ref == "refs/heads/main"
+      action:
+        run_job_template:
+          name: "SAT · Apply Satellite as code"
+          organization: SOE Demo
+          job_args:
+            extra_vars:
+              gitops_commit: "{{ event.payload.after }}"
+              gitops_pusher: "{{ event.payload.pusher.login }}"
+              gitops_payload_commits: "{{ event.payload.commits }}"
+              gitops_total_commits: "{{ event.payload.total_commits }}"

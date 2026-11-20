@@ -58,6 +58,11 @@ GITEA_REPO_URL_INTERNAL="${GITEA_INTERNAL_URL}/${GITEA_USER}/${GITEA_REPO}.git"
 # SAT_FQDN through the router (passthrough route).
 : "${SATELLITE_API_URL:=https://${SAT_FQDN}}"
 
+# Who applies satellite/ after a merge: "aap" (EDA rulebook -> job template
+# "SAT · Apply Satellite as code", default) or "argo" (Argo CD app
+# satellite-config with a PostSync Job, the fallback).
+: "${SATELLITE_EXECUTOR:=aap}"
+
 # Ansible Automation Platform on the same cluster (bootstrap.sh aap / aapconfig)
 : "${AAP_NS:=aap}"
 : "${AAP_NAME:=aap}"
@@ -115,16 +120,21 @@ gitea_token() {
   cat "${GITEA_TOKEN_FILE}"
 }
 
+# Credentials go to curl through a config on a file descriptor (-K <(...)),
+# never on the command line where `ps` shows them.
+_curl_cfg_quote() { python3 -I -c 'import sys; print(sys.argv[1].replace("\\", "\\\\").replace("\"", "\\\""))' "$1"; }
+curl_aap() { curl -K <(printf 'user = "admin:%s"\n' "$(_curl_cfg_quote "$(aap_password)")") "$@"; }
+curl_gitea() { curl -K <(printf 'header = "Authorization: token %s"\n' "$(_curl_cfg_quote "$(gitea_token)")") "$@"; }
+
 # gitea_api METHOD PATH [JSON]  -> prints body, returns non-zero on HTTP >= 400
 gitea_api() {
   local method="$1" path="$2" data="${3:-}"
   local url
   url="$(gitea_url)/api/v1${path}"
   if [ -n "${data}" ]; then
-    curl -sSk --fail-with-body -X "${method}" -H "Authorization: token $(gitea_token)" \
-      -H 'Content-Type: application/json' -d "${data}" "${url}"
+    curl_gitea -sSk --fail-with-body -X "${method}" -H 'Content-Type: application/json' -d "${data}" "${url}"
   else
-    curl -sSk --fail-with-body -X "${method}" -H "Authorization: token $(gitea_token)" "${url}"
+    curl_gitea -sSk --fail-with-body -X "${method}" "${url}"
   fi
 }
 
@@ -216,4 +226,58 @@ argocd_refresh() {
     oc annotate applications.argoproj.io "${app}" -n openshift-gitops \
       argocd.argoproj.io/refresh=normal --overwrite >/dev/null 2>&1 || true
   done
+}
+
+# --- Who applies satellite/ (SATELLITE_EXECUTOR): AAP job or Argo CD Job ---
+SAT_APPLY_TEMPLATE="SAT · Apply Satellite as code"
+
+# aap_api PATH -> JSON from the controller API (admin, basic auth)
+aap_api() {
+  curl_aap -sSk --max-time 30 "$(aap_url)/api/controller/v2$1"
+}
+
+# Latest apply run as "<created-UTC> <status>"; status is one of
+# pending/waiting/running/successful/failed/error/canceled.
+satellite_apply_last() {
+  if [ "${SATELLITE_EXECUTOR}" = "aap" ]; then
+    aap_api "/jobs/?name=$(python3 -I -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "${SAT_APPLY_TEMPLATE}")&order_by=-id&page_size=1" 2>/dev/null \
+      | python3 -I -c 'import json,sys; r=json.load(sys.stdin)["results"]; print("%sZ %s %s" % (r[0]["created"][:19], r[0]["status"], r[0]["id"]) if r else "")'
+  else
+    local j
+    j=$(oc get job satellite-cac -n "${NAMESPACE}" -o jsonpath='{.metadata.creationTimestamp} {.status.succeeded}/{.status.failed}' 2>/dev/null) || return 0
+    case "$j" in *" 1/"*) echo "${j%% *} successful" ;; *"/1") echo "${j%% *} failed" ;; ?*) echo "${j%% *} running" ;; esac
+  fi
+}
+
+# Is an apply run in progress right now? (Argo CD skips commits merged during
+# a run; AAP queues them, so this only matters for the argo executor.)
+satellite_apply_busy() {
+  [ "${SATELLITE_EXECUTOR}" = "argo" ] || return 1
+  [ "$(oc get applications.argoproj.io satellite-config -n openshift-gitops -o jsonpath='{.status.operationState.phase}' 2>/dev/null)" = "Running" ]
+}
+
+# wait_satellite_apply SINCE_UTC [timeout_s] -> 0 when a run started after
+# SINCE succeeded, 1 when it failed, 2 on timeout. Prints where to look.
+wait_satellite_apply() {
+  local since="$1" timeout="${2:-600}" t=0 last created status
+  while [ "${t}" -lt "${timeout}" ]; do
+    last=$(satellite_apply_last)
+    created="${last%% *}"; status=$(awk '{print $2}' <<<"${last}")
+    if [ -n "${created}" ] && [[ ! "${created}" < "${since}" ]]; then
+      case "${status}" in
+        successful) return 0 ;;
+        failed|error|canceled) return 1 ;;
+      esac
+    fi
+    sleep 5; t=$((t + 5))
+  done
+  return 2
+}
+
+satellite_apply_where() {
+  if [ "${SATELLITE_EXECUTOR}" = "aap" ]; then
+    echo "AAP -> Jobs -> ${SAT_APPLY_TEMPLATE}"
+  else
+    echo "Argo CD satellite-config -> satellite-cac -> Logs (oc logs -n ${NAMESPACE} job/satellite-cac)"
+  fi
 }

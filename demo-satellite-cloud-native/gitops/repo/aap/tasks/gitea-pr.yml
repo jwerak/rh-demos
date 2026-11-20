@@ -1,0 +1,113 @@
+---
+# Change one file on a new branch and open a pull request in Gitea (REST API,
+# no git binary). Shared by the "GitOps ·" playbooks.
+#
+# Inputs: pr_branch, pr_file, pr_content (new text), pr_sha (blob sha of the
+# current file on main), pr_title, pr_body, auto_merge ("yes"/"no").
+# Output: pr_number, pr_url, pr_merged.
+# Needs gitea_url, gitea_token (credential "Gitea API"), gitea_api, gitea_auth.
+# An open PR for the same branch (e.g. an earlier run with merge "no") is
+# reused, never replaced: deleting its branch would close the PR.
+- name: Open pull request for {{ pr_branch }}
+  ansible.builtin.uri:
+    url: "{{ gitea_api }}/pulls?state=open&limit=50"
+    url_username: "{{ gitea_owner }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: gitea_open_prs
+
+- name: Existing pull request
+  ansible.builtin.set_fact:
+    gitea_existing_pr: "{{ gitea_open_prs.json | selectattr('head.ref', 'equalto', pr_branch) | first | default({}) }}"
+
+- name: Leftover branch {{ pr_branch }}
+  ansible.builtin.uri:
+    url: "{{ gitea_api }}/branches/{{ pr_branch }}"
+    url_username: "{{ gitea_owner }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [200, 404]
+  register: gitea_old_branch
+  when: not gitea_existing_pr
+
+- name: Delete the leftover branch
+  ansible.builtin.uri:
+    url: "{{ gitea_api }}/branches/{{ pr_branch }}"
+    method: DELETE
+    url_username: "{{ gitea_owner }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [204]
+  when: gitea_old_branch.status | default(0) == 200 and not gitea_existing_pr
+  changed_when: true
+
+- name: Commit {{ pr_file }} on branch {{ pr_branch }}
+  ansible.builtin.uri:
+    url: "{{ gitea_api }}/contents/{{ pr_file }}"
+    method: PUT
+    url_username: "{{ gitea_owner }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      branch: main
+      new_branch: "{{ pr_branch }}"
+      sha: "{{ pr_sha }}"
+      content: "{{ pr_content | b64encode }}"
+      message: "{{ pr_title }}"
+      author:
+        name: "{{ requested_by }}"
+        email: "{{ requested_by }}@example.com"
+    status_code: [200, 201]
+  changed_when: true
+  when: not gitea_existing_pr
+
+- name: Open the pull request
+  ansible.builtin.uri:
+    url: "{{ gitea_api }}/pulls"
+    method: POST
+    url_username: "{{ gitea_owner }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      title: "{{ pr_title }}"
+      head: "{{ pr_branch }}"
+      base: main
+      body: "{{ pr_body }}"
+    status_code: [201]
+  register: gitea_pr
+  changed_when: true
+  when: not gitea_existing_pr
+
+# Gitea answers 405 while it still computes mergeability of a fresh PR.
+- name: Merge (approval skipped by request)
+  ansible.builtin.uri:
+    url: "{{ gitea_api }}/pulls/{{ gitea_existing_pr.number | default(gitea_pr.json.number) }}/merge"
+    method: POST
+    url_username: "{{ gitea_owner }}"
+    url_password: "{{ gitea_token }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      Do: merge
+      delete_branch_after_merge: true
+    status_code: [200]
+  register: gitea_merge
+  changed_when: true
+  retries: 10
+  delay: 3
+  until: gitea_merge.status == 200
+  when: auto_merge | string | lower in ['yes', 'true', '1']
+
+- name: Pull request result
+  ansible.builtin.set_fact:
+    pr_number: "{{ gitea_existing_pr.number | default(gitea_pr.json.number) }}"
+    pr_url: "{{ gitea_existing_pr.html_url | default(gitea_pr.json.html_url) }}"
+    pr_merged: "{{ gitea_merge is defined and gitea_merge.status | default(0) == 200 }}"

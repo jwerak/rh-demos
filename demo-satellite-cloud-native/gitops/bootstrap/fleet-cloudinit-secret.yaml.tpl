@@ -154,6 +154,11 @@ stringData:
         log-level = "error"
         path-prefix = "yggdrasil"
         YGGEOF
+          # yggdrasild exits for good when the broker is briefly unreachable
+          # (e.g. at boot); keep it coming back so REX jobs never sit pending.
+          mkdir -p /etc/systemd/system/yggdrasild.service.d
+          printf '[Unit]\nStartLimitIntervalSec=0\n[Service]\nRestart=always\nRestartSec=30\n' > /etc/systemd/system/yggdrasild.service.d/restart.conf
+          systemctl daemon-reload
           systemctl enable --now yggdrasild com.redhat.Yggdrasil1.Worker1.foreman.service 2>/dev/null || true
         fi
         echo "--- Satellite Registration Complete ---"

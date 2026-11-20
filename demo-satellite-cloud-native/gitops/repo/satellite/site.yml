@@ -4,10 +4,13 @@
 # Runs as an Argo CD PostSync Job inside the cluster, or from a laptop
 # (gitops/scripts/run-local.sh). Same playbook, same Git content.
 #
-# Connection: theforeman.foreman env fallbacks
+# Collection: redhat.satellite (supported; shipped in AAP's ee-supported EE,
+# which is also the base of the runner image). Upstream theforeman.foreman
+# is a prefix swap.
+# Connection from the environment:
 #   FOREMAN_SERVER_URL  FOREMAN_USERNAME  FOREMAN_PASSWORD  FOREMAN_VALIDATE_CERTS
-# In AAP use redhat.satellite (the supported build of the same modules):
-# replace the "theforeman.foreman." prefix, nothing else changes.
+# (AAP: "Satellite API" credential; Argo CD fallback Job: Secret
+# satellite-cac-credentials; laptop: run-local.sh).
 #
 # Each section runs in its own block. A failure is recorded and the next
 # section still runs, so a typo in an RBAC permission cannot block a release.
@@ -22,7 +25,7 @@
     - structure.yml
     - releases.yml
   module_defaults:
-    group/theforeman.foreman.foreman:
+    group/redhat.satellite.satellite:
       server_url: "{{ satellite_url }}"
       username: "{{ satellite_user }}"
       password: "{{ satellite_password }}"

@@ -15,7 +15,8 @@
 #     aap       AAP operator + instance (gateway, controller), admin password,
 #               subscription from AAP_MANIFEST if set. Independent of the
 #               Satellite: can run in parallel with scripts/deploy.sh
-#     aapconfig job template 'Request RHEL server' + survey (needs gitea, aap)
+#     aapconfig AAP config as code: credentials, GitOps EE, job templates
+#               (needs gitea, seed, runner, aap)
 #     info      print URLs and credentials hints
 #
 # AAP_ENABLED=false skips aap/aapconfig in "all".
@@ -173,10 +174,19 @@ phase_secrets() {
 phase_runner() {
   log "Runner image (in-cluster build)"
   if oc get bc satellite-cac-runner -n "${NAMESPACE}" >/dev/null 2>&1; then
+    # The BuildConfig stores the Dockerfile inline: refresh it from the
+    # Containerfile, otherwise start-build rebuilds the old one. Also drop
+    # dockerStrategy.from: `oc new-build` pins the first FROM image there and
+    # it silently overrides the FROM line of every later Dockerfile.
+    oc patch bc satellite-cac-runner -n "${NAMESPACE}" --type merge -p \
+      "$(python3 -I -c 'import json,sys; print(json.dumps({"spec":{"source":{"dockerfile":open(sys.argv[1]).read()},"strategy":{"dockerStrategy":{"from":None}}}}))' "${GITOPS_DIR}/runner/Containerfile")" >/dev/null
     oc start-build satellite-cac-runner -n "${NAMESPACE}" --follow
   else
     oc new-build -n "${NAMESPACE}" --name satellite-cac-runner --strategy docker \
       --to satellite-cac-runner:latest -D - < "${GITOPS_DIR}/runner/Containerfile"
+    # see above: never let the BuildConfig pin the base image
+    oc patch bc satellite-cac-runner -n "${NAMESPACE}" --type merge \
+      -p '{"spec":{"strategy":{"dockerStrategy":{"from":null}}}}' >/dev/null 2>&1 || true
     sleep 5
     oc logs -f bc/satellite-cac-runner -n "${NAMESPACE}" || true
   fi
@@ -248,7 +258,23 @@ phase_apps() {
     --dry-run=client -o yaml \
     | oc label --local -f - argocd.argoproj.io/secret-type=repository demo=satellite-cloud-native -o yaml \
     | oc apply -f - >/dev/null
-  sed -e "s|__REPO_URL__|${repo_url}|g" "${GITOPS_DIR}/bootstrap/applications.yaml" | oc apply -f -
+  sed -e "s|__REPO_URL__|${repo_url}|g" "${GITOPS_DIR}/bootstrap/applications.yaml" \
+    | python3 -c '
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+if sys.argv[1] != "argo":   # Satellite as code runs in AAP (EDA), Argo CD keeps the VMs
+    docs = [d for d in docs if d["metadata"]["name"] != "satellite-config"]
+print(yaml.safe_dump_all(docs))' "${SATELLITE_EXECUTOR}" | oc apply -f -
+  if [ "${SATELLITE_EXECUTOR}" != "argo" ] \
+     && oc get applications.argoproj.io satellite-config -n openshift-gitops >/dev/null 2>&1; then
+    # No finalizer on the app: the ConfigMap/Job/RBAC stay, only Argo CD stops syncing.
+    oc delete applications.argoproj.io satellite-config -n openshift-gitops >/dev/null
+    log "  satellite-config removed from Argo CD (SATELLITE_EXECUTOR=aap: EDA + AAP apply satellite/)"
+  fi
+  # Executor switch: enable/disable the EDA side to match (needs AAP up).
+  if [ "${AAP_ENABLED:-true}" = "true" ] && [ -s "${AAP_PASSWORD_FILE}" ]; then
+    satellite_executor_wiring
+  fi
 }
 
 phase_webhook() {
@@ -311,6 +337,16 @@ phase_aap() {
   done
   [ "${code}" = "200" ] || die "controller not answering behind the gateway (oc get pods -n ${AAP_NS})"
 
+  # EDA enabled after the first install (or on some operator versions) lacks
+  # the system credential "_DEFAULT_EDA_PG_NOTIFY_CREDS"; creating any rulebook
+  # activation then fails with HTTP 500 ("'NoneType' object has no attribute
+  # 'id'"). create_initial_data is idempotent and adds what is missing.
+  if oc get deploy "${AAP_NAME}-eda-api" -n "${AAP_NS}" >/dev/null 2>&1; then
+    oc rollout status "deploy/${AAP_NAME}-eda-api" -n "${AAP_NS}" --timeout=600s >/dev/null
+    oc exec -n "${AAP_NS}" "deploy/${AAP_NAME}-eda-api" -c eda-api -- aap-eda-manage create_initial_data >/dev/null 2>&1 \
+      && log "  EDA initial data ensured" || warn "EDA create_initial_data failed (rulebook activations may return HTTP 500)"
+  fi
+
   mkdir -p "${CACHE_DIR}"
   oc get secret "${AAP_NAME}-admin-password" -n "${AAP_NS}" -o jsonpath='{.data.password}' | base64 -d > "${AAP_PASSWORD_FILE}" \
     || die "Secret ${AAP_NAME}-admin-password not found in ${AAP_NS}"
@@ -326,7 +362,7 @@ phase_aap() {
 aap_license() {
   local url cfg
   url="$(aap_url)"
-  cfg=$(curl -sk -u "admin:$(aap_password)" "${url}/api/controller/v2/config/" || true)
+  cfg=$(curl_aap -sk "${url}/api/controller/v2/config/" || true)
   if printf '%s' "${cfg}" | python3 -I -c 'import json,sys; li=json.load(sys.stdin).get("license_info") or {}; sys.exit(0 if li.get("valid_key") is True and li.get("license_type") not in (None, "", "open", "UNLICENSED") else 1)' 2>/dev/null; then
     log "  subscription already active"
     return 0
@@ -340,7 +376,7 @@ aap_license() {
   body=$(mktemp)
   python3 -I -c 'import base64,json,sys; print(json.dumps({"eula_accepted": True, "manifest": base64.b64encode(open(sys.argv[1],"rb").read()).decode()}))' \
     "${AAP_MANIFEST}" > "${body}"
-  if curl -sk --fail-with-body -u "admin:$(aap_password)" -H 'Content-Type: application/json' \
+  if curl_aap -sk --fail-with-body -H 'Content-Type: application/json' \
        -X POST --data-binary "@${body}" "${url}/api/controller/v2/config/" >/dev/null; then
     log "  subscription activated"
   else
@@ -354,45 +390,142 @@ aap_license() {
 # ansible.controller. AAP job pods run in the cluster, so the project and the
 # Gitea API credential use the internal service URL (no route, no TLS).
 phase_aapconfig() {
-  log "AAP configuration as code (job template 'Request RHEL server')"
+  log "AAP configuration as code (credentials, GitOps EE, job templates, EDA)"
   require_cmd ansible-playbook ansible-galaxy
   # The project syncs from Gitea; an empty repo fails with "pathspec 'main'".
   gitea_api GET "/repos/${GITEA_USER}/${GITEA_REPO}" | grep -q '"empty":false' \
     || die "Gitea repo ${GITEA_USER}/${GITEA_REPO} is empty: run 'bootstrap.sh seed' first"
   local c
-  for c in infra.aap_configuration ansible.platform ansible.controller; do
+  for c in infra.aap_configuration ansible.platform ansible.controller ansible.eda; do
     ansible-galaxy collection list "$c" 2>/dev/null | grep -q "^$c " \
       || die "collection $c missing (ansible-galaxy collection install $c; ansible.* need Automation Hub)"
   done
+  # Identity of AAP jobs in the cluster (namespace-scoped) + EE pull rights.
+  sed -e "s|system:serviceaccounts:aap$|system:serviceaccounts:${AAP_NS}|" \
+    "${GITOPS_DIR}/bootstrap/aap-rbac.yaml" | oc apply -f - >/dev/null
+  local k8s_token=""
+  for _ in $(seq 1 30); do
+    k8s_token=$(oc get secret aap-demo-token -n "${NAMESPACE}" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true)
+    [ -n "${k8s_token}" ] && break
+    sleep 2
+  done
+  [ -n "${k8s_token}" ] || die "token for ServiceAccount aap-demo not issued"
+  oc get istag satellite-cac-runner:latest -n "${NAMESPACE}" >/dev/null 2>&1 \
+    || die "GitOps EE image missing: run 'bootstrap.sh runner' first"
+
   # AAP 2.7 has no controller token endpoint (/api/controller/v2/tokens/ is a
   # 404), and ansible.controller modules given only username/password try to
   # fetch one there. Hand them a short-lived gateway token instead.
   local tok_json tok tok_id
-  tok_json=$(curl -sSk --fail-with-body -u "admin:$(aap_password)" -H 'Content-Type: application/json' \
+  tok_json=$(curl_aap -sSk --fail-with-body -H 'Content-Type: application/json' \
     -d '{"description":"bootstrap.sh aapconfig","scope":"write"}' "$(aap_url)/api/gateway/v1/tokens/") \
     || die "could not create a gateway token (is the subscription active? see 'bootstrap.sh aap')"
   tok=$(python3 -I -c 'import json,sys; print(json.load(sys.stdin)["token"])' <<<"${tok_json}")
   tok_id=$(python3 -I -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"${tok_json}")
+  # Extra vars file: every value as a YAML !unsafe single-quoted scalar, so a
+  # password with quotes, backslashes or "{{" neither breaks YAML nor gets
+  # templated. Removed (with the gateway token) even on Ctrl-C.
   local vars
   vars=$(mktemp)
   chmod 600 "${vars}"
-  cat > "${vars}" <<EOF
-aap_hostname: "$(aap_url)"
-aap_username: admin
-aap_password: "$(aap_password)"
-aap_token: "${tok}"
-aap_validate_certs: false
-gitea_url: "${GITEA_INTERNAL_URL}"
-gitea_repo_url: "${GITEA_REPO_URL_INTERNAL}"
-gitea_token: "$(gitea_token)"
-EOF
+  trap 'rm -f "${vars}"; curl_aap -sk -o /dev/null -X DELETE "$(aap_url)/api/gateway/v1/tokens/${tok_id}/" 2>/dev/null' EXIT
+  AAPV_aap_hostname="$(aap_url)" AAPV_aap_username=admin AAPV_aap_password="$(aap_password)" \
+  AAPV_aap_token="${tok}" AAPV_gitea_url="${GITEA_INTERNAL_URL}" AAPV_gitea_repo_url="${GITEA_REPO_URL_INTERNAL}" \
+  AAPV_gitea_token="$(gitea_token)" AAPV_satellite_url="${SATELLITE_API_URL}" AAPV_satellite_password="${DEMO_PASSWORD}" \
+  AAPV_k8s_host="https://kubernetes.default.svc" AAPV_k8s_token="${k8s_token}" \
+  AAPV_gitops_ee_image="image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/satellite-cac-runner:latest" \
+  AAPV_aap_url="$(aap_url)" AAPV_aap_admin_password="$(aap_password)" AAPV_eda_webhook_secret="$(eda_webhook_secret)" \
+  python3 -I -c '
+import os
+for k, v in sorted(os.environ.items()):
+    if k.startswith("AAPV_"):
+        print("%s: !unsafe \x27%s\x27" % (k[5:], v.replace("\x27", "\x27\x27")))
+print("aap_validate_certs: false")' > "${vars}"
+  # EDA refuses to update a running activation ("Activation is not in disabled
+  # mode and in stopped status"): keep an existing one, unless asked to recreate.
+  local act_id
+  act_id=$(curl_aap -sk "$(aap_url)/api/eda/v1/activations/?name=satellite_as_code" \
+    | python3 -I -c 'import json,sys; r=json.load(sys.stdin).get("results",[]); print(r[0]["id"] if r else "")' 2>/dev/null || true)
+  if [ -n "${act_id}" ]; then
+    if [ "${AAP_RECREATE_ACTIVATION:-false}" = "true" ]; then
+      curl_aap -sk -o /dev/null -X DELETE "$(aap_url)/api/eda/v1/activations/${act_id}/"
+      log "  rulebook activation satellite_as_code deleted (AAP_RECREATE_ACTIVATION=true)"
+      # The new activation must see the current rulebook: re-import the project.
+      local proj_id
+      proj_id=$(curl_aap -sk "$(aap_url)/api/eda/v1/projects/?name=rhel_fleet" \
+        | python3 -I -c 'import json,sys; r=json.load(sys.stdin)["results"]; print(r[0]["id"] if r else "")' 2>/dev/null || true)
+      if [ -n "${proj_id}" ]; then
+        curl_aap -sk -o /dev/null -X POST "$(aap_url)/api/eda/v1/projects/${proj_id}/sync/"
+        for _ in $(seq 1 30); do
+          [ "$(curl_aap -sk "$(aap_url)/api/eda/v1/projects/${proj_id}/" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["import_state"])' 2>/dev/null)" = "completed" ] && break
+          sleep 2
+        done
+        log "  EDA project rhel_fleet re-imported"
+      fi
+    else
+      echo "eda_rulebook_activations: []" >> "${vars}"
+      log "  rulebook activation satellite_as_code exists; kept (AAP_RECREATE_ACTIVATION=true to recreate)"
+    fi
+  fi
   local rc=0
   ( cd "${GITOPS_DIR}/repo" && ANSIBLE_LOCALHOST_WARNING=False ANSIBLE_DEPRECATION_WARNINGS=False \
       ansible-playbook -i localhost, aap/configure-aap.yml -e "@${vars}" ) || rc=$?
   rm -f "${vars}"
-  curl -sk -o /dev/null -X DELETE -u "admin:$(aap_password)" "$(aap_url)/api/gateway/v1/tokens/${tok_id}/" || true
+  curl_aap -sk -o /dev/null -X DELETE "$(aap_url)/api/gateway/v1/tokens/${tok_id}/" || true
+  trap - EXIT
   [ "${rc}" -eq 0 ] || die "configure-aap.yml failed (is the subscription active? see 'bootstrap.sh aap')"
-  log "  done: AAP -> Templates -> Request RHEL server"
+  log "  done: AAP -> Templates (GitOps · / SAT · / HOST · / VM ·)"
+  satellite_executor_wiring
+}
+
+# Shared secret for the HMAC-signed Gitea -> EDA event stream webhook.
+eda_webhook_secret() {
+  local f="${CACHE_DIR}/eda-webhook-secret"
+  if [ ! -s "${f}" ]; then
+    mkdir -p "${CACHE_DIR}"
+    ( umask 077; python3 -I -c 'import secrets; print(secrets.token_hex(24), end="")' > "${f}" )
+  fi
+  cat "${f}"
+}
+
+# Wire the Satellite executor: aap = rulebook activation enabled + Gitea webhook
+# to the event stream (secret refreshed every run, so a regenerated
+# eda-webhook-secret never leaves a stale hook); argo = activation disabled and
+# the hook removed, so the Argo CD PostSync Job is the only executor.
+satellite_executor_wiring() {
+  local es_url act hook_id
+  es_url=$(curl_aap -sk "$(aap_url)/api/eda/v1/event-streams/?name=gitea_push" 2>/dev/null \
+    | python3 -I -c 'import json,sys; r=json.load(sys.stdin)["results"]; print(r[0]["url"] if r else "")' 2>/dev/null || true)
+  act=$(curl_aap -sk "$(aap_url)/api/eda/v1/activations/?name=satellite_as_code" 2>/dev/null \
+    | python3 -I -c 'import json,sys; r=json.load(sys.stdin)["results"]; print("%s %s" % (r[0]["id"], r[0]["is_enabled"]) if r else "")' 2>/dev/null || true)
+  hook_id=""
+  [ -n "${es_url}" ] && hook_id=$(gitea_api GET "/repos/${GITEA_USER}/${GITEA_REPO}/hooks" \
+    | python3 -I -c 'import json,sys; u=sys.argv[1]; print(next((str(h["id"]) for h in json.load(sys.stdin) if h["config"].get("url")==u), ""))' "${es_url}")
+  if [ "${SATELLITE_EXECUTOR}" = "aap" ]; then
+    [ -n "${es_url}" ] || { warn "event stream gitea_push not found; Satellite as code will not trigger on push"; return 0; }
+    if [ -n "${act}" ] && [ "${act#* }" = "False" ]; then
+      curl_aap -sk -o /dev/null -X POST "$(aap_url)/api/eda/v1/activations/${act%% *}/enable/" \
+        && log "  rulebook activation satellite_as_code enabled"
+    fi
+    local body
+    body=$(python3 -I -c 'import json,sys; print(json.dumps({"type":"gitea","active":True,"events":["push"],"branch_filter":"main","config":{"url":sys.argv[1],"content_type":"json","secret":sys.argv[2]}}))' "${es_url}" "$(eda_webhook_secret)")
+    if [ -n "${hook_id}" ]; then
+      gitea_api PATCH "/repos/${GITEA_USER}/${GITEA_REPO}/hooks/${hook_id}" "${body}" >/dev/null \
+        && log "  Gitea -> EDA webhook up to date (${es_url})"
+    else
+      gitea_api POST "/repos/${GITEA_USER}/${GITEA_REPO}/hooks" "${body}" >/dev/null \
+        && log "  Gitea -> EDA webhook created (${es_url})"
+    fi
+  else
+    if [ -n "${act}" ] && [ "${act#* }" = "True" ]; then
+      curl_aap -sk -o /dev/null -X POST "$(aap_url)/api/eda/v1/activations/${act%% *}/disable/" \
+        && log "  rulebook activation satellite_as_code disabled (SATELLITE_EXECUTOR=argo)"
+    fi
+    if [ -n "${hook_id}" ]; then
+      gitea_api DELETE "/repos/${GITEA_USER}/${GITEA_REPO}/hooks/${hook_id}" >/dev/null \
+        && log "  Gitea -> EDA webhook removed (SATELLITE_EXECUTOR=argo)"
+    fi
+  fi
 }
 
 phase_info() {

@@ -102,9 +102,33 @@ for b in $(gitea_api GET "/repos/${GITEA_USER}/${GITEA_REPO}/branches?limit=100"
   run gitea_api DELETE "/repos/${GITEA_USER}/${GITEA_REPO}/branches/${b}" >/dev/null && log "  deleted branch ${b}"
 done
 
-# 2. Enforce every environment on the next run
+# 2. Enforce every environment. With the AAP executor the push above may start
+# an apply job that ends early (only fleet/ changed) or none at all (main was
+# already at baseline), and a job still queued from an earlier merge would
+# rewrite the drift ConfigMap after we delete it. So: let the queue drain,
+# delete the ConfigMap, then launch one full apply run ourselves and wait for
+# exactly that job.
+APPLY_JOB=""
+if [ "${SATELLITE_EXECUTOR}" = "aap" ] && [ "${DRY}" != true ]; then
+  SAT_TPL_Q=$(python3 -I -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "${SAT_APPLY_TEMPLATE}")
+  log "Waiting for queued or running apply jobs to finish"
+  for _ in $(seq 1 120); do
+    busy=$(aap_api "/jobs/?name=${SAT_TPL_Q}&status__in=new,pending,waiting,running&page_size=1" 2>/dev/null \
+      | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("count", 0))' 2>/dev/null || echo 0)
+    [ "${busy}" = "0" ] && break
+    sleep 5
+  done
+fi
 run oc delete configmap satellite-cac-applied -n "${NAMESPACE}" --ignore-not-found
-run argocd_refresh rhel-fleet satellite-config
+run argocd_refresh rhel-fleet
+[ "${SATELLITE_EXECUTOR}" = "argo" ] && run argocd_refresh satellite-config
+if [ "${SATELLITE_EXECUTOR}" = "aap" ] && [ "${DRY}" != true ]; then
+  TID=$(aap_api "/job_templates/?name=${SAT_TPL_Q}" | python3 -I -c 'import json,sys; r=json.load(sys.stdin)["results"]; print(r[0]["id"] if r else "")')
+  [ -n "${TID}" ] || die "job template '${SAT_APPLY_TEMPLATE}' not found in AAP (bootstrap.sh aapconfig)"
+  APPLY_JOB=$(curl_aap -sSk --max-time 60 -H 'Content-Type: application/json' -X POST -d '{"extra_vars": {}}' \
+    "$(aap_url)/api/controller/v2/job_templates/${TID}/launch/" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("job", ""))')
+  [ -n "${APPLY_JOB}" ] && log "  launched full apply run: AAP job ${APPLY_JOB}" || warn "could not launch ${SAT_APPLY_TEMPLATE}"
+fi
 
 # 3. VMs
 if [ ${#FLEET_VMS[@]} -gt 0 ]; then
@@ -136,22 +160,27 @@ for hc in $(sat_hammer '--csv --no-headers host-collection list --organization D
   run sat_hammer "host-collection delete --name ${hc} --organization Demo_Org" >/dev/null || warn "could not delete ${hc}"
 done
 
-# 5. Wait for the Job, then bring lc-* packages back to what they are served
-if [ "${DRY}" != true ]; then
-  log "Waiting up to 10 min for the satellite-cac Job started after ${SINCE}"
-  ok=""
+# 5. Wait for the apply run, then bring lc-* packages back to what they are served
+if [ "${DRY}" != true ] && [ -n "${APPLY_JOB}" ]; then
+  log "Waiting up to 10 min for AAP job ${APPLY_JOB} (${SAT_APPLY_TEMPLATE})"
+  rc=2
   for _ in $(seq 1 120); do
-    created=$(oc get job satellite-cac -n "${NAMESPACE}" -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || true)
-    if [ -n "${created}" ] && [[ ! "${created}" < "${SINCE}" ]]; then
-      s=$(oc get job satellite-cac -n "${NAMESPACE}" -o jsonpath='{.status.succeeded}{"/"}{.status.failed}' 2>/dev/null)
-      case "$s" in 1/*) ok=yes; break ;; */1) ok=no; break ;; esac
-    fi
+    st=$(aap_api "/jobs/${APPLY_JOB}/" 2>/dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["status"])' 2>/dev/null || true)
+    case "${st}" in successful) rc=0; break ;; failed|error|canceled) rc=1; break ;; esac
     sleep 5
   done
-  case "${ok}" in
-    yes) log "  Job succeeded" ;;
-    no)  warn "Job failed: oc logs -n ${NAMESPACE} job/satellite-cac" ;;
-    *)   warn "Job not finished yet; check Argo CD satellite-config (Sync if needed)" ;;
+  case "${rc}" in
+    0) log "  apply run succeeded" ;;
+    1) warn "apply run failed: $(aap_url)/execution/jobs/playbook/${APPLY_JOB}/output" ;;
+    *) warn "apply run not finished yet: $(aap_url)/execution/jobs/playbook/${APPLY_JOB}/output" ;;
+  esac
+elif [ "${DRY}" != true ]; then
+  log "Waiting up to 10 min for the Satellite apply run started after ${SINCE} ($(satellite_apply_where))"
+  if wait_satellite_apply "${SINCE}" 600; then rc=0; else rc=$?; fi
+  case "${rc}" in
+    0) log "  apply run succeeded" ;;
+    1) warn "apply run failed: $(satellite_apply_where)" ;;
+    *) warn "no finished apply run yet: $(satellite_apply_where)" ;;
   esac
 fi
 for vm in lc-dev lc-qa lc-prod; do

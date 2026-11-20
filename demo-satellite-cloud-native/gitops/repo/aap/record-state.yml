@@ -1,0 +1,60 @@
+---
+# GitOps · Record Satellite state - the AAP twin of `release.sh record`.
+# Writes what Satellite serves NOW into satellite/releases.yml (every
+# environment that differs): records a promotion or an incremental update done
+# in the Satellite UI, as a pull request.
+- name: Record Satellite state in Git
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: [_vars.yml]
+  module_defaults:
+    group/redhat.satellite.satellite:
+      server_url: "{{ satellite_url }}"
+      username: "{{ lookup('ansible.builtin.env', 'FOREMAN_USERNAME') }}"
+      password: "{{ lookup('ansible.builtin.env', 'FOREMAN_PASSWORD') }}"
+      validate_certs: false
+  tasks:
+    - name: Read Git and Satellite
+      ansible.builtin.include_tasks: tasks/releases-read.yml
+
+    - name: Differences
+      ansible.builtin.set_fact:
+        changes: "{{ changes | default([]) + [item ~ ' ' ~ rel_declared[item] ~ ' -> ' ~ sat_serves[item]] }}"
+        new_text: "{{ (new_text | default(rel_text)) | regex_replace('(?m)^(  ' ~ item ~ ': ).*$', '\\1\"' ~ sat_serves[item] ~ '\"') }}"
+      loop: [Dev, QA, Prod]
+      when: sat_serves[item] is defined and sat_serves[item] != rel_declared[item]
+
+    - name: Nothing to record
+      ansible.builtin.debug:
+        msg: "Git already matches Satellite: {{ sat_serves }}"
+      when: changes is not defined
+
+    # Fix the branch name once: a lookup in the include vars would be
+    # evaluated again in every included task (and the second differs).
+    - name: Branch name
+      ansible.builtin.set_fact:
+        record_branch: "record-{{ now(utc=true).strftime('%H%M%S') }}"
+      when: changes is defined
+
+    - name: Open the pull request
+      ansible.builtin.include_tasks: tasks/gitea-pr.yml
+      vars:
+        pr_branch: "{{ record_branch }}"
+        pr_file: satellite/releases.yml
+        pr_sha: "{{ rel_sha }}"
+        pr_content: "{{ new_text }}"
+        pr_title: "Record Satellite state: {{ changes | join(', ') }}"
+        pr_body: |
+          Requested by **{{ requested_by }}** through AAP ({{ job_ref }}).
+
+          Changed in the Satellite UI (or with hammer); this commit makes Git agree.
+          Nothing changes in Satellite after the merge.
+      when: changes is defined
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "Record Satellite state: {{ changes | join(', ') }}"
+          - "Pull request #{{ pr_number }}: {{ pr_url }} ({{ 'merged' if pr_merged | bool else 'waiting for approval' }})"
+      when: changes is defined

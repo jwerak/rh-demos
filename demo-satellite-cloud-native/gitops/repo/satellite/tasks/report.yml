@@ -1,6 +1,6 @@
 ---
 - name: Read content view versions (after)
-  theforeman.foreman.content_view_version_info:
+  redhat.satellite.content_view_version_info:
     organization: "{{ satellite_organization }}"
     content_view: "{{ content_view }}"
   register: cv_versions_after

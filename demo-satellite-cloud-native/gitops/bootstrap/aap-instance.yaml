@@ -1,7 +1,7 @@
 ---
-# Smallest AAP that runs the V3 self-service job: platform gateway + automation
-# controller. Hub and Event-Driven Ansible are off to save cluster capacity
-# next to the Satellite VM; switch them on with disabled: false if needed.
+# AAP for the GitOps layer: platform gateway, automation controller and
+# Event-Driven Ansible (Gitea push -> event stream -> "SAT · Apply Satellite as
+# code"). Hub is off to save cluster capacity next to the Satellite VM.
 # The operator generates the admin password in Secret "aap-admin-password".
 apiVersion: aap.ansible.com/v1alpha1
 kind: AnsibleAutomationPlatform
@@ -23,4 +23,4 @@ spec:
   hub:
     disabled: true
   eda:
-    disabled: true
+    disabled: false

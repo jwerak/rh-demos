@@ -32,14 +32,6 @@ spec:
               set -euo pipefail
               export HOME=/tmp ANSIBLE_FORCE_COLOR=1
               export ANSIBLE_LOCAL_TEMP=/tmp/.ansible/tmp ANSIBLE_REMOTE_TMP=/tmp/.ansible/tmp
-              # Fallback when the runner image could not be built: install on the fly.
-              if ! command -v ansible-playbook >/dev/null 2>&1 \
-                 || ! ansible-galaxy collection list theforeman.foreman >/dev/null 2>&1; then
-                echo "runner image incomplete, installing ansible-core + theforeman.foreman"
-                pip install --user --quiet ansible-core requests PyYAML
-                export PATH="${HOME}/.local/bin:${PATH}"
-                ansible-galaxy collection install theforeman.foreman
-              fi
               ansible-playbook site.yml
           env:
             - name: POD_NAMESPACE

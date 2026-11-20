@@ -1,0 +1,112 @@
+---
+# SAT · Hotfix (incremental update) - the AAP twin of `hotfix.sh ERRATUM ENV`.
+# Copies ONE erratum into the Demo-App-CV version that the environment's
+# RHEL9-FullStack version contains, and propagates it: that environment gets a
+# new minor version (5.0 -> 5.1) with exactly this fix. Record it in Git
+# afterwards with "GitOps · Record Satellite state".
+# Survey: erratum_id, lifecycle_env (default prod).
+- name: Incremental update of one erratum
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: [_katello.yml]
+  vars:
+    lifecycle_env: prod
+    api: &api
+      url_username: "{{ sat_user }}"
+      url_password: "{{ sat_password }}"
+      force_basic_auth: true
+      validate_certs: false
+  tasks:
+    - name: Validate the request
+      ansible.builtin.assert:
+        that:
+          - erratum_id is defined and erratum_id | length > 3
+          - lifecycle_env in ['dev', 'qa', 'prod']
+        quiet: true
+
+    - name: Organization
+      ansible.builtin.uri:
+        url: "{{ sat_url }}/katello/api/organizations?search=name={{ sat_org }}"
+        <<: *api
+      register: org
+
+    - name: Composite content view RHEL9-FullStack
+      ansible.builtin.uri:
+        url: "{{ sat_url }}/katello/api/content_views?organization_id={{ org.json.results[0].id }}&search=name=RHEL9-FullStack"
+        <<: *api
+      register: cv
+
+    - name: Its versions
+      ansible.builtin.uri:
+        url: "{{ sat_url }}/katello/api/content_view_versions?content_view_id={{ cv.json.results[0].id }}&per_page=200"
+        <<: *api
+      register: versions
+
+    - name: Version the environment serves
+      ansible.builtin.set_fact:
+        env_name: "{{ lce_names[lifecycle_env] }}"
+        env_version: >-
+          {{ versions.json.results | subelements('environments', skip_missing=True)
+             | selectattr('1.name', 'equalto', lce_names[lifecycle_env]) | map(attribute='0') | first | default({}) }}
+
+    - name: Composite version found
+      ansible.builtin.assert:
+        that: env_version.id is defined
+        fail_msg: "No RHEL9-FullStack version in {{ env_name }}"
+        quiet: true
+
+    - name: Components of that version
+      ansible.builtin.uri:
+        url: "{{ sat_url }}/katello/api/content_view_versions?composite_version_id={{ env_version.id }}"
+        <<: *api
+      register: components
+
+    - name: Demo-App-CV component
+      ansible.builtin.set_fact:
+        component: "{{ components.json.results | selectattr('content_view.name', 'equalto', 'Demo-App-CV') | first }}"
+
+    - name: Start the incremental update
+      ansible.builtin.uri:
+        url: "{{ sat_url }}/katello/api/content_view_versions/incremental_update"
+        method: POST
+        <<: *api
+        body_format: json
+        body:
+          content_view_version_environments:
+            - content_view_version_id: "{{ component.id }}"
+              environment_ids: []
+          add_content:
+            errata_ids: ["{{ erratum_id }}"]
+          propagate_all_composites: true
+          description: "Hotfix {{ erratum_id }}"
+        status_code: [200, 202]
+      register: task
+      changed_when: true
+
+    - name: Wait for the task (about a minute)
+      ansible.builtin.uri:
+        url: "{{ sat_url }}/foreman_tasks/api/tasks/{{ task.json.id }}"
+        <<: *api
+      register: task_state
+      until: task_state.json.state in ['stopped', 'paused']
+      retries: 60
+      delay: 5
+
+    - name: Task succeeded
+      ansible.builtin.assert:
+        that: task_state.json.result == 'success'
+        fail_msg: "Incremental update {{ task_state.json.result }}: {{ task_state.json.humanized.errors | default([]) | join('; ') }}"
+        quiet: true
+
+    - name: Versions after the update
+      ansible.builtin.uri:
+        url: "{{ sat_url }}/katello/api/content_view_versions?content_view_id={{ cv.json.results[0].id }}&per_page=200"
+        <<: *api
+      register: after
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "{{ env_name }}: RHEL9-FullStack {{ env_version.version }} -> {{ (after.json.results | subelements('environments', skip_missing=True) | selectattr('1.name', 'equalto', env_name) | map(attribute='0') | first).version }} (Demo-App-CV {{ component.version }} + {{ erratum_id }})"
+          - "Record it in Git: GitOps · Record Satellite state"

@@ -1,0 +1,33 @@
+---
+# VM · Create server by hand (V1) - the AAP twin of `manual-vm.sh NAME ENV`.
+# Renders templates/vm.yaml.j2 with provisioned_by=manual and applies it with
+# kubernetes.core: no pull request, no record in Git, Argo CD does not know it.
+# Credential: "OpenShift API (demo namespace)".
+# Survey: server_name, lifecycle_env (dev|qa|prod), server_size.
+- name: Create a VM directly on OpenShift (legacy path)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    server_size: small
+    provisioned_by: manual
+    requested_by: "{{ awx_user_name | default('unknown', true) }}"
+  tasks:
+    - name: Validate the request
+      ansible.builtin.assert:
+        that:
+          - server_name is match('^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$')
+          - lifecycle_env in ['dev', 'qa', 'prod']
+          - server_size in ['small', 'medium', 'large']
+        quiet: true
+
+    - name: Create the VirtualMachine
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/vm.yaml.j2') | from_yaml }}"
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "{{ server_name }} created by hand in {{ lifecycle_env }} (no PR, not in Git)."
+          - "Registers to Satellite in 7-8 min: Hosts -> All Hosts, search name ~ {{ server_name }}"

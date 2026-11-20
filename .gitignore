@@ -34,3 +34,8 @@ Thumbs.db
 
 # Ansible EE build artifacts
 **/context/_build/
+
+# Rendered run sheets contain credentials (gitops/scripts/render-runsheet.sh)
+*.local.html
+runsheet*.html
+__pycache__/
