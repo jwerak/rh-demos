@@ -1,0 +1,76 @@
+---
+# Satellite as code: apply structure.yml + releases.yml to Satellite.
+#
+# Runs as an Argo CD PostSync Job inside the cluster, or from a laptop
+# (gitops/scripts/run-local.sh). Same playbook, same Git content.
+#
+# Connection: theforeman.foreman env fallbacks
+#   FOREMAN_SERVER_URL  FOREMAN_USERNAME  FOREMAN_PASSWORD  FOREMAN_VALIDATE_CERTS
+# In AAP use redhat.satellite (the supported build of the same modules):
+# replace the "theforeman.foreman." prefix, nothing else changes.
+#
+# Each section runs in its own block. A failure is recorded and the next
+# section still runs, so a typo in an RBAC permission cannot block a release.
+# The play fails at the end if any section failed.
+#
+# Tags: preflight, structure, registration, host_collections, releases, report
+- name: Satellite configuration as code
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - structure.yml
+    - releases.yml
+  module_defaults:
+    group/theforeman.foreman.foreman:
+      server_url: "{{ satellite_url }}"
+      username: "{{ satellite_user }}"
+      password: "{{ satellite_password }}"
+      validate_certs: "{{ satellite_validate_certs }}"
+  vars:
+    cac_failures: []
+    satellite_url: "{{ lookup('ansible.builtin.env', 'FOREMAN_SERVER_URL') }}"
+    satellite_user: "{{ lookup('ansible.builtin.env', 'FOREMAN_USERNAME') }}"
+    satellite_password: "{{ lookup('ansible.builtin.env', 'FOREMAN_PASSWORD') }}"
+    satellite_validate_certs: "{{ lookup('ansible.builtin.env', 'FOREMAN_VALIDATE_CERTS') | default('false', true) | bool }}"
+    # Where the registration Secret goes. In the cluster the job writes it via
+    # the Kubernetes API with its service account; on a laptop it uses `oc`.
+    registration_secret_name: satellite-registration
+    registration_namespace: "{{ lookup('ansible.builtin.env', 'POD_NAMESPACE') | default('satellite-cloud-native', true) }}"
+    # Last releases.yml declaration the job acted on (drift detection, tasks/releases.yml).
+    releases_applied_cm: satellite-cac-applied
+    releases_applied_obj:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ releases_applied_cm }}"
+        namespace: "{{ registration_namespace }}"
+        labels:
+          app.kubernetes.io/part-of: satellite-cloud-native
+          app.kubernetes.io/managed-by: satellite-as-code
+      data: "{{ environments }}"
+
+  tasks:
+    - name: Preflight
+      ansible.builtin.import_tasks: tasks/preflight.yml
+      tags: [always]
+
+    - name: Releases (content view promotion)
+      ansible.builtin.import_tasks: tasks/releases.yml
+      tags: [releases]
+
+    - name: Structure (lifecycle envs, content views, keys, host groups, RBAC)
+      ansible.builtin.import_tasks: tasks/structure.yml
+      tags: [structure]
+
+    - name: Host collection membership (patch waves)
+      ansible.builtin.import_tasks: tasks/host_collections.yml
+      tags: [host_collections, structure]
+
+    - name: Registration commands for fleet VMs
+      ansible.builtin.import_tasks: tasks/registration.yml
+      tags: [registration]
+
+    - name: Report
+      ansible.builtin.import_tasks: tasks/report.yml
+      tags: [always]

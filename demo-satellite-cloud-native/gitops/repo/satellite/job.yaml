@@ -1,0 +1,77 @@
+---
+# Runs site.yml after every sync of the satellite-config application.
+# The Ansible output is visible in the Argo CD UI (job pod logs) until the
+# next sync replaces the Job.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: satellite-cac
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: satellite-as-code
+    spec:
+      serviceAccountName: satellite-cac
+      restartPolicy: Never
+      containers:
+        - name: ansible
+          # Built in-cluster by gitops/scripts/bootstrap.sh runner
+          # (gitops/runner/Containerfile).
+          image: image-registry.openshift-image-registry.svc:5000/satellite-cloud-native/satellite-cac-runner:latest
+          imagePullPolicy: Always
+          workingDir: /runner/project
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export HOME=/tmp ANSIBLE_FORCE_COLOR=1
+              export ANSIBLE_LOCAL_TEMP=/tmp/.ansible/tmp ANSIBLE_REMOTE_TMP=/tmp/.ansible/tmp
+              # Fallback when the runner image could not be built: install on the fly.
+              if ! command -v ansible-playbook >/dev/null 2>&1 \
+                 || ! ansible-galaxy collection list theforeman.foreman >/dev/null 2>&1; then
+                echo "runner image incomplete, installing ansible-core + theforeman.foreman"
+                pip install --user --quiet ansible-core requests PyYAML
+                export PATH="${HOME}/.local/bin:${PATH}"
+                ansible-galaxy collection install theforeman.foreman
+              fi
+              ansible-playbook site.yml
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          envFrom:
+            # FOREMAN_SERVER_URL, FOREMAN_USERNAME, FOREMAN_PASSWORD,
+            # FOREMAN_VALIDATE_CERTS. Created by bootstrap.sh secrets,
+            # never stored in Git.
+            - secretRef:
+                name: satellite-cac-credentials
+          volumeMounts:
+            - name: project
+              mountPath: /runner/project
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: project
+          configMap:
+            name: satellite-cac
+            items:
+              - {key: site.yml, path: site.yml}
+              - {key: structure.yml, path: structure.yml}
+              - {key: releases.yml, path: releases.yml}
+              - {key: tasks_preflight.yml, path: tasks/preflight.yml}
+              - {key: tasks_releases.yml, path: tasks/releases.yml}
+              - {key: tasks_structure.yml, path: tasks/structure.yml}
+              - {key: tasks_host_collections.yml, path: tasks/host_collections.yml}
+              - {key: tasks_registration.yml, path: tasks/registration.yml}
+              - {key: tasks_report.yml, path: tasks/report.yml}

@@ -1,0 +1,144 @@
+---
+# Satellite structure as code.
+#
+# Names match what demo c1 (scripts/demo-scenarios.sh) creates, so the two
+# coexist: c1 builds the lab imperatively, this file declares the target state
+# and adds what c1 does not have (host groups, patch waves, RBAC).
+#
+# Deliberately NOT managed here:
+#   - repositories inside RHEL9-Lifecycle: they depend on the subscription
+#     manifest and are attached by c1 when present (no hard-coded repo ids)
+#   - content view publishing: a new version is a build artefact
+#     (gitops/scripts/publish-version.sh); promotion lives in releases.yml
+
+satellite_organization: Demo_Org
+satellite_location: Cloud
+
+lifecycle_environments:
+  - name: Dev
+    prior: Library
+    description: Development - first stop for every new content view version
+  - name: QA
+    prior: Dev
+    description: Test and acceptance
+  - name: Prod
+    prior: QA
+    description: Production - changes only through an approved pull request
+
+products:
+  - name: Demo-App
+    description: Custom application RPMs built in the demo
+    repositories:
+      - name: demo-app-rpms
+        content_type: yum
+
+content_views:
+  - name: Demo-App-CV
+    description: Application content
+    repositories:
+      - name: demo-app-rpms
+        product: Demo-App
+  - name: RHEL9-Lifecycle
+    description: RHEL 9 base content (repositories attached by c1 when a manifest is present)
+
+composite_content_views:
+  - name: RHEL9-FullStack
+    description: SOE = RHEL baseline + application, versioned together
+    components:
+      - content_view: RHEL9-Lifecycle
+        latest: true
+      - content_view: Demo-App-CV
+        latest: true
+
+# Patch groups. Membership is declared by search, so a host lands in the right
+# wave the moment it registers, and REX jobs target "host_collection = ...".
+host_collections:
+  - name: Patch-Wave-1
+    description: Canary wave - Dev and QA, patched first
+    hosts_search: "lifecycle_environment = Dev or lifecycle_environment = QA"
+  - name: Patch-Wave-2
+    description: Production wave - patched after Wave 1 is verified
+    hosts_search: "lifecycle_environment = Prod"
+
+activation_keys:
+  - name: rhel9-lc-dev
+    lifecycle_environment: Dev
+    content_view: RHEL9-FullStack
+    host_collections: [Patch-Wave-1]
+  - name: rhel9-lc-qa
+    lifecycle_environment: QA
+    content_view: RHEL9-FullStack
+    host_collections: [Patch-Wave-1]
+  - name: rhel9-lc-prod
+    lifecycle_environment: Prod
+    content_view: RHEL9-FullStack
+    host_collections: [Patch-Wave-2]
+
+# The custom repository is disabled by default on an activation key; c1
+# enables it the same way (label derived from org_product_repo).
+activation_key_content_overrides:
+  - label: Demo_Org_Demo-App_demo-app-rpms
+    override: enabled
+
+# Host groups: lifecycle-environment based hierarchy (Satellite docs,
+# "Host group structures"). Level 1 = OS baseline, level 2 = environment.
+# Children inherit content view and parameters from the parent.
+hostgroups:
+  - name: RHEL9
+    description: RHEL 9 SOE baseline
+    content_view: RHEL9-FullStack
+    parameters:
+      - name: soe_owner
+        value: linux-team
+      - name: patch_window
+        value: "Sat 22:00-02:00"
+  - name: Dev
+    parent: RHEL9
+    lifecycle_environment: Dev
+    activation_keys: rhel9-lc-dev
+    parameters:
+      - name: patch_window
+        value: "any time"
+  - name: QA
+    parent: RHEL9
+    lifecycle_environment: QA
+    activation_keys: rhel9-lc-qa
+  - name: Prod
+    parent: RHEL9
+    lifecycle_environment: Prod
+    activation_keys: rhel9-lc-prod
+
+# Which registration command each fleet environment uses (Secret
+# satellite-registration, key = env). Mounted into fleet VMs as disk "satreg".
+registration_targets:
+  - env: dev
+    activation_key: rhel9-lc-dev
+    hostgroup: RHEL9/Dev
+  - env: qa
+    activation_key: rhel9-lc-qa
+    hostgroup: RHEL9/QA
+  - env: prod
+    activation_key: rhel9-lc-prod
+    hostgroup: RHEL9/Prod
+
+# RBAC example: an operator who can see everything and run remote execution
+# jobs, but cannot change content, keys or host groups. One filter per
+# resource type (Satellite rejects mixed-resource filters).
+satellite_roles:
+  - name: Linux-Operator
+    description: Read-only view of hosts and content, may run remote execution jobs
+    filters:
+      - permissions: [view_hosts]
+      - permissions: [view_hostgroups]
+      - permissions: [view_host_collections]
+      - permissions: [view_lifecycle_environments]
+      - permissions: [view_content_views]
+      - permissions: [view_job_templates]
+      - permissions: [view_job_invocations, create_job_invocations, cancel_job_invocations]
+      - permissions: [view_template_invocations]
+
+# Map a group to the role. In production this is an external user group
+# (IdM / AD) so membership is managed where people are managed.
+usergroups:
+  - name: linux-operators
+    roles: [Linux-Operator]

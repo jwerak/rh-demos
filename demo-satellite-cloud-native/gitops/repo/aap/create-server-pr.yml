@@ -1,0 +1,170 @@
+---
+# V3 - self-service: an AAP job template with a survey turns a request into a
+# pull request. From the merge on, it is the same path as V2 (Argo CD syncs
+# the VM, the VM registers to Satellite with key + host group).
+#
+# Survey variables: server_name, lifecycle_env (dev|qa|prod),
+#                   server_size (small|medium|large), auto_merge (yes|no)
+# Credential "Gitea API" injects GITEA_URL and GITEA_TOKEN.
+#
+# No git binary needed: the commit, the PR and the merge all go through the
+# Gitea REST API, so it runs in any execution environment (or locally:
+#   GITEA_URL=... GITEA_TOKEN=... ansible-playbook aap/create-server-pr.yml \
+#     -e server_name=app-qa-01 -e lifecycle_env=qa -e auto_merge=yes)
+- name: Request a RHEL server through a pull request
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    gitea_url: "{{ lookup('ansible.builtin.env', 'GITEA_URL') }}"
+    gitea_token: "{{ lookup('ansible.builtin.env', 'GITEA_TOKEN') }}"
+    gitea_owner: gitops
+    gitea_repo: rhel-fleet
+    gitea_validate_certs: false
+    server_size: small
+    auto_merge: "no"
+    provisioned_by: aap
+    requested_by: "{{ awx_user_name | default(lookup('ansible.builtin.env', 'USER'), true) | default('unknown', true) }}"
+    job_ref: "{{ ('AAP job ' ~ awx_job_id) if awx_job_id is defined else 'local run' }}"
+    fleet_file: "fleet/{{ lifecycle_env }}/{{ server_name }}.yaml"
+    branch: "add-{{ server_name }}"
+    api: "{{ gitea_url | regex_replace('/$', '') }}/api/v1/repos/{{ gitea_owner }}/{{ gitea_repo }}"
+    # The token goes in url_password (basic auth with the token as password,
+    # which Gitea accepts): Ansible censors url_password in the job output,
+    # but prints request headers in clear text.
+    gitea_api_user: "{{ gitea_owner }}"
+
+  tasks:
+    - name: Validate the request
+      ansible.builtin.assert:
+        that:
+          - server_name is defined
+          - server_name is match('^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$')
+          - lifecycle_env in ['dev', 'qa', 'prod']
+          - server_size in ['small', 'medium', 'large']
+          - gitea_url | length > 0
+          - gitea_token | length > 0
+        fail_msg: >-
+          server_name: lowercase letters, digits and '-', max 40 characters;
+          lifecycle_env: dev|qa|prod; server_size: small|medium|large;
+          GITEA_URL and GITEA_TOKEN must come from the Gitea API credential.
+        quiet: true
+
+    - name: Server does not exist yet on main
+      ansible.builtin.uri:
+        url: "{{ api }}/contents/{{ fleet_file }}?ref=main"
+        url_username: "{{ gitea_api_user }}"
+        url_password: "{{ gitea_token }}"
+        force_basic_auth: true
+        validate_certs: "{{ gitea_validate_certs }}"
+        status_code: [404]
+      register: existing
+      failed_when: existing.status != 404
+
+    # A branch left behind by an earlier request for the same name (the file is
+    # not on main, checked above) would make the commit fail with 422
+    # "branch already exists": drop it first.
+    - name: Leftover branch from an earlier request
+      ansible.builtin.uri:
+        url: "{{ api }}/branches/{{ branch }}"
+        url_username: "{{ gitea_api_user }}"
+        url_password: "{{ gitea_token }}"
+        force_basic_auth: true
+        validate_certs: "{{ gitea_validate_certs }}"
+        status_code: [200, 404]
+      register: old_branch
+
+    - name: Delete the leftover branch
+      ansible.builtin.uri:
+        url: "{{ api }}/branches/{{ branch }}"
+        method: DELETE
+        url_username: "{{ gitea_api_user }}"
+        url_password: "{{ gitea_token }}"
+        force_basic_auth: true
+        validate_certs: "{{ gitea_validate_certs }}"
+        status_code: [204]
+      when: old_branch.status == 200
+      changed_when: true
+
+    - name: Render the VM manifest
+      ansible.builtin.set_fact:
+        vm_manifest: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/vm.yaml.j2') }}"
+
+    - name: Commit it on a new branch
+      ansible.builtin.uri:
+        url: "{{ api }}/contents/{{ fleet_file }}"
+        method: POST
+        url_username: "{{ gitea_api_user }}"
+        url_password: "{{ gitea_token }}"
+        force_basic_auth: true
+        validate_certs: "{{ gitea_validate_certs }}"
+        body_format: json
+        body:
+          branch: main
+          new_branch: "{{ branch }}"
+          content: "{{ vm_manifest | b64encode }}"
+          message: "Add server {{ server_name }} ({{ lifecycle_env }}, {{ server_size }})"
+          author:
+            name: "{{ requested_by }}"
+            email: "{{ requested_by }}@example.com"
+        status_code: [201]
+      changed_when: true
+
+    - name: Open the pull request
+      ansible.builtin.uri:
+        url: "{{ api }}/pulls"
+        method: POST
+        url_username: "{{ gitea_api_user }}"
+        url_password: "{{ gitea_token }}"
+        force_basic_auth: true
+        validate_certs: "{{ gitea_validate_certs }}"
+        body_format: json
+        body:
+          title: "Add server {{ server_name }} ({{ lifecycle_env }}, {{ server_size }})"
+          head: "{{ branch }}"
+          base: main
+          body: |
+            Requested by **{{ requested_by }}** through the AAP self-service survey ({{ job_ref }}).
+
+            | | |
+            |---|---|
+            | Server | `{{ server_name }}` |
+            | Lifecycle environment | `{{ lifecycle_env }}` |
+            | Size | `{{ server_size }}` |
+
+            After merge: Argo CD creates the VM on OpenShift Virtualization; it registers to
+            Satellite with activation key `rhel9-lc-{{ lifecycle_env }}` and host group
+            `RHEL9/{{ lifecycle_env | replace('dev', 'Dev') | replace('qa', 'QA') | replace('prod', 'Prod') }}`.
+        status_code: [201]
+      register: pr
+      changed_when: true
+
+    - name: Merge (approval skipped by request)
+      ansible.builtin.uri:
+        url: "{{ api }}/pulls/{{ pr.json.number }}/merge"
+        method: POST
+        url_username: "{{ gitea_api_user }}"
+        url_password: "{{ gitea_token }}"
+        force_basic_auth: true
+        validate_certs: "{{ gitea_validate_certs }}"
+        body_format: json
+        body:
+          Do: merge
+          delete_branch_after_merge: true
+        status_code: [200]
+      # Gitea answers 405 while it still computes mergeability of a fresh PR.
+      register: merge
+      changed_when: true
+      retries: 10
+      delay: 3
+      until: merge.status == 200
+      when: auto_merge | string | lower in ['yes', 'true', '1']
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "Pull request #{{ pr.json.number }}: {{ pr.json.html_url }}"
+          - >-
+            {{ 'Merged - Argo CD will create ' ~ server_name ~ ' within a minute.'
+               if auto_merge | string | lower in ['yes', 'true', '1']
+               else 'Waiting for approval: merge the PR to create the server.' }}

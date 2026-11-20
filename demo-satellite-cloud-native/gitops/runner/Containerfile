@@ -1,0 +1,31 @@
+# Runner image for the Satellite-as-code Job (gitops/repo/satellite/job.yaml).
+#
+# Built in the cluster by `gitops/scripts/bootstrap.sh runner` (oc new-build,
+# Docker strategy) into ImageStream satellite-cloud-native/satellite-cac-runner.
+# Local build for the laptop fallback (run-local.sh):
+#   podman build -t localhost/satellite-cac-runner:latest gitops/runner
+#
+# theforeman.foreman comes from Ansible Galaxy (no token needed). It is the
+# upstream of redhat.satellite; in AAP use the supported redhat.satellite
+# collection from Automation Hub, the playbooks only change their prefix.
+FROM registry.access.redhat.com/ubi9/python-312:latest
+
+USER 0
+# ansible-runner: ansible-navigator (run-local.sh) needs it inside the EE.
+RUN pip install --no-cache-dir "ansible-core>=2.16,<2.20" ansible-runner requests PyYAML \
+ && ansible-galaxy collection install --collections-path /usr/share/ansible/collections \
+      "theforeman.foreman>=5.0.0,<7.0.0" \
+ && chmod -R g=u /usr/share/ansible/collections
+
+# OpenShift runs the container with a random UID in group 0.
+USER 1001
+# The UID has no passwd entry, so "~" is unusable: pin every Ansible temp path
+# to /tmp (the project directory is a read-only ConfigMap mount).
+ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections \
+    ANSIBLE_HOST_KEY_CHECKING=False \
+    ANSIBLE_RETRY_FILES_ENABLED=False \
+    ANSIBLE_LOCAL_TEMP=/tmp/.ansible/tmp \
+    ANSIBLE_REMOTE_TMP=/tmp/.ansible/tmp \
+    HOME=/tmp
+WORKDIR /runner/project
+CMD ["ansible-playbook", "--version"]

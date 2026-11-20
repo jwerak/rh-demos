@@ -1,0 +1,22 @@
+---
+# Let the default Argo CD instance (openshift-gitops) manage VMs, Jobs,
+# ConfigMaps and RBAC in the demo namespace. `admin` aggregates
+# kubevirt.io:admin, so VirtualMachines are included.
+#
+# bootstrap.sh also labels the namespace
+#   argocd.argoproj.io/managed-by=openshift-gitops
+# with `oc label` (not here: re-applying a Namespace manifest would drop the
+# labels deploy.sh set on it).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openshift-gitops-admin
+  namespace: satellite-cloud-native
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin
+subjects:
+  - kind: ServiceAccount
+    name: openshift-gitops-argocd-application-controller
+    namespace: openshift-gitops

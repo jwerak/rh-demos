@@ -8,9 +8,11 @@ ansible-navigator.log
 .env
 .env.local
 .env.soe
+.env.ocp
 **/.env
 **/.env.local
 **/.env.soe
+**/.env.ocp
 !**/.env.example
 !**/.env.sample
 !**/.env.local.sample

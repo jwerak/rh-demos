@@ -1436,6 +1436,8 @@ deploy_lc_vm() {
   local vm_name="lc-${env_name}"
 
   if [ "${DEMO_PLATFORM}" = "openshift" ]; then
+    # demo-app web page (httpd on the host) behind a route lc-<env>-web
+    sed -e "s|lc-client|lc-${env_name}|g" "${BASE_DIR}/lc-client-web.yaml" | oc apply -f - >/dev/null
     if oc get vmi "${vm_name}" -n "${NAMESPACE}" > /dev/null 2>&1; then
       echo "  ${vm_name} already running"
       return 0
@@ -1509,6 +1511,48 @@ build_and_upload_rpm() {
   local pkg_description="$3"
   local product="${4:-Demo-App}"
   local repo_name="${5:-}"
+  # Optional: build only and copy the RPM into this directory on the
+  # Satellite instead of uploading it (gitops/scripts/prepare-hotfix.sh).
+  local out_dir="${6:-}"
+
+  # demo-app also ships a static web page showing its version and host, so
+  # each lifecycle host has a browser tab (route lc-<env>-web). It is served by
+  # python3's http.server from a systemd unit: no new dependencies (an errata
+  # date filter can leave httpd uninstallable, e.g. without mailcap).
+  # The strings pass through bash -c '...' and an unquoted heredoc on the
+  # Satellite: no single quotes, and \\\$ for anything evaluated at install time.
+  local web_req="" web_install="" web_files="" web_post=""
+  if [ "${pkg_name}" = "demo-app" ]; then
+    web_req="Requires: python3"
+    web_install="mkdir -p %{buildroot}/usr/share/${pkg_name}/www %{buildroot}/usr/lib/systemd/system
+cat > %{buildroot}/usr/share/${pkg_name}/www/index.html <<HTML
+<!doctype html><html><head><meta charset=utf-8><meta http-equiv=refresh content=10>
+<title>__HOST__ - ${pkg_name} ${pkg_version}</title>
+<style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font-family:Red Hat Display,Helvetica,Arial,sans-serif;background:#151515;color:#fff;text-align:center}
+.h{font-size:40px;color:#a3a3a3}.v{font-size:140px;font-weight:700;color:#ee0000;line-height:1.1}.d{font-size:24px}</style></head>
+<body><div><div class=h>__HOST__</div><div class=v>v${pkg_version}</div><div class=d>${pkg_description}</div>
+<div class=h style=font-size:18px;margin-top:24px>package ${pkg_name}-${pkg_version} delivered by Red Hat Satellite</div></div></body></html>
+HTML
+cat > %{buildroot}/usr/lib/systemd/system/${pkg_name}-web.service <<UNIT
+[Unit]
+Description=${pkg_description} web page
+After=network-online.target
+[Service]
+ExecStart=/usr/bin/python3 -m http.server 80 --directory /usr/share/${pkg_name}/www
+Restart=always
+[Install]
+WantedBy=multi-user.target
+UNIT"
+    web_files="/usr/share/${pkg_name}/www/index.html
+/usr/lib/systemd/system/${pkg_name}-web.service"
+    web_post="%post
+sed -i \"s/__HOST__/\\\$(hostname -s)/g\" /usr/share/${pkg_name}/www/index.html || :
+systemctl daemon-reload >/dev/null 2>&1 || :
+systemctl enable --now ${pkg_name}-web.service >/dev/null 2>&1 || :
+
+%preun
+[ \\\$1 -eq 0 ] && systemctl disable --now ${pkg_name}-web.service >/dev/null 2>&1 || :"
+  fi
 
   # Select by name when given one; Section C's single-repo product still
   # works with the original "last row" lookup.
@@ -1528,6 +1572,7 @@ Release: 1%{?dist}
 Summary: ${pkg_description}
 License: MIT
 BuildArch: noarch
+${web_req}
 
 %description
 ${pkg_description}
@@ -1539,14 +1584,20 @@ cat > %{buildroot}/usr/bin/${pkg_name} <<SCRIPT
 echo \"${pkg_description} v${pkg_version} — managed via Red Hat Satellite\"
 SCRIPT
 chmod 755 %{buildroot}/usr/bin/${pkg_name}
+${web_install}
+
+${web_post}
 
 %files
 /usr/bin/${pkg_name}
+${web_files}
 SPEC
     rpmbuild --define \"_topdir /tmp/${pkg_name}-rpm\" -bb /tmp/${pkg_name}-rpm/SPECS/${pkg_name}.spec 2>&1 | tail -3
 
     RPM_FILE=\$(find /tmp/${pkg_name}-rpm/RPMS -name \"*.rpm\" | head -1)
-    if [ -n \"\${RPM_FILE}\" ]; then
+    if [ -n \"${out_dir}\" ] && [ -n \"\${RPM_FILE}\" ]; then
+      mkdir -p \"${out_dir}\" && cp \"\${RPM_FILE}\" \"${out_dir}/\" && echo \"Built \$(basename \${RPM_FILE}) into ${out_dir}\"
+    elif [ -n \"\${RPM_FILE}\" ]; then
       echo \"Uploading \${RPM_FILE}...\"
       hammer repository upload-content \
         --id \"\${REPO_ID}\" \

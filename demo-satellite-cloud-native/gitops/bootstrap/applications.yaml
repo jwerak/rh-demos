@@ -1,0 +1,75 @@
+---
+# Two Argo CD applications over one Git repository.
+# __REPO_URL__ is replaced by bootstrap.sh with the Gitea route URL (the
+# webhook payload carries that host; the service URL would never match).
+#
+# rhel-fleet        fleet/**/*.yaml -> VirtualMachines (auto-sync, prune, self-heal)
+# satellite-config  satellite/      -> ConfigMap + PostSync Job running the playbook
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rhel-fleet
+  namespace: openshift-gitops
+  annotations:
+    # Only commits under this path refresh/sync the app (webhook), so a new
+    # server does not also re-run the satellite-config Job and vice versa.
+    argocd.argoproj.io/manifest-generate-paths: .
+  labels:
+    demo: satellite-cloud-native
+spec:
+  project: default
+  source:
+    repoURL: __REPO_URL__
+    targetRevision: main
+    path: fleet
+    directory:
+      recurse: true
+      include: "*.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: satellite-cloud-native
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+  # KubeVirt fills defaults into the VM spec (machine type, firmware uuid);
+  # they are not drift.
+  ignoreDifferences:
+    - group: kubevirt.io
+      kind: VirtualMachine
+      jqPathExpressions:
+        - .spec.template.spec.domain.machine
+        - .spec.template.spec.domain.firmware
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: satellite-config
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/manifest-generate-paths: .
+  labels:
+    demo: satellite-cloud-native
+spec:
+  project: default
+  source:
+    repoURL: __REPO_URL__
+    targetRevision: main
+    path: satellite
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: satellite-cloud-native
+  syncPolicy:
+    automated:
+      prune: true
+      # selfHeal stays off. A PR merged while the previous Job is still
+      # running is skipped by auto-sync ("another operation is in progress",
+      # then "most recent sync already to <rev>"); the app shows OutOfSync and
+      # a manual Sync runs the Job. Self-heal would sync it as a *partial* sync,
+      # which skips hooks: the ConfigMap changes, no Job runs, and the app
+      # shows Synced - the missed change would be invisible.
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false

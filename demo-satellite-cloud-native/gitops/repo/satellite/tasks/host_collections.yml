@@ -1,0 +1,53 @@
+---
+# Make each host collection contain exactly the hosts its search matches.
+# The modules manage the collection itself, not its members, so membership
+# goes through the Katello API (add_hosts / remove_hosts).
+- name: Host collection membership
+  block:
+    - name: Find matching hosts per collection
+      theforeman.foreman.resource_info:
+        organization: "{{ satellite_organization }}"
+        resource: hosts
+        search: "{{ item.hosts_search }}"
+      loop: "{{ host_collections | selectattr('hosts_search', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}: {{ item.hosts_search }}"
+      register: hc_matches
+
+    - name: Read current members
+      theforeman.foreman.resource_info:
+        organization: "{{ satellite_organization }}"
+        resource: host_collections
+        search: 'name = "{{ item.item.name }}"'
+        full_details: true
+      loop: "{{ hc_matches.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      register: hc_current
+
+    - name: Reconcile members
+      ansible.builtin.uri:
+        url: "{{ satellite_url }}/katello/api/host_collections/{{ item.1.resources[0].id }}/{{ item.2 }}"
+        method: PUT
+        url_username: "{{ satellite_user }}"
+        url_password: "{{ satellite_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ satellite_validate_certs }}"
+        body_format: json
+        body:
+          host_ids: "{{ ids }}"
+        status_code: [200]
+      vars:
+        wanted: "{{ item.0.resources | map(attribute='id') | list }}"
+        current: "{{ item.1.resources[0].host_ids | default([]) }}"
+        ids: "{{ (wanted | difference(current)) if item.2 == 'add_hosts' else (current | difference(wanted)) }}"
+      loop: "{{ hc_matches.results | zip(hc_current.results) | product(['add_hosts', 'remove_hosts']) | map('flatten', levels=1) | list }}"
+      loop_control:
+        label: "{{ item.0.item.name }} {{ item.2 }} {{ ids | length }}"
+      when: ids | length > 0
+      changed_when: true
+
+  rescue:
+    - name: Record failure
+      ansible.builtin.set_fact:
+        cac_failures: "{{ cac_failures + ['host_collections: ' ~ (ansible_failed_result.msg | default('failed'))] }}"

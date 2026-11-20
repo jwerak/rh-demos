@@ -1,0 +1,32 @@
+---
+# Load aap-config.yml into an AAP 2.5+ instance.
+#
+#   ansible-galaxy collection install infra.aap_configuration ansible.platform ansible.controller
+#   ansible-playbook aap/configure-aap.yml \
+#     -e aap_hostname=https://aap.example.com -e aap_username=admin -e aap_password=... \
+#     -e gitea_url=https://gitea-gitea.apps.<cluster> \
+#     -e gitea_repo_url=https://gitea-gitea.apps.<cluster>/gitops/rhel-fleet.git \
+#     -e gitea_token="$(cat ~/.cache/satellite-demo/gitea-token)"
+#
+# The Gitea route uses the cluster's ingress certificate; if AAP does not
+# trust it, add -e aap_validate_certs=false and set GIT_SSL_NO_VERIFY on the
+# project (Settings -> Jobs -> Extra Environment Variables).
+- name: Configure AAP for self-service server requests
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_validate_certs: false
+  vars_files:
+    - aap-config.yml
+  pre_tasks:
+    - name: Required inputs
+      ansible.builtin.assert:
+        that:
+          - aap_hostname is defined
+          - gitea_url is defined
+          - gitea_repo_url is defined
+          - gitea_token is defined
+        quiet: true
+  roles:
+    - infra.aap_configuration.dispatch

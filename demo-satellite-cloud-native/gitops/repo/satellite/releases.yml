@@ -1,0 +1,33 @@
+---
+# Which content view version each lifecycle environment serves.
+#
+# This file IS the patch pipeline. A merged pull request that changes it is
+# the approval; the Satellite-as-code job then promotes accordingly.
+#
+#   Promote a release   : raise the version for one environment (Dev -> QA -> Prod)
+#   Roll back           : git revert the promoting commit (or lower the version)
+#   Inspect versions    : Satellite UI -> Content -> Content Views -> RHEL9-FullStack -> Versions
+#                         or: gitops/scripts/status.sh
+#
+# Policy enforced by the job: Prod <= QA <= Dev (a version reaches Prod only
+# after QA has it). Rolling back always satisfies the rule. An emergency
+# change may set allow_out_of_order: true, and the PR review is where that
+# exception gets challenged.
+#
+# Versions are composite content view versions ("3.0", or "3.1" after an
+# incremental update), not RPM versions. Quote them: the job rejects unquoted
+# numbers, because YAML reads 3.10 as the float 3.1.
+
+# A promotion or incremental update done in the Satellite UI is never
+# silently reverted: the job reports it as DRIFT until it is recorded here
+# (gitops/scripts/release.sh record). drift: enforce = strict GitOps, the job
+# forces Satellite back to this file on every run.
+
+content_view: RHEL9-FullStack
+allow_out_of_order: false
+drift: report
+
+environments:
+  Dev: "1.0"
+  QA: "1.0"
+  Prod: "1.0"

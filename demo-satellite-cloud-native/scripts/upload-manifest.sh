@@ -44,7 +44,11 @@ hammer subscription upload \
   --file /tmp/manifest.zip \
   --organization \"Demo_Org\"
 
-if hammer repository-set list --organization \"Demo_Org\" --per-page 1 2>/dev/null | grep -q \"Red Hat\"; then
+# Ask for the exact repository set: the first set in an alphabetical list is
+# often \"Advanced Virtualization ...\", which has no \"Red Hat\" in its name.
+if hammer repository-set info --organization \"Demo_Org\" \
+     --product \"Red Hat Enterprise Linux for x86_64\" \
+     --name \"Red Hat Enterprise Linux 9 for x86_64 - BaseOS (RPMs)\" >/dev/null 2>&1; then
   echo \"\"
   echo \"Enabling RHEL 9 BaseOS + AppStream repos...\"
   hammer repository-set enable \

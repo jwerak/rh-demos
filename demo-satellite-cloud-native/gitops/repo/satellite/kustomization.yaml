@@ -1,0 +1,35 @@
+---
+# Argo CD application "satellite-config".
+#
+# The playbook and its vars are packed into a ConfigMap (name gets a content
+# hash), so every commit that touches them changes the ConfigMap, Argo CD sees
+# the app OutOfSync, syncs it, and the PostSync Job runs the playbook against
+# exactly the committed content. No Git access needed from the Job.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: satellite-cloud-native
+
+resources:
+  - runner-rbac.yaml
+  - job.yaml
+
+configMapGenerator:
+  - name: satellite-cac
+    files:
+      - site.yml
+      - structure.yml
+      - releases.yml
+      - tasks_preflight.yml=tasks/preflight.yml
+      - tasks_releases.yml=tasks/releases.yml
+      - tasks_structure.yml=tasks/structure.yml
+      - tasks_host_collections.yml=tasks/host_collections.yml
+      - tasks_registration.yml=tasks/registration.yml
+      - tasks_report.yml=tasks/report.yml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: satellite-cloud-native
+      app.kubernetes.io/component: satellite-as-code
+      demo: satellite-cloud-native

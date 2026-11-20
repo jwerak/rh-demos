@@ -1,0 +1,24 @@
+---
+- name: Read content view versions (after)
+  theforeman.foreman.content_view_version_info:
+    organization: "{{ satellite_organization }}"
+    content_view: "{{ content_view }}"
+  register: cv_versions_after
+  failed_when: false
+  tags: [always]
+
+- name: Content view state
+  ansible.builtin.debug:
+    msg: >-
+      {{ content_view }} {{ item.version }}:
+      {{ item.environments | default([]) | map(attribute='name') | join(', ') or '(no environment)' }}
+  loop: "{{ cv_versions_after.content_view_versions | default([]) | sort(attribute='version') }}"
+  loop_control:
+    label: "{{ item.version }}"
+  tags: [always]
+
+- name: Fail if any section failed
+  ansible.builtin.fail:
+    msg: "Satellite-as-code finished with errors: {{ cac_failures | join(' | ') }}"
+  when: cac_failures | length > 0
+  tags: [always]

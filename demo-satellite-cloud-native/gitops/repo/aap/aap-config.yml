@@ -1,0 +1,109 @@
+---
+# AAP 2.5+ configuration as code for V3 (self-service server request).
+# Format: infra.aap_configuration (dispatch role). Applied by configure-aap.yml.
+#
+# These variables come from extra vars at apply time, never from Git:
+#   gitea_url        https://gitea-gitea.apps.<cluster>   (external route)
+#   gitea_token      Gitea API token (~/.cache/satellite-demo/gitea-token)
+#   gitea_repo_url   https://gitea-gitea.apps.<cluster>/gitops/rhel-fleet.git
+
+aap_organizations:
+  - name: SOE Demo
+    description: Self-service RHEL servers through GitOps
+
+controller_credential_types:
+  - name: Gitea API
+    description: Injects GITEA_URL and GITEA_TOKEN for API-driven pull requests
+    kind: cloud
+    inputs:
+      fields:
+        - id: url
+          type: string
+          label: Gitea URL
+        - id: token
+          type: string
+          label: API token
+          secret: true
+      required: [url, token]
+    injectors:
+      env:
+        GITEA_URL: "{% raw %}{{ url }}{% endraw %}"
+        GITEA_TOKEN: "{% raw %}{{ token }}{% endraw %}"
+
+controller_credentials:
+  - name: Gitea API
+    organization: SOE Demo
+    credential_type: Gitea API
+    inputs:
+      url: "{{ gitea_url }}"
+      token: "{{ gitea_token }}"
+
+controller_projects:
+  - name: RHEL Fleet (GitOps)
+    organization: SOE Demo
+    scm_type: git
+    scm_url: "{{ gitea_repo_url }}"
+    scm_branch: main
+    scm_update_on_launch: true
+    # Always sync now: a project created while the repo was still empty keeps
+    # its failed update, and the job template then finds no playbook.
+    update_project: true
+    wait: true
+
+controller_inventories:
+  - name: Localhost only
+    organization: SOE Demo
+    description: The request playbook talks to APIs, it never logs in to a host
+    # A non-empty JSON *string*: infra.aap_configuration 3.x pipes
+    # `variables` through default(..., true) | regex_replace, which under
+    # ansible-core 2.19+ turns the omit placeholder, {} and any mapping into a
+    # string ansible.controller rejects. A JSON string passes through intact.
+    variables: '{"demo": "gitops-self-service"}'
+
+controller_hosts:
+  - name: localhost
+    inventory: Localhost only
+    # JSON string for the same reason as the inventory above.
+    variables: '{"ansible_connection": "local"}'
+
+controller_templates:
+  - name: Request RHEL server
+    description: Opens a pull request that adds a server to the fleet; optional auto-merge
+    organization: SOE Demo
+    project: RHEL Fleet (GitOps)
+    inventory: Localhost only
+    playbook: aap/create-server-pr.yml
+    credentials:
+      - Gitea API
+    survey_enabled: true
+    survey_spec:
+      name: Request RHEL server
+      description: A new RHEL 9 VM on OpenShift Virtualization, registered to Satellite
+      spec:
+        - question_name: Server name
+          question_description: Lowercase letters, digits and '-', max 40
+          variable: server_name
+          type: text
+          required: true
+          min: 2
+          max: 40
+        - question_name: Lifecycle environment
+          variable: lifecycle_env
+          type: multiplechoice
+          choices: [dev, qa, prod]
+          default: dev
+          required: true
+        - question_name: Size
+          question_description: small = 1 vCPU / 2 GiB, medium = 2 / 4, large = 4 / 8
+          variable: server_size
+          type: multiplechoice
+          choices: [small, medium, large]
+          default: small
+          required: true
+        - question_name: Merge without approval?
+          question_description: "yes = demo shortcut; no = the PR waits for a reviewer"
+          variable: auto_merge
+          type: multiplechoice
+          choices: ["yes", "no"]
+          default: "no"
+          required: true

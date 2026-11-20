@@ -1,0 +1,105 @@
+{#-
+  One RHEL 9 server on OpenShift Virtualization.
+  Rendered by:  aap/create-server-pr.yml (V3), scripts new-server.sh (V2),
+                scripts manual-vm.sh (V1, applied without Git).
+  Inputs:       server_name, lifecycle_env (dev|qa|prod), server_size (small|medium|large)
+  Optional:     provisioned_by (git-pr|aap|manual), requested_by, fleet_namespace
+  The VM itself carries no secrets: cloud-init comes from Secret
+  fleet-cloudinit-<env>, the Satellite registration command from Secret
+  satellite-registration. Both live only in the cluster.
+-#}
+{%- set sizes = {'small': {'cores': 1, 'memory': '2Gi'},
+                 'medium': {'cores': 2, 'memory': '4Gi'},
+                 'large': {'cores': 4, 'memory': '8Gi'}} -%}
+{%- set size = sizes[server_size | default('small')] -%}
+{%- set ns = fleet_namespace | default('satellite-cloud-native') -%}
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: {{ server_name }}
+  namespace: {{ ns }}
+  labels:
+    app: {{ server_name }}
+    role: fleet
+    fleet.demo/environment: {{ lifecycle_env }}
+    fleet.demo/size: {{ server_size | default('small') }}
+    fleet.demo/provisioned-by: {{ provisioned_by | default('git-pr') }}
+    app.kubernetes.io/part-of: satellite-cloud-native
+    app.kubernetes.io/component: managed-host
+    app.openshift.io/runtime: redhat
+    demo: satellite-cloud-native
+  annotations:
+    fleet.demo/requested-by: "{{ requested_by | default('unknown') }}"
+    app.openshift.io/connects-to: '[{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"satellite"}]'
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: {{ server_name }}
+        app: {{ server_name }}
+        role: fleet
+        fleet.demo/environment: {{ lifecycle_env }}
+        app.kubernetes.io/part-of: satellite-cloud-native
+        demo: satellite-cloud-native
+    spec:
+      domain:
+        cpu:
+          cores: {{ size.cores }}
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            - name: rhsm-creds
+              disk:
+                bus: virtio
+              serial: rhsm-creds
+            - name: satreg
+              disk:
+                bus: virtio
+              serial: satreg
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources:
+          requests:
+            memory: {{ size.memory }}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: {{ server_name }}-rootdisk
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            secretRef:
+              name: fleet-cloudinit-{{ lifecycle_env }}
+        - name: rhsm-creds
+          secret:
+            secretName: rhsm-credentials
+        - name: satreg
+          secret:
+            secretName: satellite-registration
+            # A missing Secret must not block the boot: cloud-init then falls
+            # back to c1's /pub/register-lc-<env>.sh.
+            optional: true
+  dataVolumeTemplates:
+    - metadata:
+        name: {{ server_name }}-rootdisk
+      spec:
+        sourceRef:
+          kind: DataSource
+          name: rhel9
+          namespace: openshift-virtualization-os-images
+        storage:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 30Gi

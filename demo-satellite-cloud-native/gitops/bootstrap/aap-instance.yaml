@@ -1,0 +1,26 @@
+---
+# Smallest AAP that runs the V3 self-service job: platform gateway + automation
+# controller. Hub and Event-Driven Ansible are off to save cluster capacity
+# next to the Satellite VM; switch them on with disabled: false if needed.
+# The operator generates the admin password in Secret "aap-admin-password".
+apiVersion: aap.ansible.com/v1alpha1
+kind: AnsibleAutomationPlatform
+metadata:
+  name: aap
+  namespace: aap
+spec:
+  image_pull_policy: IfNotPresent
+  database:
+    resource_requirements:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+    storage_requirements:
+      requests:
+        storage: 20Gi
+  controller:
+    disabled: false
+  hub:
+    disabled: true
+  eda:
+    disabled: true

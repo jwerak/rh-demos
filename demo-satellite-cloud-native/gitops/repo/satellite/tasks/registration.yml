@@ -1,0 +1,92 @@
+---
+# Generate one registration command per fleet environment (activation key +
+# host group) and store them in Secret satellite-registration. Fleet VMs mount
+# that Secret as disk "satreg" and run the command for their environment.
+#
+# The commands contain a registration JWT: no_log keeps them out of the Argo
+# CD job log.
+- name: Registration commands
+  block:
+    - name: Generate registration commands
+      theforeman.foreman.registration_command:
+        organization: "{{ satellite_organization }}"
+        location: "{{ satellite_location }}"
+        hostgroup: "{{ item.hostgroup }}"
+        activation_keys:
+          - "{{ item.activation_key }}"
+        insecure: true
+        force: true
+        setup_insights: false
+        setup_remote_execution_pull: true
+        jwt_expiration: 0
+      loop: "{{ registration_targets }}"
+      loop_control:
+        label: "{{ item.env }}: {{ item.activation_key }} + {{ item.hostgroup }}"
+      register: reg_cmds
+      no_log: true
+
+    - name: Encode commands
+      ansible.builtin.set_fact:
+        registration_data: "{{ registration_data | default({}) | combine({item.item.env: item.registration_command | b64encode}) }}"
+      loop: "{{ reg_cmds.results }}"
+      loop_control:
+        label: "{{ item.item.env }}"
+      no_log: true
+
+    # data (base64), not stringData: server-side apply handles it cleanly.
+    - name: Build the Secret
+      ansible.builtin.set_fact:
+        registration_secret:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ registration_secret_name }}"
+            namespace: "{{ registration_namespace }}"
+            labels:
+              app.kubernetes.io/part-of: satellite-cloud-native
+              app.kubernetes.io/managed-by: satellite-as-code
+              demo: satellite-cloud-native
+          type: Opaque
+          data: "{{ registration_data }}"
+      no_log: true
+
+    - name: Detect in-cluster service account
+      ansible.builtin.stat:
+        path: /var/run/secrets/kubernetes.io/serviceaccount/token
+      register: sa_token
+
+    - name: Apply Secret via Kubernetes API (in cluster)
+      ansible.builtin.uri:
+        url: "{{ k8s_api }}/namespaces/{{ registration_namespace }}/secrets/{{ registration_secret_name }}?fieldManager=satellite-as-code&force=true"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ lookup('ansible.builtin.file', '/var/run/secrets/kubernetes.io/serviceaccount/token') }}"
+          Content-Type: application/apply-patch+yaml
+        body: "{{ registration_secret | to_json }}"
+        body_format: raw
+        ca_path: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        status_code: [200, 201]
+      vars:
+        k8s_api: https://kubernetes.default.svc/api/v1
+      when: sa_token.stat.exists
+      no_log: true
+
+    - name: Apply Secret with oc (laptop fallback)
+      ansible.builtin.command:
+        cmd: oc apply -f -
+        stdin: "{{ registration_secret | to_json }}"
+      when: not sa_token.stat.exists
+      changed_when: true
+      no_log: true
+
+    - name: Registration commands stored
+      ansible.builtin.debug:
+        msg: >-
+          Secret {{ registration_namespace }}/{{ registration_secret_name }} holds commands for
+          {{ registration_targets | map(attribute='env') | join(', ') }}
+          (host groups {{ registration_targets | map(attribute='hostgroup') | join(', ') }})
+
+  rescue:
+    - name: Record failure
+      ansible.builtin.set_fact:
+        cac_failures: "{{ cac_failures + ['registration: ' ~ (ansible_failed_result.msg | default('failed (output hidden by no_log)'))] }}"

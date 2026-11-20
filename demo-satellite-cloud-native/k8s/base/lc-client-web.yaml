@@ -1,0 +1,41 @@
+---
+# Web page of demo-app on a lifecycle host (httpd, port 80). Applied per host
+# by deploy_lc_vm (scripts/demo-scenarios.sh), which renames lc-client to
+# lc-<env>; not part of kustomization.yaml for the same reason as
+# lc-client-vm.yaml. One browser tab per environment shows which demo-app
+# version that environment's host runs.
+apiVersion: v1
+kind: Service
+metadata:
+  name: lc-client-web
+  namespace: satellite-cloud-native
+  labels:
+    app: lc-client
+    app.kubernetes.io/part-of: satellite-cloud-native
+    demo: satellite-cloud-native
+spec:
+  selector:
+    kubevirt.io/domain: lc-client
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: lc-client-web
+  namespace: satellite-cloud-native
+  labels:
+    app: lc-client
+    app.kubernetes.io/part-of: satellite-cloud-native
+    demo: satellite-cloud-native
+spec:
+  to:
+    kind: Service
+    name: lc-client-web
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

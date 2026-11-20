@@ -1,0 +1,24 @@
+---
+- name: Connection settings are present
+  ansible.builtin.assert:
+    that:
+      - satellite_url | length > 0
+      - satellite_user | length > 0
+      - satellite_password | length > 0
+    fail_msg: Set FOREMAN_SERVER_URL, FOREMAN_USERNAME and FOREMAN_PASSWORD.
+    quiet: true
+
+- name: Satellite answers
+  theforeman.foreman.status_info:
+  register: satellite_status
+
+- name: Show target
+  ansible.builtin.debug:
+    msg: >-
+      Satellite {{ satellite_url }} version {{ satellite_status.status.version | default('?') }},
+      organization {{ satellite_organization }}, location {{ satellite_location }}
+
+- name: Detect in-cluster service account
+  ansible.builtin.stat:
+    path: /var/run/secrets/kubernetes.io/serviceaccount/token
+  register: sa_token

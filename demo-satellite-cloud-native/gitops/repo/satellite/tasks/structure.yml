@@ -1,0 +1,128 @@
+---
+# Order matters: environments and content first, then the objects that
+# reference them (keys, host groups), RBAC last.
+- name: Structure
+  block:
+    - name: Lifecycle environments
+      theforeman.foreman.lifecycle_environment:
+        organization: "{{ satellite_organization }}"
+        name: "{{ item.name }}"
+        prior: "{{ item.prior }}"
+        description: "{{ item.description | default(omit) }}"
+        state: present
+      loop: "{{ lifecycle_environments }}"
+      loop_control:
+        label: "{{ item.prior }} -> {{ item.name }}"
+
+    - name: Custom products
+      theforeman.foreman.product:
+        organization: "{{ satellite_organization }}"
+        name: "{{ item.name }}"
+        description: "{{ item.description | default(omit) }}"
+        state: present
+      loop: "{{ products }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Custom repositories
+      theforeman.foreman.repository:
+        organization: "{{ satellite_organization }}"
+        product: "{{ item.0.name }}"
+        name: "{{ item.1.name }}"
+        content_type: "{{ item.1.content_type }}"
+        url: "{{ item.1.url | default(omit) }}"
+        state: present
+      loop: "{{ products | subelements('repositories') }}"
+      loop_control:
+        label: "{{ item.0.name }}/{{ item.1.name }}"
+
+    - name: Content views
+      theforeman.foreman.content_view:
+        organization: "{{ satellite_organization }}"
+        name: "{{ item.name }}"
+        description: "{{ item.description | default(omit) }}"
+        # Omitted repositories = left untouched (RHEL9-Lifecycle)
+        repositories: "{{ item.repositories | default(omit) }}"
+        state: present
+      loop: "{{ content_views }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Composite content views
+      theforeman.foreman.content_view:
+        organization: "{{ satellite_organization }}"
+        name: "{{ item.name }}"
+        description: "{{ item.description | default(omit) }}"
+        composite: true
+        components: "{{ item.components }}"
+        state: present
+      loop: "{{ composite_content_views }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Host collections (patch waves)
+      theforeman.foreman.host_collection:
+        organization: "{{ satellite_organization }}"
+        name: "{{ item.name }}"
+        description: "{{ item.description | default(omit) }}"
+        state: present
+      loop: "{{ host_collections }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Activation keys
+      theforeman.foreman.activation_key:
+        organization: "{{ satellite_organization }}"
+        name: "{{ item.name }}"
+        lifecycle_environment: "{{ item.lifecycle_environment }}"
+        content_view: "{{ item.content_view }}"
+        host_collections: "{{ item.host_collections | default(omit) }}"
+        content_overrides: "{{ activation_key_content_overrides }}"
+        unlimited_hosts: true
+        state: present
+      loop: "{{ activation_keys }}"
+      loop_control:
+        label: "{{ item.name }} ({{ item.lifecycle_environment }})"
+
+    - name: Host groups (parents before children)
+      theforeman.foreman.hostgroup:
+        name: "{{ item.name }}"
+        parent: "{{ item.parent | default(omit) }}"
+        description: "{{ item.description | default(omit) }}"
+        organization: "{{ satellite_organization }}"
+        organizations: ["{{ satellite_organization }}"]
+        locations: ["{{ satellite_location }}"]
+        content_view: "{{ item.content_view | default(omit) }}"
+        lifecycle_environment: "{{ item.lifecycle_environment | default(omit) }}"
+        activation_keys: "{{ item.activation_keys | default(omit) }}"
+        parameters: "{{ item.parameters | default(omit) }}"
+        state: present
+      loop: "{{ hostgroups }}"
+      loop_control:
+        label: "{{ (item.parent ~ '/') if item.parent is defined else '' }}{{ item.name }}"
+
+    - name: Roles
+      theforeman.foreman.role:
+        name: "{{ item.name }}"
+        description: "{{ item.description | default(omit) }}"
+        organizations: ["{{ satellite_organization }}"]
+        locations: ["{{ satellite_location }}"]
+        filters: "{{ item.filters }}"
+        state: present
+      loop: "{{ satellite_roles }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: User groups
+      theforeman.foreman.usergroup:
+        name: "{{ item.name }}"
+        roles: "{{ item.roles }}"
+        state: present
+      loop: "{{ usergroups }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ item.roles | join(', ') }}"
+
+  rescue:
+    - name: Record failure
+      ansible.builtin.set_fact:
+        cac_failures: "{{ cac_failures + ['structure: ' ~ (ansible_failed_result.msg | default('failed'))] }}"
